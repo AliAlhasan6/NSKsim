@@ -1,0 +1,462 @@
+<?xml version="1.0" ?>
+<!--
+  knowledge_world.sdf
+  NSK Swarm Robotics — 2D flat world for Gazebo Harmonic (gz-sim)
+  5 differential-drive cylinder robots, no URDF, no external meshes.
+  Uses VelocityControl + OdometryPublisher (simpler than DiffDrive for cylinders).
+-->
+<sdf version="1.9">
+  <world name="knowledge_world">
+
+    <!-- Physics -->
+    <physics name="1ms" type="ode">
+      <max_step_size>0.01</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Required world plugins -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+
+    <!-- Ambient light -->
+    <ambient>0.6 0.6 0.6 1</ambient>
+    <light name="directional_light" type="directional">
+      <cast_shadows>false</cast_shadows>
+      <direction>-0.5 0.1 -0.9</direction>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+    </light>
+
+    <!-- ── Ground plane ──────────────────────────────────────────────────── -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>30 30</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>30 30</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.75 0.75 0.75 1</ambient>
+            <diffuse>0.75 0.75 0.75 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ── Boundary walls (20 m square, 0.3 m high, 0.1 m thick) ────────── -->
+    <!-- North wall: y = +10 -->
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 10 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>20.2 0.1 0.3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>20.2 0.1 0.3</size></box></geometry>
+          <material><ambient>0.4 0.4 0.4 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- South wall: y = -10 -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -10 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>20.2 0.1 0.3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>20.2 0.1 0.3</size></box></geometry>
+          <material><ambient>0.4 0.4 0.4 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- East wall: x = +10 -->
+    <model name="wall_east">
+      <static>true</static>
+      <pose>10 0 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 20.2 0.3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 20.2 0.3</size></box></geometry>
+          <material><ambient>0.4 0.4 0.4 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- West wall: x = -10 -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-10 0 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 20.2 0.3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 20.2 0.3</size></box></geometry>
+          <material><ambient>0.4 0.4 0.4 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ── Robot 0: blue   pose=( 4.0,  0.0) heading=π ─────────────────── -->
+    <model name="robot_0">
+      <pose>4.0 0.0 0.005 0 0 3.14159265</pose>
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia>
+            <ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.2 0.4 1.0 1</ambient>
+            <diffuse>0.2 0.4 1.0 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <!-- VelocityControl: accepts /robot_0/cmd_vel directly, no joints needed -->
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl">
+        <topic>/robot_0/cmd_vel</topic>
+      </plugin>
+      <!-- OdometryPublisher: publishes ground-truth odometry -->
+      <plugin filename="gz-sim-odometry-publisher-system"
+              name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/robot_0/odom</odom_topic>
+        <odom_frame>odom</odom_frame>
+        <robot_base_frame>robot_0/base_link</robot_base_frame>
+        <publish_tf>true</publish_tf>
+        <odom_publish_frequency>10</odom_publish_frequency>
+      </plugin>
+    </model>
+
+    <!-- ── Robot 1: green  pose=( 1.2,  3.8) heading=3π/2 ──────────────── -->
+    <model name="robot_1">
+      <pose>1.2 3.8 0.005 0 0 4.71238898</pose>
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia>
+            <ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.2 0.8 0.2 1</ambient>
+            <diffuse>0.2 0.8 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl">
+        <topic>/robot_1/cmd_vel</topic>
+      </plugin>
+      <plugin filename="gz-sim-odometry-publisher-system"
+              name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/robot_1/odom</odom_topic>
+        <odom_frame>odom</odom_frame>
+        <robot_base_frame>robot_1/base_link</robot_base_frame>
+        <publish_tf>true</publish_tf>
+        <odom_publish_frequency>10</odom_publish_frequency>
+      </plugin>
+    </model>
+
+    <!-- ── Robot 2: orange pose=(-3.2,  2.4) heading=0 ─────────────────── -->
+    <model name="robot_2">
+      <pose>-3.2 2.4 0.005 0 0 0.0</pose>
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia>
+            <ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>1.0 0.5 0.1 1</ambient>
+            <diffuse>1.0 0.5 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl">
+        <topic>/robot_2/cmd_vel</topic>
+      </plugin>
+      <plugin filename="gz-sim-odometry-publisher-system"
+              name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/robot_2/odom</odom_topic>
+        <odom_frame>odom</odom_frame>
+        <robot_base_frame>robot_2/base_link</robot_base_frame>
+        <publish_tf>true</publish_tf>
+        <odom_publish_frequency>10</odom_publish_frequency>
+      </plugin>
+    </model>
+
+    <!-- ── Robot 3: red    pose=(-3.2, -2.4) heading=π/4 ───────────────── -->
+    <model name="robot_3">
+      <pose>-3.2 -2.4 0.005 0 0 0.78539816</pose>
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia>
+            <ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl">
+        <topic>/robot_3/cmd_vel</topic>
+      </plugin>
+      <plugin filename="gz-sim-odometry-publisher-system"
+              name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/robot_3/odom</odom_topic>
+        <odom_frame>odom</odom_frame>
+        <robot_base_frame>robot_3/base_link</robot_base_frame>
+        <publish_tf>true</publish_tf>
+        <odom_publish_frequency>10</odom_publish_frequency>
+      </plugin>
+    </model>
+
+    <!-- ── Robot 4: purple pose=( 1.2, -3.8) heading=π/2 ───────────────── -->
+    <model name="robot_4">
+      <pose>1.2 -3.8 0.005 0 0 1.57079633</pose>
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia>
+            <ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder><radius>0.1</radius><length>0.01</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.6 0.2 0.8 1</ambient>
+            <diffuse>0.6 0.2 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl">
+        <topic>/robot_4/cmd_vel</topic>
+      </plugin>
+      <plugin filename="gz-sim-odometry-publisher-system"
+              name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/robot_4/odom</odom_topic>
+        <odom_frame>odom</odom_frame>
+        <robot_base_frame>robot_4/base_link</robot_base_frame>
+        <publish_tf>true</publish_tf>
+        <odom_publish_frequency>10</odom_publish_frequency>
+      </plugin>
+    </model>
+
+
+    <model name="maze_h1">
+      <static>true</static>
+      <pose>-2.5 3.0 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>7.0 0.2 0.3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>7.0 0.2 0.3</size></box></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="maze_h2">
+      <static>true</static>
+      <pose>2.5 -3.0 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>7.0 0.2 0.3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>7.0 0.2 0.3</size></box></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="maze_v1">
+      <static>true</static>
+      <pose>-4.0 -1.5 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 5.0 0.3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 5.0 0.3</size></box></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="maze_v2">
+      <static>true</static>
+      <pose>4.0 1.5 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 5.0 0.3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 5.0 0.3</size></box></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="robot_5">
+      <pose>-7.0 7.0 0.005 0 0 3.14159265</pose>
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia><ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.1</radius><length>0.01</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.1</radius><length>0.01</length></cylinder></geometry>
+          <material><ambient>0.0 0.9 0.9 1</ambient><diffuse>0.0 0.9 0.9 1</diffuse></material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system" name="gz::sim::systems::VelocityControl">
+        <topic>/robot_5/cmd_vel</topic>
+      </plugin>
+      <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/robot_5/odom</odom_topic>
+        <odom_frame>odom</odom_frame>
+        <robot_base_frame>robot_5/base_link</robot_base_frame>
+        <publish_tf>true</publish_tf>
+        <odom_publish_frequency>10</odom_publish_frequency>
+      </plugin>
+    </model>
+
+    <model name="robot_6">
+      <pose>7.0 -7.0 0.005 0 0 0.0</pose>
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia><ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.1</radius><length>0.01</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.1</radius><length>0.01</length></cylinder></geometry>
+          <material><ambient>0.9 0.9 0.0 1</ambient><diffuse>0.9 0.9 0.0 1</diffuse></material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system" name="gz::sim::systems::VelocityControl">
+        <topic>/robot_6/cmd_vel</topic>
+      </plugin>
+      <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/robot_6/odom</odom_topic>
+        <odom_frame>odom</odom_frame>
+        <robot_base_frame>robot_6/base_link</robot_base_frame>
+        <publish_tf>true</publish_tf>
+        <odom_publish_frequency>10</odom_publish_frequency>
+      </plugin>
+    </model>
+
+    <model name="robot_7">
+      <pose>-7.0 -7.0 0.005 0 0 1.57079633</pose>
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia><ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.1</radius><length>0.01</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.1</radius><length>0.01</length></cylinder></geometry>
+          <material><ambient>0.95 0.95 0.95 1</ambient><diffuse>0.95 0.95 0.95 1</diffuse></material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system" name="gz::sim::systems::VelocityControl">
+        <topic>/robot_7/cmd_vel</topic>
+      </plugin>
+      <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/robot_7/odom</odom_topic>
+        <odom_frame>odom</odom_frame>
+        <robot_base_frame>robot_7/base_link</robot_base_frame>
+        <publish_tf>true</publish_tf>
+        <odom_publish_frequency>10</odom_publish_frequency>
+      </plugin>
+    </model>
+  </world>
+</sdf>
