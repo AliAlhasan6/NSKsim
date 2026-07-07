@@ -8,14 +8,18 @@ System Python only — no PyTorch.
 import json
 import math
 import random
+import threading
 import time
 
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
-import zmq
+
+from nsk_swarm_interfaces.srv import Compress, Merge
 
 # Movement states
 EXPLORE  = 'explore'
@@ -39,11 +43,9 @@ class NSKRobotNode(Node):
         'num_robots':     8,
         'comm_range':     3.0,
         'share_interval': 8.0,
-        'zmq_endpoint':   'ipc:///tmp/nsk_engine_0',
         'world_size':     20.0,
         'walk_speed':     0.15,
         'walk_turn_max':  0.5,
-        'zmq_timeout_ms': 2000,
     }
 
     def __init__(self):
@@ -56,11 +58,9 @@ class NSKRobotNode(Node):
         self.num_robots     = self.get_parameter('num_robots').value
         self.comm_range     = self.get_parameter('comm_range').value
         self.share_interval = self.get_parameter('share_interval').value
-        self.zmq_endpoint   = self.get_parameter('zmq_endpoint').value
         self.world_size     = self.get_parameter('world_size').value
         self.walk_speed     = self.get_parameter('walk_speed').value
         self.walk_turn_max  = self.get_parameter('walk_turn_max').value
-        self.zmq_timeout_ms = self.get_parameter('zmq_timeout_ms').value
 
         # Position state
         self.pos_x = 0.0
@@ -76,13 +76,22 @@ class NSKRobotNode(Node):
         self._levy_steps_left    = 0
         self._levy_heading       = 0.0
 
-        # ZMQ
-        self._zmq_ctx    = zmq.Context()
-        self._zmq_socket = self._zmq_ctx.socket(zmq.REQ)
-        self._zmq_socket.setsockopt(zmq.LINGER, 0)
-        self._zmq_socket.connect(self.zmq_endpoint)
-        self._zmq_poller = zmq.Poller()
-        self._zmq_poller.register(self._zmq_socket, zmq.POLLIN)
+        # Engine service clients.
+        # Async-safety: callbacks below block on engine responses, so the
+        # timers, the /kg_share subscription and the clients all share one
+        # ReentrantCallbackGroup, and main() spins a MultiThreadedExecutor.
+        # A blocked callback therefore never prevents another executor
+        # thread from delivering the service response (no deadlock, unlike
+        # a synchronous call() in a default single-threaded setup).
+        self._cb_group     = ReentrantCallbackGroup()
+        self._compress_cli = self.create_client(
+            Compress, '/nsk/compress', callback_group=self._cb_group)
+        self._merge_cli    = self.create_client(
+            Merge, '/nsk/merge', callback_group=self._cb_group)
+        for cli in (self._compress_cli, self._merge_cli):
+            while not cli.wait_for_service(timeout_sec=2.0):
+                self.get_logger().warn(
+                    f'[Robot {self.robot_id}] Waiting for {cli.srv_name} ...')
 
         # Publishers
         self.cmd_pub = self.create_publisher(Twist, f'/robot_{self.robot_id}/cmd_vel', 10)
@@ -95,15 +104,18 @@ class NSKRobotNode(Node):
                 self.create_subscription(
                     Odometry, f'/robot_{j}/odom',
                     lambda msg, peer=j: self._peer_odom_cb(msg, peer), 10)
-        self.create_subscription(String, '/kg_share', self._on_kg_share, 10)
+        self.create_subscription(String, '/kg_share', self._on_kg_share, 10,
+                                 callback_group=self._cb_group)
 
         # Timers
-        self.create_timer(2.0,                self._update_motion_state)
-        self.create_timer(0.1,                self._publish_cmd_vel)
-        self.create_timer(self.share_interval, self._share_timer_cb)
+        self.create_timer(2.0,                self._update_motion_state,
+                          callback_group=self._cb_group)
+        self.create_timer(0.1,                self._publish_cmd_vel,
+                          callback_group=self._cb_group)
+        self.create_timer(self.share_interval, self._share_timer_cb,
+                          callback_group=self._cb_group)
 
-        self.get_logger().info(
-            f'[Robot {self.robot_id}] Started. Endpoint: {self.zmq_endpoint}')
+        self.get_logger().info(f'[Robot {self.robot_id}] Started.')
 
     # ── Odometry ─────────────────────────────────────────────────────────────
 
@@ -237,17 +249,16 @@ class NSKRobotNode(Node):
             self.peer_similarity.get(j, 0.0) for j in peers_in_range)
         retention = retention_for_similarity(min_sim)
 
-        resp = self._zmq_request({
-            'type':            'compress_request',
-            'agent_id':        self.robot_id,
-            'retention_ratio': retention,
-        })
-        if resp is None or resp.get('type') != 'compressed_graph':
+        req = Compress.Request()
+        req.agent_id        = int(self.robot_id)
+        req.retention_ratio = float(retention)
+        resp = self._call_engine(self._compress_cli, req)
+        if resp is None:
             return
 
         payload = json.dumps({
             'sender_id': self.robot_id,
-            'graph':     resp['graph'],
+            'graph':     json.loads(resp.graph_json),
         })
         msg = String()
         msg.data = payload
@@ -273,57 +284,69 @@ class NSKRobotNode(Node):
             return
 
         dist = self._dist(sender_id)
-        resp = self._zmq_request({
-            'type':      'merge_request',
-            'agent_id':  self.robot_id,
-            'graph':     data['graph'],
-            'sender_id': sender_id,
-        })
+        req = Merge.Request()
+        req.agent_id   = int(self.robot_id)
+        req.sender_id  = int(sender_id)
+        req.graph_json = json.dumps(data['graph'])
+        resp = self._call_engine(self._merge_cli, req)
         if resp is None:
             return
-        if resp.get('type') == 'merge_done':
-            self.get_logger().info(
-                f'[Robot {self.robot_id}] Merged from Robot {sender_id} '
-                f'dist={dist:.2f}m gate={resp.get("gate",0.5):.3f} '
-                f'z_norm={resp.get("z_norm",0.0):.4f}')
+        self.get_logger().info(
+            f'[Robot {self.robot_id}] Merged from Robot {sender_id} '
+            f'dist={dist:.2f}m gate={resp.gate:.3f} '
+            f'z_norm={resp.z_norm:.4f}')
 
-    # ── ZMQ ──────────────────────────────────────────────────────────────────
+    # ── Engine service calls ─────────────────────────────────────────────────
 
-    def _zmq_request(self, payload: dict) -> dict | None:
-        try:
-            self._zmq_socket.send_string(json.dumps(payload))
-            if self._zmq_poller.poll(self.zmq_timeout_ms):
-                return json.loads(self._zmq_socket.recv_string())
-            else:
-                self.get_logger().warn(
-                    f'[Robot {self.robot_id}] ZMQ timeout — skipping cycle')
-                self._zmq_socket.close()
-                self._zmq_socket = self._zmq_ctx.socket(zmq.REQ)
-                self._zmq_socket.setsockopt(zmq.LINGER, 0)
-                self._zmq_socket.connect(self.zmq_endpoint)
-                self._zmq_poller = zmq.Poller()
-                self._zmq_poller.register(self._zmq_socket, zmq.POLLIN)
-                return None
-        except zmq.ZMQError as e:
-            self.get_logger().warn(f'[Robot {self.robot_id}] ZMQ error: {e}')
+    def _call_engine(self, client, request, timeout_sec: float = 5.0):
+        """Blocking engine call that is safe inside a callback: call_async()
+        plus a wait on the future. The ReentrantCallbackGroup and the
+        MultiThreadedExecutor in main() guarantee a free thread delivers the
+        response while this callback blocks. Returns the response, or None
+        (with a warning logged) on unavailability/timeout/success=False."""
+        if not client.service_is_ready():
+            self.get_logger().warn(
+                f'[Robot {self.robot_id}] {client.srv_name} unavailable '
+                f'— skipping cycle')
             return None
-
-    def destroy_node(self):
-        self._zmq_socket.close()
-        self._zmq_ctx.term()
-        super().destroy_node()
+        done   = threading.Event()
+        future = client.call_async(request)
+        future.add_done_callback(lambda _: done.set())
+        if not done.wait(timeout_sec):
+            future.cancel()
+            self.get_logger().warn(
+                f'[Robot {self.robot_id}] {client.srv_name} timeout '
+                f'— skipping cycle')
+            return None
+        if future.exception() is not None:
+            self.get_logger().warn(
+                f'[Robot {self.robot_id}] {client.srv_name} failed: '
+                f'{future.exception()}')
+            return None
+        resp = future.result()
+        if not resp.success:
+            self.get_logger().warn(
+                f'[Robot {self.robot_id}] {client.srv_name} error: '
+                f'{resp.message}')
+            return None
+        return resp
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = NSKRobotNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        # Under `ros2 launch`, SIGINT already shut the context down; a second
+        # rclpy.shutdown() would raise RCLError, so only clean up if still ok.
+        if rclpy.ok():
+            node.destroy_node()
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@
 convergence_monitor.py — NSK Swarm convergence monitoring node.
 
 Standalone ROS 2 node. No PyTorch.
-- Queries NSK engine over ZMQ for pairwise z* similarity
+- Queries NSK engine via the /nsk/similarity_query service for pairwise z* similarity
 - Publishes Float32 to /nsk/convergence
 - Publishes MarkerArray to /nsk/similarity_markers for RViz2
 - Listens to /kg_share to track merge events
@@ -12,15 +12,19 @@ Standalone ROS 2 node. No PyTorch.
 
 import json
 import math
+import threading
 import time
 
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import Float32, String
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
-import zmq
+
+from nsk_swarm_interfaces.srv import SimilarityQuery
 
 
 # Robot colours (R, G, B) matching SDF definitions
@@ -43,15 +47,11 @@ class ConvergenceMonitorNode(Node):
         self.declare_parameter('monitor_interval',     10.0)
         self.declare_parameter('comm_range',           3.0)
         self.declare_parameter('convergence_threshold', 0.25)
-        self.declare_parameter('zmq_endpoint',         'ipc:///tmp/nsk_engine_0')
-        self.declare_parameter('zmq_timeout_ms',       2000)
 
         self.num_robots           = self.get_parameter('num_robots').value
         self.monitor_interval     = self.get_parameter('monitor_interval').value
         self.comm_range           = self.get_parameter('comm_range').value
         self.conv_threshold       = self.get_parameter('convergence_threshold').value
-        self.zmq_endpoint         = self.get_parameter('zmq_endpoint').value
-        self.zmq_timeout_ms       = self.get_parameter('zmq_timeout_ms').value
 
         # State
         self.merge_counts: dict[tuple[int, int], int] = {}
@@ -61,13 +61,20 @@ class ConvergenceMonitorNode(Node):
         self._consec_above_threshold = 0
         self._converged = False
 
-        # ZMQ
-        self._zmq_ctx    = zmq.Context()
-        self._zmq_socket = self._zmq_ctx.socket(zmq.REQ)
-        self._zmq_socket.setsockopt(zmq.LINGER, 0)
-        self._zmq_socket.connect(self.zmq_endpoint)
-        self._zmq_poller = zmq.Poller()
-        self._zmq_poller.register(self._zmq_socket, zmq.POLLIN)
+        # Engine service client.
+        # Async-safety: _monitor_cb blocks on the engine response, so the
+        # timer and the client share one ReentrantCallbackGroup, and main()
+        # spins a MultiThreadedExecutor. A blocked callback therefore never
+        # prevents another executor thread from delivering the service
+        # response (no deadlock, unlike a synchronous call() in a default
+        # single-threaded setup).
+        self._cb_group = ReentrantCallbackGroup()
+        self._sim_cli  = self.create_client(
+            SimilarityQuery, '/nsk/similarity_query',
+            callback_group=self._cb_group)
+        while not self._sim_cli.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn(
+                f'[NSK Monitor] Waiting for {self._sim_cli.srv_name} ...')
 
         # Publishers
         self.conv_pub    = self.create_publisher(Float32,      '/nsk/convergence',        10)
@@ -83,7 +90,8 @@ class ConvergenceMonitorNode(Node):
                 10)
 
         # Timer
-        self.create_timer(self.monitor_interval, self._monitor_cb)
+        self.create_timer(self.monitor_interval, self._monitor_cb,
+                          callback_group=self._cb_group)
 
         self.get_logger().info('[NSK Monitor] Node started.')
 
@@ -125,16 +133,14 @@ class ConvergenceMonitorNode(Node):
         if self._converged:
             return
 
-        resp = self._zmq_request({
-            'type':      'similarity_query',
-            'agent_ids': list(range(self.num_robots)),
-        })
-        if resp is None or resp.get('type') != 'similarity_response':
-            self.get_logger().warn('[NSK Monitor] Similarity query failed.')
+        req = SimilarityQuery.Request()
+        req.agent_ids = list(range(self.num_robots))
+        resp = self._call_engine(self._sim_cli, req)
+        if resp is None:
             return
 
-        mean_sim = resp['mean_sim']
-        matrix   = resp['matrix']
+        mean_sim = resp.mean_sim
+        matrix   = json.loads(resp.matrix_json)
         elapsed  = int(time.time() - self.start_time)
 
         # Publish convergence float
@@ -298,42 +304,54 @@ class ConvergenceMonitorNode(Node):
 
         return markers
 
-    # ── ZMQ helper ───────────────────────────────────────────────────────────
+    # ── Engine service calls ─────────────────────────────────────────────────
 
-    def _zmq_request(self, payload: dict) -> dict | None:
-        try:
-            self._zmq_socket.send_string(json.dumps(payload))
-            if self._zmq_poller.poll(self.zmq_timeout_ms):
-                return json.loads(self._zmq_socket.recv_string())
-            else:
-                self.get_logger().warn('[NSK Monitor] ZMQ timeout')
-                self._zmq_socket.close()
-                self._zmq_socket = self._zmq_ctx.socket(zmq.REQ)
-                self._zmq_socket.setsockopt(zmq.LINGER, 0)
-                self._zmq_socket.connect(self.zmq_endpoint)
-                self._zmq_poller = zmq.Poller()
-                self._zmq_poller.register(self._zmq_socket, zmq.POLLIN)
-                return None
-        except zmq.ZMQError as e:
-            self.get_logger().warn(f'[NSK Monitor] ZMQ error: {e}')
+    def _call_engine(self, client, request, timeout_sec: float = 5.0):
+        """Blocking engine call that is safe inside a callback: call_async()
+        plus a wait on the future. The ReentrantCallbackGroup and the
+        MultiThreadedExecutor in main() guarantee a free thread delivers the
+        response while this callback blocks. Returns the response, or None
+        (with a warning logged) on unavailability/timeout/success=False."""
+        if not client.service_is_ready():
+            self.get_logger().warn(
+                f'[NSK Monitor] {client.srv_name} unavailable — skipping cycle')
             return None
-
-    def destroy_node(self):
-        self._zmq_socket.close()
-        self._zmq_ctx.term()
-        super().destroy_node()
+        done   = threading.Event()
+        future = client.call_async(request)
+        future.add_done_callback(lambda _: done.set())
+        if not done.wait(timeout_sec):
+            future.cancel()
+            self.get_logger().warn(
+                f'[NSK Monitor] {client.srv_name} timeout — skipping cycle')
+            return None
+        if future.exception() is not None:
+            self.get_logger().warn(
+                f'[NSK Monitor] {client.srv_name} failed: '
+                f'{future.exception()}')
+            return None
+        resp = future.result()
+        if not resp.success:
+            self.get_logger().warn(
+                f'[NSK Monitor] {client.srv_name} error: {resp.message}')
+            return None
+        return resp
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = ConvergenceMonitorNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        # Under `ros2 launch`, SIGINT already shut the context down; a second
+        # rclpy.shutdown() would raise RCLError, so only clean up if still ok.
+        if rclpy.ok():
+            node.destroy_node()
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

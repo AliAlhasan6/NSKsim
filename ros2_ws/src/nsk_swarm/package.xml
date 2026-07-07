@@ -6,7 +6,7 @@
   <description>
     NSK Swarm Robotics 2D Simulation — ROS 2 Jazzy + Gazebo Harmonic.
     Five differential-drive robots sharing compressed knowledge graphs
-    over ZMQ. NSK inference runs in a separate nsk_env process.
+    via ROS 2 services. NSK inference runs in the nsk_engine node.
   </description>
   <maintainer email="aliyossefalhasan@gmail.com">Ali Alhasan</maintainer>
   <license>MIT</license>

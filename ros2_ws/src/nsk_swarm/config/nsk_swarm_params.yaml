@@ -1,9 +1,8 @@
 /**:
   ros__parameters:
-    num_robots:              8
+    num_robots:              5         # authoritative value: NUM_ROBOTS in launch/swarm_sim.launch.py
     comm_range:              3.0       # metres, 2D Euclidean
     share_interval:          8.0       # seconds between broadcasts
-    zmq_endpoint:            "ipc:///tmp/nsk_engine_0"
     nsk_base_path:           "/home/lawlite/Desktop/NSK"
     checkpoint_path:         "experiments/checkpoints/joint_best.pt"
     config_path:             "configs/base.yaml"
@@ -13,4 +12,3 @@
     walk_turn_max:           0.5       # rad/s max angular velocity
     monitor_interval:        10.0      # seconds between convergence reports
     convergence_threshold:   0.25      # target mean pairwise similarity
-    zmq_timeout_ms:          2000      # ZMQ request timeout in milliseconds

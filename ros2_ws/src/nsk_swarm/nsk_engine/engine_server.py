@@ -19,6 +19,7 @@ import os
 import sys
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from nsk_swarm_interfaces.srv import Compress, Merge, SimilarityQuery
@@ -147,11 +148,14 @@ def main(args=None):
     node = NSKEngineNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         node.get_logger().info('Shutting down.')
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        # Under `ros2 launch`, SIGINT already shut the context down; a second
+        # rclpy.shutdown() would raise RCLError, so only clean up if still ok.
+        if rclpy.ok():
+            node.destroy_node()
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

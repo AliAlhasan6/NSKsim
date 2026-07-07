@@ -4,22 +4,23 @@ swarm_sim.launch.py — NSK Swarm Robotics 2D Simulation launch file.
 
 Launches:
   1. Gazebo Harmonic with knowledge_world.sdf
-  2. ros_gz_bridge for all 5 robots (cmd_vel + odom)
-  3. 5 NSKRobotNode instances (after 5 s delay)
-  4. ConvergenceMonitorNode (after 6 s delay)
-  5. RViz2 with preconfigured layout (after 7 s delay)
-
-NOTE: Start NSK engine SEPARATELY in nsk_env before launching:
-    source ~/Desktop/NSK/nsk_env/bin/activate
-    CUDA_VISIBLE_DEVICES="" python -m nsk_engine.engine_server
+  2. NSK engine node (services /nsk/compress, /nsk/merge, /nsk/similarity_query)
+  3. ros_gz_bridge for all 5 robots (cmd_vel + odom)
+  4. 5 NSKRobotNode instances (after 5 s delay)
+  5. ConvergenceMonitorNode (after 6 s delay)
+  6. RViz2 with preconfigured layout (after 7 s delay)
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, TimerAction, LogInfo
+from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
+
+# Single source of truth for the swarm size. Must not exceed the number of
+# dataset_indices the engine is configured with (5 by default).
+NUM_ROBOTS = 5
 
 
 def generate_launch_description():
@@ -32,19 +33,17 @@ def generate_launch_description():
     def robot_params(robot_id: int) -> dict:
         return {
             'robot_id':            robot_id,
-            'num_robots':          8,
+            'num_robots':          NUM_ROBOTS,
             'comm_range':          3.0,
             'share_interval':      8.0,
-            'zmq_endpoint':        'ipc:///tmp/nsk_engine_0',
             'world_size':          20.0,
             'walk_speed':          0.15,
             'walk_turn_max':       0.5,
-            'zmq_timeout_ms':      2000,
         }
 
     # ── Bridge topic specs ──────────────────────────────────────────────────
     bridge_topics = []
-    for n in range(5):
+    for n in range(NUM_ROBOTS):
         bridge_topics += [
             f'/robot_{n}/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
             f'/robot_{n}/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
@@ -58,7 +57,16 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # ── 2. ros_gz_bridge ────────────────────────────────────────────────
+        # ── 2. NSK engine (service servers) ─────────────────────────────────
+        Node(
+            package='nsk_swarm',
+            executable='nsk_engine',
+            name='nsk_engine',
+            parameters=[{'num_robots': NUM_ROBOTS}],
+            output='screen',
+        ),
+
+        # ── 3. ros_gz_bridge ────────────────────────────────────────────────
         TimerAction(
             period=3.0,
             actions=[
@@ -68,21 +76,6 @@ def generate_launch_description():
                     output='screen',
                 ),
             ],
-        ),
-
-        # ── 3. Engine reminder ───────────────────────────────────────────────
-        LogInfo(
-            msg=(
-                '\n\n'
-                '╔══════════════════════════════════════════════════════╗\n'
-                '║  ACTION REQUIRED: Start NSK engine in Terminal 2     ║\n'
-                '║                                                      ║\n'
-                '║  cd ~/Desktop/NSK                                    ║\n'
-                '║  source nsk_env/bin/activate                         ║\n'
-                '║  CUDA_VISIBLE_DEVICES="" \\                            ║\n'
-                '║    python -m nsk_engine.engine_server                ║\n'
-                '╚══════════════════════════════════════════════════════╝\n'
-            ),
         ),
 
         # ── 4. Robot nodes (after 5 s) ───────────────────────────────────────
@@ -96,7 +89,7 @@ def generate_launch_description():
                     parameters=[robot_params(n)],
                     output='screen',
                 )
-                for n in range(5)
+                for n in range(NUM_ROBOTS)
             ],
         ),
 
@@ -109,12 +102,10 @@ def generate_launch_description():
                     executable='convergence_monitor',
                     name='convergence_monitor',
                     parameters=[{
-                        'num_robots':            8,
+                        'num_robots':            NUM_ROBOTS,
                         'monitor_interval':      10.0,
                         'comm_range':            3.0,
                         'convergence_threshold': 0.25,
-                        'zmq_endpoint':          'ipc:///tmp/nsk_engine_0',
-                        'zmq_timeout_ms':        2000,
                     }],
                     output='screen',
                 ),
