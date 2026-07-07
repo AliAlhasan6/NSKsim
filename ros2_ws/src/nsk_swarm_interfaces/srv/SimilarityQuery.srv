@@ -1,0 +1,6 @@
+int32[] agent_ids
+---
+bool success
+string message
+string matrix_json         # serialized pairwise similarity matrix
+float64 mean_sim

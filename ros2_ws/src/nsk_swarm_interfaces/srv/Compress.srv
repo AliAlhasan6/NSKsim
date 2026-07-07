@@ -1,0 +1,8 @@
+int32 agent_id
+float32 retention_ratio    # -1.0 = use compressor default
+---
+bool success
+string message
+string graph_json          # serialized {x, edge_index, edge_type, num_nodes, agent_id}
+float32 node_retention
+int32 bridge_nodes_kept

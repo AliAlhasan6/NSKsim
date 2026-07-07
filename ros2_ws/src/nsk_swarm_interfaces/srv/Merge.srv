@@ -1,0 +1,9 @@
+int32 agent_id
+int32 sender_id
+string graph_json
+---
+bool success
+string message
+float64[] z_star
+float64 gate
+float64 z_norm
