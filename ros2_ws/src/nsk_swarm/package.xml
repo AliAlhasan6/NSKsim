@@ -8,13 +8,11 @@
     Five differential-drive robots sharing compressed knowledge graphs
     over ZMQ. NSK inference runs in a separate nsk_env process.
   </description>
-  <maintainer email="ali@example.com">Ali</maintainer>
+  <maintainer email="aliyossefalhasan@gmail.com">Ali Alhasan</maintainer>
   <license>MIT</license>
 
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
-  <buildtool_depend>ament_cmake</buildtool_depend>
-
   <depend>rclpy</depend>
+  <exec_depend>nsk_swarm_interfaces</exec_depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>std_msgs</depend>

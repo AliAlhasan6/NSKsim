@@ -11,7 +11,7 @@ Launches:
 
 NOTE: Start NSK engine SEPARATELY in nsk_env before launching:
     source ~/Desktop/NSK/nsk_env/bin/activate
-    CUDA_VISIBLE_DEVICES="" python -m nsk_swarm.nsk_engine.engine_server
+    CUDA_VISIBLE_DEVICES="" python -m nsk_engine.engine_server
 """
 
 import os
@@ -80,7 +80,7 @@ def generate_launch_description():
                 '║  cd ~/Desktop/NSK                                    ║\n'
                 '║  source nsk_env/bin/activate                         ║\n'
                 '║  CUDA_VISIBLE_DEVICES="" \\                            ║\n'
-                '║    python -m nsk_swarm.nsk_engine.engine_server      ║\n'
+                '║    python -m nsk_engine.engine_server                ║\n'
                 '╚══════════════════════════════════════════════════════╝\n'
             ),
         ),

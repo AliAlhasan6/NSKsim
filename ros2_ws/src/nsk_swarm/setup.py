@@ -27,8 +27,8 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='Ali',
-    maintainer_email='ali@example.com',
+    maintainer='Ali Alhasan',
+    maintainer_email='aliyossefalhasan@gmail.com',
     description='NSK Swarm Robotics 2D Simulation package',
     license='MIT',
     tests_require=['pytest'],
@@ -36,6 +36,7 @@ setup(
         'console_scripts': [
             'robot_node         = nsk_swarm.robot_node:main',
             'convergence_monitor = nsk_swarm.convergence_monitor:main',
+            'nsk_engine          = nsk_engine.engine_server:main',
         ],
     },
 )
