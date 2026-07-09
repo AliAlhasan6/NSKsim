@@ -15,11 +15,41 @@ import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
+                       QoSReliabilityPolicy, qos_profile_sensor_data)
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 
 from nsk_swarm_interfaces.srv import Compress, Merge
+
+# ── QoS profiles ─────────────────────────────────────────────────────────────
+
+# /kg_share: RELIABLE — a lost broadcast is a lost merge, and the topic is
+# low-rate (one message per share_interval) so reliability is cheap.
+# VOLATILE — stale graphs must not be merged by late joiners, so no
+# durable cache.
+KG_SHARE_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.VOLATILE,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=10,
+)
+
+# /robot_N/odom: latest-pose-only semantics — best-effort matches the sensor
+# convention and avoids the reliable-sub-vs-best-effort-pub incompatibility
+# with the gz bridge. The ros_gz bridge publishes odom with default RELIABLE
+# QoS, which is compatible with a best-effort subscriber (reliable pub +
+# best-effort sub connects; only best-effort pub + reliable sub fails).
+ODOM_QOS = qos_profile_sensor_data
+
+# /robot_N/cmd_vel: command stream — each message matters.
+CMD_VEL_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.VOLATILE,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=10,
+)
 
 # Movement states
 EXPLORE  = 'explore'
@@ -106,18 +136,20 @@ class NSKRobotNode(Node):
                     f'[Robot {self.robot_id}] Waiting for {cli.srv_name} ...')
 
         # Publishers
-        self.cmd_pub = self.create_publisher(Twist, f'/robot_{self.robot_id}/cmd_vel', 10)
-        self.kg_pub  = self.create_publisher(String, '/kg_share', 10)
+        self.cmd_pub = self.create_publisher(
+            Twist, f'/robot_{self.robot_id}/cmd_vel', CMD_VEL_QOS)
+        self.kg_pub  = self.create_publisher(String, '/kg_share', KG_SHARE_QOS)
 
         # Subscriptions
-        self.create_subscription(Odometry, f'/robot_{self.robot_id}/odom', self._odom_cb, 10)
+        self.create_subscription(Odometry, f'/robot_{self.robot_id}/odom',
+                                 self._odom_cb, ODOM_QOS)
         for j in range(self.num_robots):
             if j != self.robot_id:
                 self.create_subscription(
                     Odometry, f'/robot_{j}/odom',
-                    lambda msg, peer=j: self._peer_odom_cb(msg, peer), 10)
-        self.create_subscription(String, '/kg_share', self._on_kg_share, 10,
-                                 callback_group=self._cb_group)
+                    lambda msg, peer=j: self._peer_odom_cb(msg, peer), ODOM_QOS)
+        self.create_subscription(String, '/kg_share', self._on_kg_share,
+                                 KG_SHARE_QOS, callback_group=self._cb_group)
 
         # Timers
         self.create_timer(2.0,                self._update_motion_state,

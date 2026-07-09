@@ -19,12 +19,44 @@ import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
+                       QoSReliabilityPolicy, qos_profile_sensor_data)
 from std_msgs.msg import Float32, String
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
 from nsk_swarm_interfaces.srv import SimilarityQuery
+
+# ── QoS profiles ─────────────────────────────────────────────────────────────
+
+# /kg_share: RELIABLE — a lost broadcast is a lost merge, and the topic is
+# low-rate (one message per share_interval) so reliability is cheap.
+# VOLATILE — stale graphs must not be merged by late joiners, so no
+# durable cache.
+KG_SHARE_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.VOLATILE,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=10,
+)
+
+# /robot_N/odom: latest-pose-only semantics — best-effort matches the sensor
+# convention and avoids the reliable-sub-vs-best-effort-pub incompatibility
+# with the gz bridge. The ros_gz bridge publishes odom with default RELIABLE
+# QoS, which is compatible with a best-effort subscriber (reliable pub +
+# best-effort sub connects; only best-effort pub + reliable sub fails).
+ODOM_QOS = qos_profile_sensor_data
+
+# /nsk/convergence and /nsk/similarity_markers: low-rate monitoring outputs
+# for RViz2 and loggers — explicit spelling of the profile the bare depth-10
+# argument implied.
+MONITOR_PUB_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.VOLATILE,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=10,
+)
 
 
 def _discard_future(future):
@@ -96,17 +128,20 @@ class ConvergenceMonitorNode(Node):
         self._check_duplicate_servers()
 
         # Publishers
-        self.conv_pub    = self.create_publisher(Float32,      '/nsk/convergence',        10)
-        self.marker_pub  = self.create_publisher(MarkerArray,  '/nsk/similarity_markers', 10)
+        self.conv_pub    = self.create_publisher(
+            Float32,     '/nsk/convergence',        MONITOR_PUB_QOS)
+        self.marker_pub  = self.create_publisher(
+            MarkerArray, '/nsk/similarity_markers', MONITOR_PUB_QOS)
 
         # Subscriptions
-        self.create_subscription(String, '/kg_share', self._on_kg_share, 10)
+        self.create_subscription(String, '/kg_share', self._on_kg_share,
+                                 KG_SHARE_QOS)
         for i in range(self.num_robots):
             self.create_subscription(
                 Odometry,
                 f'/robot_{i}/odom',
                 lambda msg, rid=i: self._odom_cb(msg, rid),
-                10)
+                ODOM_QOS)
 
         # Timer
         self.create_timer(self.monitor_interval, self._monitor_cb,
