@@ -15,12 +15,18 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
+                            SetEnvironmentVariable, TimerAction)
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 # Single source of truth for the swarm size. Must not exceed the number of
 # dataset_indices the engine is configured with (5 by default).
 NUM_ROBOTS = 5
+
+# colcon entry points run under the system interpreter; torch/PyG live in the
+# venv, so its site-packages must be on PYTHONPATH for the Python nodes.
+VENV_SITE_PACKAGES = '/home/lawlite/Desktop/NSKsim/venv/lib/python3.12/site-packages'
 
 
 def generate_launch_description():
@@ -50,6 +56,19 @@ def generate_launch_description():
         ]
 
     return LaunchDescription([
+
+        # ── 0. Venv on PYTHONPATH for the Python nodes ───────────────────────
+        DeclareLaunchArgument(
+            'venv_site_packages',
+            default_value=VENV_SITE_PACKAGES,
+            description='site-packages dir prepended to PYTHONPATH so the '
+                        'Python nodes can import torch/PyG',
+        ),
+        SetEnvironmentVariable(
+            'PYTHONPATH',
+            [LaunchConfiguration('venv_site_packages'),
+             os.pathsep + os.environ.get('PYTHONPATH', '')],
+        ),
 
         # ── 1. Gazebo Harmonic ───────────────────────────────────────────────
         ExecuteProcess(

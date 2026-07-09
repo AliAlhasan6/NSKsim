@@ -151,11 +151,17 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         node.get_logger().info('Shutting down.')
     finally:
-        # Under `ros2 launch`, SIGINT already shut the context down; a second
-        # rclpy.shutdown() would raise RCLError, so only clean up if still ok.
-        if rclpy.ok():
+        # Under `ros2 launch`, SIGINT may shut the context down at any moment,
+        # even between an ok() check and the shutdown() call (check-then-act
+        # race). Catch instead of check: a failed double-shutdown is a no-op.
+        try:
             node.destroy_node()
+        except Exception:
+            pass
+        try:
             rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
