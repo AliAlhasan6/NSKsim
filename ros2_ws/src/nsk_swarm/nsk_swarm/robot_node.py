@@ -26,6 +26,16 @@ EXPLORE  = 'explore'
 FLOCK    = 'flock'
 DISPERSE = 'disperse'
 
+def _discard_future(future):
+    """Cancel a pending service future and mark any exception retrieved,
+    silencing rclpy's 'exception was never retrieved' stderr noise."""
+    future.cancel()
+    try:
+        future.exception()
+    except Exception:
+        pass
+
+
 # Adaptive compression thresholds
 def retention_for_similarity(sim: float) -> float:
     if sim > 0.7:
@@ -46,6 +56,7 @@ class NSKRobotNode(Node):
         'world_size':     20.0,
         'walk_speed':     0.15,
         'walk_turn_max':  0.5,
+        'service_timeout_sec': 5.0,
     }
 
     def __init__(self):
@@ -61,6 +72,7 @@ class NSKRobotNode(Node):
         self.world_size     = self.get_parameter('world_size').value
         self.walk_speed     = self.get_parameter('walk_speed').value
         self.walk_turn_max  = self.get_parameter('walk_turn_max').value
+        self.service_timeout_sec = self.get_parameter('service_timeout_sec').value
 
         # Position state
         self.pos_x = 0.0
@@ -298,12 +310,15 @@ class NSKRobotNode(Node):
 
     # ── Engine service calls ─────────────────────────────────────────────────
 
-    def _call_engine(self, client, request, timeout_sec: float = 5.0):
+    def _call_engine(self, client, request, timeout_sec: float | None = None):
         """Blocking engine call that is safe inside a callback: call_async()
         plus a wait on the future. The ReentrantCallbackGroup and the
         MultiThreadedExecutor in main() guarantee a free thread delivers the
         response while this callback blocks. Returns the response, or None
-        (with a warning logged) on unavailability/timeout/success=False."""
+        (with a warning logged) on unavailability/timeout/success=False.
+        Aborts quietly if rclpy shuts down mid-wait (not an error)."""
+        if timeout_sec is None:
+            timeout_sec = self.service_timeout_sec
         if not client.service_is_ready():
             self.get_logger().warn(
                 f'[Robot {self.robot_id}] {client.srv_name} unavailable '
@@ -312,12 +327,21 @@ class NSKRobotNode(Node):
         done   = threading.Event()
         future = client.call_async(request)
         future.add_done_callback(lambda _: done.set())
-        if not done.wait(timeout_sec):
-            future.cancel()
-            self.get_logger().warn(
-                f'[Robot {self.robot_id}] {client.srv_name} timeout '
-                f'— skipping cycle')
-            return None
+        # Wait in short slices so a shutdown mid-call aborts promptly
+        # instead of holding an executor thread for the full timeout.
+        deadline = time.monotonic() + timeout_sec
+        while not done.is_set():
+            if not rclpy.ok():
+                _discard_future(future)
+                return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                _discard_future(future)
+                self.get_logger().warn(
+                    f'[Robot {self.robot_id}] {client.srv_name} timeout '
+                    f'— skipping cycle')
+                return None
+            done.wait(min(0.2, remaining))
         if future.exception() is not None:
             self.get_logger().warn(
                 f'[Robot {self.robot_id}] {client.srv_name} failed: '

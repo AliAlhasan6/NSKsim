@@ -3,6 +3,7 @@
     num_robots:              5         # authoritative value: NUM_ROBOTS in launch/swarm_sim.launch.py
     comm_range:              3.0       # metres, 2D Euclidean
     share_interval:          8.0       # seconds between broadcasts
+    service_timeout_sec:     5.0       # engine service call timeout (robot_node & convergence_monitor)
     nsk_base_path:           "/home/lawlite/Desktop/NSK"
     checkpoint_path:         "experiments/checkpoints/joint_best.pt"
     config_path:             "configs/base.yaml"

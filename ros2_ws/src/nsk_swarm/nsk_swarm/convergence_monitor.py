@@ -27,6 +27,16 @@ from geometry_msgs.msg import Point
 from nsk_swarm_interfaces.srv import SimilarityQuery
 
 
+def _discard_future(future):
+    """Cancel a pending service future and mark any exception retrieved,
+    silencing rclpy's 'exception was never retrieved' stderr noise."""
+    future.cancel()
+    try:
+        future.exception()
+    except Exception:
+        pass
+
+
 # Robot colours (R, G, B) matching SDF definitions
 ROBOT_COLOURS = {
     0: (0.2, 0.4, 1.0),   # blue
@@ -51,12 +61,14 @@ class ConvergenceMonitorNode(Node):
         self.declare_parameter('convergence_threshold', 0.25)
         self.declare_parameter('min_rise',             0.03)
         self.declare_parameter('stability_eps',        0.005)
+        self.declare_parameter('service_timeout_sec',  5.0)
 
         self.num_robots           = self.get_parameter('num_robots').value
         self.monitor_interval     = self.get_parameter('monitor_interval').value
         self.comm_range           = self.get_parameter('comm_range').value
         self.min_rise             = self.get_parameter('min_rise').value
         self.stability_eps        = self.get_parameter('stability_eps').value
+        self.service_timeout_sec  = self.get_parameter('service_timeout_sec').value
 
         # State
         self.merge_counts: dict[tuple[int, int], int] = {}
@@ -343,12 +355,15 @@ class ConvergenceMonitorNode(Node):
 
     # ── Engine service calls ─────────────────────────────────────────────────
 
-    def _call_engine(self, client, request, timeout_sec: float = 5.0):
+    def _call_engine(self, client, request, timeout_sec: float | None = None):
         """Blocking engine call that is safe inside a callback: call_async()
         plus a wait on the future. The ReentrantCallbackGroup and the
         MultiThreadedExecutor in main() guarantee a free thread delivers the
         response while this callback blocks. Returns the response, or None
-        (with a warning logged) on unavailability/timeout/success=False."""
+        (with a warning logged) on unavailability/timeout/success=False.
+        Aborts quietly if rclpy shuts down mid-wait (not an error)."""
+        if timeout_sec is None:
+            timeout_sec = self.service_timeout_sec
         if not client.service_is_ready():
             self.get_logger().warn(
                 f'[NSK Monitor] {client.srv_name} unavailable — skipping cycle')
@@ -356,11 +371,20 @@ class ConvergenceMonitorNode(Node):
         done   = threading.Event()
         future = client.call_async(request)
         future.add_done_callback(lambda _: done.set())
-        if not done.wait(timeout_sec):
-            future.cancel()
-            self.get_logger().warn(
-                f'[NSK Monitor] {client.srv_name} timeout — skipping cycle')
-            return None
+        # Wait in short slices so a shutdown mid-call aborts promptly
+        # instead of holding an executor thread for the full timeout.
+        deadline = time.monotonic() + timeout_sec
+        while not done.is_set():
+            if not rclpy.ok():
+                _discard_future(future)
+                return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                _discard_future(future)
+                self.get_logger().warn(
+                    f'[NSK Monitor] {client.srv_name} timeout — skipping cycle')
+                return None
+            done.wait(min(0.2, remaining))
         if future.exception() is not None:
             self.get_logger().warn(
                 f'[NSK Monitor] {client.srv_name} failed: '
