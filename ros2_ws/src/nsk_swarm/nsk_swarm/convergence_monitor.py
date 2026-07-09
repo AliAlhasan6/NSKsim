@@ -7,7 +7,7 @@ Standalone ROS 2 node. No PyTorch.
 - Publishes Float32 to /nsk/convergence
 - Publishes MarkerArray to /nsk/similarity_markers for RViz2
 - Listens to /kg_share to track merge events
-- Prints formatted convergence reports to terminal
+- Logs formatted convergence reports via the node logger
 """
 
 import json
@@ -46,19 +46,25 @@ class ConvergenceMonitorNode(Node):
         self.declare_parameter('num_robots',           5)
         self.declare_parameter('monitor_interval',     10.0)
         self.declare_parameter('comm_range',           3.0)
+        # Declared only so launch files that still pass it don't fail;
+        # convergence is now judged by min_rise/stability_eps instead.
         self.declare_parameter('convergence_threshold', 0.25)
+        self.declare_parameter('min_rise',             0.03)
+        self.declare_parameter('stability_eps',        0.005)
 
         self.num_robots           = self.get_parameter('num_robots').value
         self.monitor_interval     = self.get_parameter('monitor_interval').value
         self.comm_range           = self.get_parameter('comm_range').value
-        self.conv_threshold       = self.get_parameter('convergence_threshold').value
+        self.min_rise             = self.get_parameter('min_rise').value
+        self.stability_eps        = self.get_parameter('stability_eps').value
 
         # State
         self.merge_counts: dict[tuple[int, int], int] = {}
         self.similarity_history: list[float] = []
         self.start_time = time.time()
         self.robot_positions: dict[int, tuple[float, float]] = {}
-        self._consec_above_threshold = 0
+        self.baseline_sim: float | None = None
+        self._consec_stable = 0
         self._converged = False
 
         # Engine service client.
@@ -75,6 +81,7 @@ class ConvergenceMonitorNode(Node):
         while not self._sim_cli.wait_for_service(timeout_sec=2.0):
             self.get_logger().warn(
                 f'[NSK Monitor] Waiting for {self._sim_cli.srv_name} ...')
+        self._check_duplicate_servers()
 
         # Publishers
         self.conv_pub    = self.create_publisher(Float32,      '/nsk/convergence',        10)
@@ -129,9 +136,18 @@ class ConvergenceMonitorNode(Node):
 
     # ── Monitor callback ─────────────────────────────────────────────────────
 
+    def _check_duplicate_servers(self):
+        """Two nsk_engine processes load-balance requests between themselves
+        and their state diverges silently, so more than one server on the
+        similarity service makes every reading suspect."""
+        n = self.count_services(self._sim_cli.srv_name)
+        if n > 1:
+            self.get_logger().error(
+                f'Multiple NSK engine servers detected ({n}); '
+                'results are unreliable.')
+
     def _monitor_cb(self):
-        if self._converged:
-            return
+        self._check_duplicate_servers()
 
         req = SimilarityQuery.Request()
         req.agent_ids = list(range(self.num_robots))
@@ -142,6 +158,9 @@ class ConvergenceMonitorNode(Node):
         mean_sim = resp.mean_sim
         matrix   = json.loads(resp.matrix_json)
         elapsed  = int(time.time() - self.start_time)
+
+        if self.baseline_sim is None:
+            self.baseline_sim = mean_sim
 
         # Publish convergence float
         msg = Float32()
@@ -157,46 +176,64 @@ class ConvergenceMonitorNode(Node):
 
         # History and trend
         self.similarity_history.append(mean_sim)
-        delta   = (mean_sim - self.similarity_history[-2]
-                   if len(self.similarity_history) > 1 else 0.0)
-        trend   = '↑ converging' if delta > 0.005 else (
-                  '↓ diverging'  if delta < -0.005 else '→ stable')
+        has_prev = len(self.similarity_history) > 1
+        delta    = mean_sim - self.similarity_history[-2] if has_prev else 0.0
+        trend    = '↑ converging' if delta > 0.005 else (
+                   '↓ diverging'  if delta < -0.005 else '→ stable')
 
-        # Convergence check
-        if mean_sim >= self.conv_threshold:
-            self._consec_above_threshold += 1
+        # Convergence check: at least one merge observed, a rise over the
+        # first reading (baseline varies per run, so an absolute threshold
+        # can be met at t=0 with zero merges), and a stable tail.
+        rise = mean_sim - self.baseline_sim
+        if has_prev and abs(delta) < self.stability_eps:
+            self._consec_stable += 1
         else:
-            self._consec_above_threshold = 0
+            self._consec_stable = 0
+
+        newly_converged = (not self._converged
+                           and bool(self.merge_counts)
+                           and rise >= self.min_rise
+                           and self._consec_stable >= 3)
+        if newly_converged:
+            self._converged = True
 
         # Active pairs
         pair_strs = [f'({a},{b})×{c}'
                      for (a, b), c in sorted(self.merge_counts.items())]
         pairs_str = '  '.join(pair_strs) if pair_strs else 'none'
 
-        status = 'CONVERGED ✓' if self._consec_above_threshold >= 3 else 'NOT YET'
+        status = ('CONVERGED ✓ (monitoring continues)' if self._converged
+                  else 'NOT YET')
 
-        print('\n' + '═' * 52)
-        print(f'[NSK Monitor  t={elapsed:03d}s]  '
-              f'Mean pairwise sim: {mean_sim:.4f}')
-        print(f'  Δ from last:  {delta:+.4f}   Trend: {trend}')
-        print(f'  Active pairs: {pairs_str}')
-        print(f'  Threshold:    {self.conv_threshold}  │  Status: {status}')
-        print('═' * 52)
+        self.get_logger().info(
+            '\n' + '═' * 52 + '\n'
+            f'[NSK Monitor  t={elapsed:03d}s]  '
+            f'Mean pairwise sim: {mean_sim:.4f}\n'
+            f'  Δ from last:  {delta:+.4f}   Trend: {trend}\n'
+            f'  Active pairs: {pairs_str}\n'
+            f'  Baseline: {self.baseline_sim:.4f}   '
+            f'Rise: {rise:+.4f} (min {self.min_rise})   '
+            f'Stable: {self._consec_stable}/3\n'
+            f'  Status: {status}\n'
+            + '═' * 52)
 
-        if self._consec_above_threshold >= 3:
-            self._converged = True
-            self._print_final_report(elapsed, mean_sim)
+        if newly_converged:
+            self._log_final_report(elapsed, mean_sim)
 
-    def _print_final_report(self, elapsed: int, final_sim: float):
-        print('\n' + '★' * 52)
-        print(f'[NSK Monitor] CONVERGENCE REACHED at t={elapsed}s')
-        print(f'  Final mean pairwise similarity: {final_sim:.4f}')
-        print(f'  Merge events:')
+    def _log_final_report(self, elapsed: int, final_sim: float):
+        lines = [
+            '\n' + '★' * 52,
+            f'[NSK Monitor] CONVERGENCE REACHED at t={elapsed}s',
+            f'  Final mean pairwise similarity: {final_sim:.4f}',
+            f'  Rise over baseline: {final_sim - self.baseline_sim:+.4f}',
+            '  Merge events:',
+        ]
         for (sender, receiver), count in sorted(self.merge_counts.items()):
-            print(f'    Robot {sender} → Robot {receiver}: {count} merges')
+            lines.append(f'    Robot {sender} → Robot {receiver}: {count} merges')
         total = sum(self.merge_counts.values())
-        print(f'  Total merge events: {total}')
-        print('★' * 52)
+        lines.append(f'  Total merge events: {total}')
+        lines.append('★' * 52)
+        self.get_logger().info('\n'.join(lines))
 
     # ── Marker construction ──────────────────────────────────────────────────
 
