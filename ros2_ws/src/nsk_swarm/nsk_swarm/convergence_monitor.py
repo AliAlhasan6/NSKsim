@@ -69,6 +69,32 @@ def _discard_future(future):
         pass
 
 
+def convergence_step(mean_sim: float, baseline_sim: float, delta: float,
+                     has_prev: bool, consec_stable: int,
+                     already_converged: bool, has_merges: bool,
+                     min_rise: float, stability_eps: float
+                     ) -> tuple[float, int, bool]:
+    """One monitor cycle's convergence decision, as pure math.
+
+    Convergence requires at least one merge observed, a rise over the
+    first reading (baseline varies per run, so an absolute threshold
+    can be met at t=0 with zero merges), and a stable tail.
+
+    Returns (rise, new_consec_stable, newly_converged).
+    """
+    rise = mean_sim - baseline_sim
+    if has_prev and abs(delta) < stability_eps:
+        consec_stable += 1
+    else:
+        consec_stable = 0
+
+    newly_converged = (not already_converged
+                       and has_merges
+                       and rise >= min_rise
+                       and consec_stable >= 3)
+    return rise, consec_stable, newly_converged
+
+
 # Robot colours (R, G, B) matching SDF definitions
 ROBOT_COLOURS = {
     0: (0.2, 0.4, 1.0),   # blue
@@ -228,19 +254,10 @@ class ConvergenceMonitorNode(Node):
         trend    = '↑ converging' if delta > 0.005 else (
                    '↓ diverging'  if delta < -0.005 else '→ stable')
 
-        # Convergence check: at least one merge observed, a rise over the
-        # first reading (baseline varies per run, so an absolute threshold
-        # can be met at t=0 with zero merges), and a stable tail.
-        rise = mean_sim - self.baseline_sim
-        if has_prev and abs(delta) < self.stability_eps:
-            self._consec_stable += 1
-        else:
-            self._consec_stable = 0
-
-        newly_converged = (not self._converged
-                           and bool(self.merge_counts)
-                           and rise >= self.min_rise
-                           and self._consec_stable >= 3)
+        rise, self._consec_stable, newly_converged = convergence_step(
+            mean_sim, self.baseline_sim, delta, has_prev,
+            self._consec_stable, self._converged, bool(self.merge_counts),
+            self.min_rise, self.stability_eps)
         if newly_converged:
             self._converged = True
 
