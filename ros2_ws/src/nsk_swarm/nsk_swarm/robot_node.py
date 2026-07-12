@@ -374,10 +374,17 @@ class NSKRobotNode(Node):
                     f'— skipping cycle')
                 return None
             done.wait(min(0.2, remaining))
-        if future.exception() is not None:
+        # Retrieval guarantee: fetch the exception exactly once, before any
+        # of the returns below — a Future collected with an unfetched
+        # exception makes rclpy print 'exception was never retrieved'.
+        # Fetching from a successfully-completed future is harmless.
+        try:
+            exc = future.exception()
+        except Exception as fetch_err:
+            exc = fetch_err
+        if exc is not None:
             self.get_logger().warn(
-                f'[Robot {self.robot_id}] {client.srv_name} failed: '
-                f'{future.exception()}')
+                f'[Robot {self.robot_id}] {client.srv_name} failed: {exc}')
             return None
         resp = future.result()
         if not resp.success:

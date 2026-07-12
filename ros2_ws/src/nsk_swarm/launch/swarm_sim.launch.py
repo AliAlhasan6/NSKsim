@@ -4,7 +4,8 @@ swarm_sim.launch.py — NSK Swarm Robotics 2D Simulation launch file.
 
 Launches:
   1. Gazebo Harmonic with knowledge_world.sdf
-  2. NSK engine node (services /nsk/compress, /nsk/merge, /nsk/similarity_query)
+  2. NSK engine lifecycle node, auto-driven configure → activate
+     (services /nsk/compress, /nsk/merge, /nsk/similarity_query once active)
   3. ros_gz_bridge for all 5 robots (cmd_vel + odom)
   4. 5 NSKRobotNode instances (after 5 s delay)
   5. ConvergenceMonitorNode (after 6 s delay)
@@ -13,12 +14,17 @@ Launches:
 
 import os
 
+import lifecycle_msgs.msg
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
-                            SetEnvironmentVariable, TimerAction)
+from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
+                            RegisterEventHandler, SetEnvironmentVariable,
+                            TimerAction)
+from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import LifecycleNode, Node
+from launch_ros.event_handlers import OnStateTransition
+from launch_ros.events.lifecycle import ChangeState
 
 # Single source of truth for the swarm size. Must not exceed the number of
 # dataset_indices the engine is configured with (5 by default).
@@ -55,6 +61,40 @@ def generate_launch_description():
             f'/robot_{n}/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
         ]
 
+    # ── NSK engine lifecycle node + auto-driven transitions ─────────────────
+    # unconfigured → configure (emitted below; launch's lifecycle event
+    # manager waits for the node's change_state service, so emitting at
+    # launch time is race-free) → inactive → activate (via the
+    # OnStateTransition handler) → active, at which point the engine's
+    # service servers exist.
+    engine_node = LifecycleNode(
+        package='nsk_swarm',
+        executable='nsk_engine',
+        name='nsk_engine',
+        namespace='',
+        parameters=[{'num_robots': NUM_ROBOTS}],
+        output='screen',
+    )
+
+    engine_activate_on_inactive = RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=engine_node,
+            goal_state='inactive',
+            entities=[
+                EmitEvent(event=ChangeState(
+                    lifecycle_node_matcher=matches_action(engine_node),
+                    transition_id=(
+                        lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE),
+                )),
+            ],
+        )
+    )
+
+    engine_configure = EmitEvent(event=ChangeState(
+        lifecycle_node_matcher=matches_action(engine_node),
+        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
+    ))
+
     return LaunchDescription([
 
         # ── 0. Venv on PYTHONPATH for the Python nodes ───────────────────────
@@ -76,14 +116,10 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # ── 2. NSK engine (service servers) ─────────────────────────────────
-        Node(
-            package='nsk_swarm',
-            executable='nsk_engine',
-            name='nsk_engine',
-            parameters=[{'num_robots': NUM_ROBOTS}],
-            output='screen',
-        ),
+        # ── 2. NSK engine (lifecycle: configure → inactive → activate) ──────
+        engine_node,
+        engine_activate_on_inactive,
+        engine_configure,
 
         # ── 3. ros_gz_bridge ────────────────────────────────────────────────
         TimerAction(
