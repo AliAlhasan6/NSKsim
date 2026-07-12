@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: ros:jazzy
+    defaults:
+      run:
+        # Container steps don't run login shells; every ROS step below
+        # sources its environment explicitly.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Restores pip's download cache so the ~200MB CPU torch wheel is not
+      # re-downloaded every run. In container jobs HOME=/github/home for all
+      # steps, so pip and the cache action agree on ~/.cache/pip.
+      - name: Cache pip downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('.github/workflows/ci.yml') }}
+
+      - name: Install Python dependencies
+        run: |
+          # ros:jazzy ships without pip; its Ubuntu 24.04 Python is
+          # externally managed (PEP 668), hence --break-system-packages.
+          apt-get update
+          apt-get install -y --no-install-recommends python3-pip
+          pip3 install --break-system-packages torch --index-url https://download.pytorch.org/whl/cpu
+          pip3 install --break-system-packages torch_geometric networkx
+
+      - name: Build workspace
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd ros2_ws
+          colcon build
+
+      - name: Test
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd ros2_ws
+          source install/setup.bash
+          # colcon test exits 0 even when tests fail; colcon test-result is
+          # the gate — it returns nonzero on any failure or error.
+          colcon test --packages-select nsk_swarm nsk_swarm_interfaces
+          colcon test-result --verbose

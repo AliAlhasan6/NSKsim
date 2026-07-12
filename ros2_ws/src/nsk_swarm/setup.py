@@ -31,7 +31,10 @@ setup(
     maintainer_email='aliyossefalhasan@gmail.com',
     description='NSK Swarm Robotics 2D Simulation package',
     license='MIT',
-    tests_require=['pytest'],
+    # setuptools >= 72 removed tests_require (colcon then falls back to the
+    # unittest runner and skips pytest entirely); the 'test' extra is the
+    # supported spelling colcon also recognises.
+    extras_require={'test': ['pytest']},
     entry_points={
         'console_scripts': [
             'robot_node         = nsk_swarm.robot_node:main',
