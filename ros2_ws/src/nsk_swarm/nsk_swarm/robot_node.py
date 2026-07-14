@@ -21,7 +21,7 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 
-from nsk_swarm_interfaces.srv import Compress, Merge
+from nsk_swarm_interfaces.srv import Compress, Merge, SimilarityQuery
 
 # ── QoS profiles ─────────────────────────────────────────────────────────────
 
@@ -130,7 +130,10 @@ class NSKRobotNode(Node):
             Compress, '/nsk/compress', callback_group=self._cb_group)
         self._merge_cli    = self.create_client(
             Merge, '/nsk/merge', callback_group=self._cb_group)
-        for cli in (self._compress_cli, self._merge_cli):
+        self._sim_cli      = self.create_client(
+            SimilarityQuery, '/nsk/similarity_query',
+            callback_group=self._cb_group)
+        for cli in (self._compress_cli, self._merge_cli, self._sim_cli):
             while not cli.wait_for_service(timeout_sec=2.0):
                 self.get_logger().warn(
                     f'[Robot {self.robot_id}] Waiting for {cli.srv_name} ...')
@@ -286,6 +289,24 @@ class NSKRobotNode(Node):
                           if j != self.robot_id and self._in_range(j)]
         if not peers_in_range:
             return
+
+        # Refresh peer similarities from the engine before choosing the
+        # retention ratio. On failure keep the cached values — stale beats
+        # resetting every peer to the pessimistic 0.0 default.
+        sim_req = SimilarityQuery.Request()
+        sim_req.agent_ids = [int(self.robot_id)] + peers_in_range
+        sim_resp = self._call_engine(self._sim_cli, sim_req)
+        if sim_resp is None:
+            self.get_logger().warn(
+                f'[Robot {self.robot_id}] similarity refresh failed '
+                f'— using cached peer similarities')
+        else:
+            # Matrix rows/columns follow the request's agent_ids order
+            # (same convention as convergence_monitor): row 0 is this
+            # robot, column k+1 is peers_in_range[k].
+            matrix = json.loads(sim_resp.matrix_json)
+            for k, j in enumerate(peers_in_range):
+                self.peer_similarity[j] = float(matrix[0][k + 1])
 
         # Adaptive compression: use lowest similarity among peers in range
         # (send richest graph to the peer we differ from most)
