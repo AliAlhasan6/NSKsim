@@ -23,7 +23,11 @@ Services (active state only):
 
 import json
 import os
+import random
 import sys
+
+import numpy as np
+import torch
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -43,6 +47,7 @@ class NSKEngineNode(LifecycleNode):
         self.declare_parameter('dataset_indices', [0, 900, 1800, 2700, 3600])
         self.declare_parameter('num_robots', 5)
         self.declare_parameter('nsk_base_path', '/home/lawlite/Desktop/NSK')
+        self.declare_parameter('seed', -1)
 
         self.manager = None
         # NOTE: must not be named `_services` — rclpy.Node keeps its service
@@ -59,6 +64,7 @@ class NSKEngineNode(LifecycleNode):
             dataset_indices = [int(i) for i in
                                self.get_parameter('dataset_indices').value]
             num_robots      = int(self.get_parameter('num_robots').value)
+            seed            = int(self.get_parameter('seed').value)
             nsk_base        = os.path.abspath(
                 self.get_parameter('nsk_base_path').value)
 
@@ -82,6 +88,19 @@ class NSKEngineNode(LifecycleNode):
             import yaml
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
+
+            # Seed the global RNGs before AgentManager construction: the
+            # only per-run nondeterminism is the NSK train DataLoader's
+            # shuffle=True, which draws from torch's global RNG at
+            # iteration time, so seeding here makes all_graphs ordering
+            # deterministic. -1 leaves the RNGs unseeded.
+            if seed >= 0:
+                random.seed(seed)
+                np.random.seed(seed)
+                torch.manual_seed(seed)
+                self.get_logger().info(f'Seed:         {seed}')
+            else:
+                self.get_logger().info('Seed:         unseeded')
 
             # Initialise AgentManager
             from nsk_engine.agent_manager import AgentManager

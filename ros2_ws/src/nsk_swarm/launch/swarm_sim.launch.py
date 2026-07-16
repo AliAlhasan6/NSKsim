@@ -23,6 +23,7 @@ from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
 from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 
@@ -72,7 +73,13 @@ def generate_launch_description():
         executable='nsk_engine',
         name='nsk_engine',
         namespace='',
-        parameters=[{'num_robots': NUM_ROBOTS}],
+        parameters=[{
+            'num_robots': NUM_ROBOTS,
+            # LaunchConfiguration resolves to a string; the engine declares
+            # seed as int, so the type must be forced here.
+            'seed': ParameterValue(LaunchConfiguration('seed'),
+                                   value_type=int),
+        }],
         output='screen',
     )
 
@@ -108,6 +115,12 @@ def generate_launch_description():
             'PYTHONPATH',
             [LaunchConfiguration('venv_site_packages'),
              os.pathsep + os.environ.get('PYTHONPATH', '')],
+        ),
+        DeclareLaunchArgument(
+            'seed',
+            default_value='-1',
+            description='Engine RNG seed for reproducible runs '
+                        '(-1 = unseeded)',
         ),
 
         # ── 1. Gazebo Harmonic ───────────────────────────────────────────────

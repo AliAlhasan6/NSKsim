@@ -115,6 +115,31 @@ def test_on_configure_failure_when_manager_raises(
     assert engine_node.manager is None
 
 
+def test_seed_applied_before_manager_construction(
+        engine_node, configured_params, fake_agent_manager):
+    # Ordering matters: the AgentManager's train DataLoader draws from
+    # torch's global RNG at iteration time, so a seed applied after
+    # construction would be useless. Attaching both mocks to one parent
+    # records their calls in a single timeline.
+    engine_node.set_parameters([Parameter('seed', value=123)])
+    with mock.patch('torch.manual_seed') as manual_seed:
+        order = mock.Mock()
+        order.attach_mock(manual_seed, 'manual_seed')
+        order.attach_mock(fake_agent_manager, 'AgentManager')
+        assert engine_node.trigger_configure() == TransitionCallbackReturn.SUCCESS
+
+    manual_seed.assert_called_once_with(123)
+    call_names = [c[0] for c in order.mock_calls]
+    assert call_names.index('manual_seed') < call_names.index('AgentManager')
+
+
+def test_default_seed_leaves_torch_unseeded(
+        engine_node, configured_params, fake_agent_manager):
+    with mock.patch('torch.manual_seed') as manual_seed:
+        assert engine_node.trigger_configure() == TransitionCallbackReturn.SUCCESS
+    manual_seed.assert_not_called()
+
+
 # ── (c) /nsk/* services across activate/deactivate ──────────────────────────
 
 def test_nsk_services_created_on_activate_destroyed_on_deactivate(
