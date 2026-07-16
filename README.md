@@ -2,6 +2,9 @@
 
 [![CI](https://github.com/AliAlhasan6/NSKsim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AliAlhasan6/NSKsim/actions/workflows/ci.yml)
 
+![NSKsim running: Gazebo world and RViz similarity graph](docs/nsksim_run.png)
+
+
 A multi-robot simulation in which five differential-drive robots share **compressed
 knowledge-graph embeddings** instead of raw data. Each robot holds a local knowledge
 graph (FB15k-237 ego-graphs); when robots come within communication range, the
@@ -15,6 +18,9 @@ NSK research repo — this repo is the robotics integration, its test suite, and
 experiment logs.
 
 ## Architecture
+
+![NSKsim architecture](docs/nsksim_pipeline.png)
+
 
 ```
  ┌────────────────────────────────────────────────────────────────────┐
