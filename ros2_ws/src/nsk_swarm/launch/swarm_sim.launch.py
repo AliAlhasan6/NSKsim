@@ -122,6 +122,12 @@ def generate_launch_description():
             description='Engine RNG seed for reproducible runs '
                         '(-1 = unseeded)',
         ),
+        DeclareLaunchArgument(
+            'csv_path',
+            default_value='',
+            description='Per-cycle CSV export path for the convergence '
+                        "monitor ('' = disabled)",
+        ),
 
         # ── 1. Gazebo Harmonic ───────────────────────────────────────────────
         ExecuteProcess(
@@ -174,6 +180,11 @@ def generate_launch_description():
                         'monitor_interval':      10.0,
                         'comm_range':            3.0,
                         'convergence_threshold': 0.25,
+                        # A bare LaunchConfiguration is yaml-parsed, so ''
+                        # would not survive as a string; pin the type as
+                        # the seed parameter does.
+                        'csv_path': ParameterValue(
+                            LaunchConfiguration('csv_path'), value_type=str),
                     }],
                     output='screen',
                 ),

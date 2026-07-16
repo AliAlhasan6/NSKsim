@@ -8,12 +8,15 @@ Standalone ROS 2 node. No PyTorch.
 - Publishes MarkerArray to /nsk/similarity_markers for RViz2
 - Listens to /kg_share to track merge events
 - Logs formatted convergence reports via the node logger
+- Optionally appends one flushed CSV row per cycle (csv_path parameter)
 """
 
+import csv
 import json
 import math
 import threading
 import time
+from datetime import datetime
 
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -120,6 +123,7 @@ class ConvergenceMonitorNode(Node):
         self.declare_parameter('min_rise',             0.03)
         self.declare_parameter('stability_eps',        0.005)
         self.declare_parameter('service_timeout_sec',  5.0)
+        self.declare_parameter('csv_path',             '')
 
         self.num_robots           = self.get_parameter('num_robots').value
         self.monitor_interval     = self.get_parameter('monitor_interval').value
@@ -127,6 +131,7 @@ class ConvergenceMonitorNode(Node):
         self.min_rise             = self.get_parameter('min_rise').value
         self.stability_eps        = self.get_parameter('stability_eps').value
         self.service_timeout_sec  = self.get_parameter('service_timeout_sec').value
+        self.csv_path             = self.get_parameter('csv_path').value
 
         # State
         self.merge_counts: dict[tuple[int, int], int] = {}
@@ -136,6 +141,9 @@ class ConvergenceMonitorNode(Node):
         self.baseline_sim: float | None = None
         self._consec_stable = 0
         self._converged = False
+
+        # Per-cycle CSV export ('' = disabled)
+        self._csv_open()
 
         # Engine service client.
         # Async-safety: _monitor_cb blocks on the engine response, so the
@@ -284,6 +292,8 @@ class ConvergenceMonitorNode(Node):
         if newly_converged:
             self._log_final_report(elapsed, mean_sim)
 
+        self._csv_append(elapsed, mean_sim, rise)
+
     def _log_final_report(self, elapsed: int, final_sim: float):
         lines = [
             '\n' + '★' * 52,
@@ -298,6 +308,66 @@ class ConvergenceMonitorNode(Node):
         lines.append(f'  Total merge events: {total}')
         lines.append('★' * 52)
         self.get_logger().info('\n'.join(lines))
+
+    # ── CSV export ───────────────────────────────────────────────────────────
+
+    def _csv_open(self):
+        """Open the per-cycle CSV export ('' disables it). On failure, log
+        one error and leave the export disabled for the rest of the run."""
+        self._csv_file = None
+        self._csv_writer = None
+        if not self.csv_path:
+            return
+        try:
+            self._csv_file = open(self.csv_path, 'w', newline='')
+            self._csv_writer = csv.writer(self._csv_file)
+            header = ['timestamp', 'elapsed_sec', 'mean_sim', 'baseline',
+                      'rise', 'converged']
+            for i in range(self.num_robots):
+                header += [f'robot{i}_x', f'robot{i}_y']
+            header.append('pair_counts')
+            self._csv_writer.writerow(header)
+            self._csv_file.flush()
+        except OSError as e:
+            self.get_logger().error(
+                f'[NSK Monitor] CSV export disabled — '
+                f'cannot open {self.csv_path!r}: {e}')
+            self._csv_close()
+
+    def _csv_append(self, elapsed: int, mean_sim: float, rise: float):
+        """Append one cycle's row and flush. A failed write logs one error
+        and disables the export; never raises into _monitor_cb."""
+        if self._csv_writer is None:
+            return
+        row = [datetime.now().isoformat(), elapsed, mean_sim,
+               self.baseline_sim, rise, self._converged]
+        for i in range(self.num_robots):
+            pos = self.robot_positions.get(i)
+            row += pos if pos is not None else ('', '')
+        row.append(';'.join(f'{a}-{b}:{c}'
+                            for (a, b), c in sorted(self.merge_counts.items())))
+        try:
+            self._csv_writer.writerow(row)
+            self._csv_file.flush()
+        except Exception as e:
+            self.get_logger().error(
+                f'[NSK Monitor] CSV write to {self.csv_path!r} failed ({e}); '
+                'export disabled for the rest of the run')
+            self._csv_close()
+
+    def _csv_close(self):
+        """Close and disable the export. Catch instead of check (see
+        main()): the file may never have opened or already be closed."""
+        try:
+            self._csv_file.close()
+        except Exception:
+            pass
+        self._csv_file = None
+        self._csv_writer = None
+
+    def destroy_node(self):
+        self._csv_close()
+        super().destroy_node()
 
     # ── Marker construction ──────────────────────────────────────────────────
 
