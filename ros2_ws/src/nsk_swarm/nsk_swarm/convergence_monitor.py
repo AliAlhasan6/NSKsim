@@ -124,6 +124,23 @@ class ConvergenceMonitorNode(Node):
         self.declare_parameter('stability_eps',        0.005)
         self.declare_parameter('service_timeout_sec',  5.0)
         self.declare_parameter('csv_path',             '')
+        # Per-robot spawn offsets by robot id: TB3 DiffDrive odometry is
+        # relative to each robot's spawn pose. Unset = zero offsets (the
+        # dots' OdometryPublisher was already world-frame).
+        #
+        # A bare [] default is mis-inferred as BYTE_ARRAY (an empty sequence
+        # trivially satisfies "all elements are bytes"), and a *type-only*
+        # declaration (Parameter.Type.DOUBLE_ARRAY, no value — the previous
+        # approach here) has no fallback value at all: get_parameter().value
+        # then raises ParameterUninitializedException instead of returning
+        # None, crashing __init__ before _csv_open() ever runs whenever this
+        # node is started without spawn_xs/spawn_ys overrides — exactly the
+        # "unset = zero offsets" case this comment claims to support. A
+        # single-element float default is unambiguously inferred as
+        # DOUBLE_ARRAY and is never itself read (every index below is
+        # length-guarded), so it's a safe stand-in for "no offsets given".
+        self.declare_parameter('spawn_xs', [0.0])
+        self.declare_parameter('spawn_ys', [0.0])
 
         self.num_robots           = self.get_parameter('num_robots').value
         self.monitor_interval     = self.get_parameter('monitor_interval').value
@@ -132,6 +149,8 @@ class ConvergenceMonitorNode(Node):
         self.stability_eps        = self.get_parameter('stability_eps').value
         self.service_timeout_sec  = self.get_parameter('service_timeout_sec').value
         self.csv_path             = self.get_parameter('csv_path').value
+        self.spawn_xs = list(self.get_parameter('spawn_xs').value or [])
+        self.spawn_ys = list(self.get_parameter('spawn_ys').value or [])
 
         # State
         self.merge_counts: dict[tuple[int, int], int] = {}
@@ -186,9 +205,13 @@ class ConvergenceMonitorNode(Node):
     # ── Callbacks ────────────────────────────────────────────────────────────
 
     def _odom_cb(self, msg: Odometry, robot_id: int):
-        x = msg.pose.pose.position.x
-        y = msg.pose.pose.position.y
-        self.robot_positions[robot_id] = (x, y)
+        # Spawn-relative odom → world frame, so pair distances and the CSV's
+        # robot{i}_x/y columns are comparable across robots.
+        ox = self.spawn_xs[robot_id] if robot_id < len(self.spawn_xs) else 0.0
+        oy = self.spawn_ys[robot_id] if robot_id < len(self.spawn_ys) else 0.0
+        self.robot_positions[robot_id] = (
+            ox + msg.pose.pose.position.x,
+            oy + msg.pose.pose.position.y)
 
     def _on_kg_share(self, msg: String):
         """Count merge events from /kg_share traffic."""
@@ -335,22 +358,27 @@ class ConvergenceMonitorNode(Node):
             self._csv_close()
 
     def _csv_append(self, elapsed: int, mean_sim: float, rise: float):
-        """Append one cycle's row and flush. A failed write logs one error
-        and disables the export; never raises into _monitor_cb."""
+        """Append one cycle's row and flush. A failed write logs one
+        warning and disables the export; never raises into _monitor_cb,
+        and never disables without logging why. Row composition sits
+        inside the guarded region along with the write itself, so a bad
+        value reaching the row (not just a write/flush failure) is caught
+        and reported the same way instead of escaping uncaught."""
         if self._csv_writer is None:
             return
-        row = [datetime.now().isoformat(), elapsed, mean_sim,
-               self.baseline_sim, rise, self._converged]
-        for i in range(self.num_robots):
-            pos = self.robot_positions.get(i)
-            row += pos if pos is not None else ('', '')
-        row.append(';'.join(f'{a}-{b}:{c}'
-                            for (a, b), c in sorted(self.merge_counts.items())))
         try:
+            row = [datetime.now().isoformat(), elapsed, mean_sim,
+                   self.baseline_sim, rise, self._converged]
+            for i in range(self.num_robots):
+                pos = self.robot_positions.get(i)
+                row += pos if pos is not None else ('', '')
+            row.append(';'.join(
+                f'{a}-{b}:{c}'
+                for (a, b), c in sorted(self.merge_counts.items())))
             self._csv_writer.writerow(row)
             self._csv_file.flush()
         except Exception as e:
-            self.get_logger().error(
+            self.get_logger().warn(
                 f'[NSK Monitor] CSV write to {self.csv_path!r} failed ({e}); '
                 'export disabled for the rest of the run')
             self._csv_close()

@@ -10,6 +10,7 @@ import math
 import random
 import threading
 import time
+from collections import deque
 
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -56,6 +57,30 @@ EXPLORE  = 'explore'
 FLOCK    = 'flock'
 DISPERSE = 'disperse'
 
+# Stuck-recovery phases (see NSKRobotNode._advance_recovery). Distinct from
+# the movement states above: self._state is left untouched while a recovery
+# is in progress (it's simply not consulted — see _publish_cmd_vel) and is
+# reset to EXPLORE only once recovery completes.
+RECOVER_REVERSE = 'recover_reverse'
+RECOVER_ROTATE  = 'recover_rotate'
+
+# Recovery tuning. The reverse distance, the post-escape FLOCK-suppression
+# window and the repeat-escape thresholds are ROS parameters (escape_*, see
+# PARAMS) so the escape can be tuned per world; the rotation ranges and
+# tolerance below describe the maneuver's fixed geometry.
+_RECOVERY_ROTATE_MIN_RAD          = math.radians(90.0)
+_RECOVERY_ROTATE_MAX_RAD          = math.radians(270.0)
+# Escalated (repeat-escape) rotation: draw over the full [90, 270] deg range
+# but reject the +/-20 deg band around a straight reversal (180 deg), so a
+# robot re-pinning at the same spot turns broadly away without ever heading
+# straight back along the axis it came in on.
+_RECOVERY_ROTATE_ESCALATE_MIN_RAD        = math.radians(90.0)
+_RECOVERY_ROTATE_ESCALATE_MAX_RAD        = math.radians(270.0)
+_RECOVERY_ROTATE_ESCALATE_EXCLUDE_LO_RAD = math.radians(160.0)
+_RECOVERY_ROTATE_ESCALATE_EXCLUDE_HI_RAD = math.radians(200.0)
+_RECOVERY_ROTATE_TOLERANCE_RAD           = math.radians(3.0)
+
+
 def _discard_future(future):
     """Cancel a pending service future and mark any exception retrieved,
     silencing rclpy's 'exception was never retrieved' stderr noise."""
@@ -87,6 +112,17 @@ class NSKRobotNode(Node):
         'walk_speed':     0.15,
         'walk_turn_max':  0.5,
         'service_timeout_sec': 5.0,
+        'spawn_x':        0.0,
+        'spawn_y':        0.0,
+        'stuck_window_sec': 4.0,
+        'stuck_epsilon_m':  0.05,
+        # Wall-pinning escape maneuver (odom-only recovery): reverse
+        # distance, post-escape FLOCK-suppression window, and the space/time
+        # thresholds that flag a re-pin at the same spot for escalation.
+        'escape_reverse_m':         0.9,
+        'escape_suppress_sec':      4.0,
+        'escape_repeat_radius_m':   1.0,
+        'escape_repeat_window_sec': 60.0,
     }
 
     def __init__(self):
@@ -94,6 +130,18 @@ class NSKRobotNode(Node):
 
         for name, default in self.PARAMS.items():
             self.declare_parameter(name, default)
+        # Per-robot spawn offsets by robot id, for peer odometry (peer odoms
+        # are relative to *their* spawn poses). A bare [] default is
+        # mis-inferred as BYTE_ARRAY (an empty sequence trivially satisfies
+        # "all elements are bytes"), and a type-only declaration
+        # (Parameter.Type.DOUBLE_ARRAY, no value) has no fallback value at
+        # all — get_parameter().value then raises
+        # ParameterUninitializedException instead of returning None when
+        # this node is started without spawn_xs/spawn_ys overrides. A
+        # single-element float default is unambiguously DOUBLE_ARRAY and is
+        # never itself read (every index below is length-guarded).
+        self.declare_parameter('spawn_xs', [0.0])
+        self.declare_parameter('spawn_ys', [0.0])
 
         self.robot_id       = self.get_parameter('robot_id').value
         self.num_robots     = self.get_parameter('num_robots').value
@@ -103,6 +151,21 @@ class NSKRobotNode(Node):
         self.walk_speed     = self.get_parameter('walk_speed').value
         self.walk_turn_max  = self.get_parameter('walk_turn_max').value
         self.service_timeout_sec = self.get_parameter('service_timeout_sec').value
+        self.spawn_x        = self.get_parameter('spawn_x').value
+        self.spawn_y        = self.get_parameter('spawn_y').value
+        # Unset arrays read back as None → zero offsets for every peer.
+        self.spawn_xs = list(self.get_parameter('spawn_xs').value or [])
+        self.spawn_ys = list(self.get_parameter('spawn_ys').value or [])
+        self.stuck_window_sec = self.get_parameter('stuck_window_sec').value
+        self.stuck_epsilon_m  = self.get_parameter('stuck_epsilon_m').value
+        self.escape_reverse_m         = self.get_parameter(
+            'escape_reverse_m').value
+        self.escape_suppress_sec      = self.get_parameter(
+            'escape_suppress_sec').value
+        self.escape_repeat_radius_m   = self.get_parameter(
+            'escape_repeat_radius_m').value
+        self.escape_repeat_window_sec = self.get_parameter(
+            'escape_repeat_window_sec').value
 
         # Position state
         self.pos_x = 0.0
@@ -117,6 +180,53 @@ class NSKRobotNode(Node):
         self._current_angular_z  = 0.0
         self._levy_steps_left    = 0
         self._levy_heading       = 0.0
+
+        # Stuck detector + recovery (wall-pinning escape; odom-only, no
+        # perception — interior maze walls pin a diff-drive robot in a way
+        # the near_wall boundary check, which only sees the outer walls,
+        # never catches). _recovery_phase is None during normal operation;
+        # self._state is left untouched while it isn't (nothing consults it
+        # — see _publish_cmd_vel) and is reset to EXPLORE once recovery
+        # completes, so the normal state machine re-evaluates FLOCK/EXPLORE
+        # on its next tick.
+        self._motion_samples: deque = deque()
+        self._recovery_phase            = None
+        self._recovery_phase_start_time  = 0.0
+        self._recovery_phase_start_pos   = (0.0, 0.0)
+        self._recovery_target_yaw        = 0.0
+
+        # Per-recovery escape parameters. These start at the configured base
+        # values and are recomputed on each trigger in _enter_recovery — an
+        # escalated repeat escape doubles the reverse distance and the
+        # suppression window for that one instance.
+        self._escape_reverse_target_m     = self.escape_reverse_m
+        self._escape_suppress_sec_current = self.escape_suppress_sec
+        self._escape_escalated            = False
+
+        # Post-escape FLOCK suppression: once a recovery completes, hold the
+        # escape (post-rotation) heading and suppress FLOCK/EXPLORE
+        # attraction until this deadline (0.0 = not suppressing) so the flock
+        # target can't immediately steer the robot back into the wall it just
+        # escaped. The near_wall centre-steer stays exempt (boundary guard).
+        self._escape_suppress_until = 0.0
+        self._escape_heading        = 0.0
+
+        # Repeat-escape tracking: world-frame position and time of the last
+        # escape trigger. A fresh trigger close to this in space and time is
+        # treated as re-pinning at the same spot and escalates the escape.
+        self._last_escape_pos  = None
+        self._last_escape_time = 0.0
+
+        # Time-cap fallback for each leg, sized generously (3x the nominal
+        # duration at the configured speed) so a leg that can't quite reach
+        # its geometric target — e.g. still partially pinned while
+        # reversing — still ends deterministically instead of running
+        # forever. The reverse cap tracks the current (possibly doubled)
+        # reverse target and is recomputed per trigger in _enter_recovery.
+        self._reverse_time_cap_sec = 3.0 * (self.escape_reverse_m
+                                            / max(self.walk_speed, 1e-3))
+        self._rotate_time_cap_sec  = 3.0 * (_RECOVERY_ROTATE_MAX_RAD
+                                            / max(self.walk_turn_max, 1e-3))
 
         # Engine service clients.
         # Async-safety: callbacks below block on engine responses, so the
@@ -167,17 +277,22 @@ class NSKRobotNode(Node):
     # ── Odometry ─────────────────────────────────────────────────────────────
 
     def _odom_cb(self, msg: Odometry):
-        self.pos_x = msg.pose.pose.position.x
-        self.pos_y = msg.pose.pose.position.y
+        # DiffDrive odometry is relative to the spawn pose; shift into the
+        # world frame so positions are comparable across robots. Yaw is left
+        # spawn-relative: distance/comm-range math never uses it.
+        self.pos_x = self.spawn_x + msg.pose.pose.position.x
+        self.pos_y = self.spawn_y + msg.pose.pose.position.y
         q = msg.pose.pose.orientation
         self.yaw = math.atan2(
             2.0 * (q.w * q.z + q.x * q.y),
             1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
     def _peer_odom_cb(self, msg: Odometry, peer_id: int):
+        ox = self.spawn_xs[peer_id] if peer_id < len(self.spawn_xs) else 0.0
+        oy = self.spawn_ys[peer_id] if peer_id < len(self.spawn_ys) else 0.0
         self.peer_positions[peer_id] = (
-            msg.pose.pose.position.x,
-            msg.pose.pose.position.y)
+            ox + msg.pose.pose.position.x,
+            oy + msg.pose.pose.position.y)
 
     # ── Motion state machine ─────────────────────────────────────────────────
 
@@ -186,6 +301,16 @@ class NSKRobotNode(Node):
                 if j != self.robot_id and self._in_range(j)]
 
     def _update_motion_state(self):
+        # Recovery preempts the normal state machine entirely, including
+        # the near_wall centre-steer below: while a recovery leg is under
+        # way, _publish_cmd_vel drives the robot directly and this method
+        # has nothing to decide.
+        if self._recovery_phase is not None:
+            return
+        if self._check_stuck():
+            self._enter_recovery()
+            return
+
         now = time.time()
         peers = self._peers_in_range()
 
@@ -210,12 +335,23 @@ class NSKRobotNode(Node):
         near_wall = abs(self.pos_x) > half or abs(self.pos_y) > half
 
         if near_wall:
-            # Always steer toward centre when near wall
+            # Always steer toward centre when near wall — a legitimate
+            # boundary guard, kept live even during post-escape suppression.
             target = math.atan2(-self.pos_y, -self.pos_x)
             diff   = math.atan2(math.sin(target - self.yaw),
                                 math.cos(target - self.yaw))
             self._current_angular_z = max(-self.walk_turn_max,
                                           min(self.walk_turn_max, diff * 2.0))
+
+        elif now < self._escape_suppress_until:
+            # Post-escape suppression: hold the escape (post-rotation)
+            # heading instead of FLOCK/EXPLORE steering, so the robot commits
+            # to leaving the area before its flock target can steer it
+            # straight back into the wall it just escaped.
+            diff = math.atan2(math.sin(self._escape_heading - self.yaw),
+                              math.cos(self._escape_heading - self.yaw))
+            self._current_angular_z = max(-self.walk_turn_max,
+                                          min(self.walk_turn_max, diff * 1.5))
 
         elif self._state == FLOCK and peers:
             # Steer toward centroid of peers
@@ -259,12 +395,162 @@ class NSKRobotNode(Node):
                     -self.walk_turn_max, self.walk_turn_max)
 
     def _publish_cmd_vel(self):
-        # Slow down while flocking to allow sharing
-        speed = self.walk_speed * 0.5 if self._state == FLOCK else self.walk_speed
-        cmd = Twist()
-        cmd.linear.x  = speed
-        cmd.angular.z = self._current_angular_z
+        if self._recovery_phase is not None:
+            cmd = self._advance_recovery()
+        else:
+            # Slow down while flocking to allow sharing
+            speed = (self.walk_speed * 0.5 if self._state == FLOCK
+                    else self.walk_speed)
+            cmd = Twist()
+            cmd.linear.x  = speed
+            cmd.angular.z = self._current_angular_z
         self.cmd_pub.publish(cmd)
+        self._record_motion_sample(cmd.linear.x)
+
+    # ── Stuck detector + recovery ────────────────────────────────────────────
+
+    def _record_motion_sample(self, commanded_linear_x: float):
+        """Track (time, position, commanded linear speed) over a trailing
+        stuck_window_sec window, for _check_stuck. Called every
+        _publish_cmd_vel tick (0.1 s) — fine enough that a transient
+        zero-speed command (e.g. mid-recovery) is never missed."""
+        now = time.time()
+        self._motion_samples.append((now, self.pos_x, self.pos_y,
+                                     commanded_linear_x))
+        cutoff = now - self.stuck_window_sec
+        while self._motion_samples and self._motion_samples[0][0] < cutoff:
+            self._motion_samples.popleft()
+
+    def _check_stuck(self) -> bool:
+        """True if commanded linear speed has been nonzero for the whole
+        trailing stuck_window_sec window, but world-frame displacement
+        over that same window is under stuck_epsilon_m — i.e. the robot is
+        being driven but isn't actually moving (wall-pinned)."""
+        samples = self._motion_samples
+        if len(samples) < 2:
+            return False   # not enough history yet to judge a full window
+        oldest_t, oldest_x, oldest_y, _ = samples[0]
+        if time.time() - oldest_t < self.stuck_window_sec:
+            return False   # window not yet fully spanned
+        if any(speed <= 0.0 for _, _, _, speed in samples):
+            return False   # motion was intentionally paused somewhere in it
+        displacement = math.hypot(self.pos_x - oldest_x, self.pos_y - oldest_y)
+        return displacement < self.stuck_epsilon_m
+
+    def _enter_recovery(self):
+        now = time.time()
+        # Repeat-escape detection: a fresh trigger close in space and time to
+        # the previous one means the earlier escape didn't take — the robot
+        # re-pinned at (nearly) the same spot — so escalate this recovery.
+        escalate = (
+            self._last_escape_pos is not None
+            and now - self._last_escape_time <= self.escape_repeat_window_sec
+            and math.hypot(self.pos_x - self._last_escape_pos[0],
+                           self.pos_y - self._last_escape_pos[1])
+                <= self.escape_repeat_radius_m)
+
+        if escalate:
+            # Escalated instance: reverse twice as far, suppress FLOCK twice
+            # as long, and rotate from the wider, opposite-biased range so
+            # this escape doesn't re-commit to the heading that just failed.
+            self._escape_reverse_target_m     = self.escape_reverse_m * 2.0
+            self._escape_suppress_sec_current = self.escape_suppress_sec * 2.0
+            self._escape_escalated            = True
+            self.get_logger().info(
+                f'[Robot {self.robot_id}] repeat stuck near '
+                f'({self.pos_x:.2f}, {self.pos_y:.2f}) — escalating escape')
+        else:
+            self._escape_reverse_target_m     = self.escape_reverse_m
+            self._escape_suppress_sec_current = self.escape_suppress_sec
+            self._escape_escalated            = False
+            self.get_logger().info(
+                f'[Robot {self.robot_id}] stuck at '
+                f'({self.pos_x:.2f}, {self.pos_y:.2f}) — escaping')
+
+        self._last_escape_pos  = (self.pos_x, self.pos_y)
+        self._last_escape_time = now
+
+        self._recovery_phase            = RECOVER_REVERSE
+        self._recovery_phase_start_time = now
+        self._recovery_phase_start_pos  = (self.pos_x, self.pos_y)
+        # Size the reverse leg's time-cap to the (possibly doubled) target.
+        self._reverse_time_cap_sec = 3.0 * (self._escape_reverse_target_m
+                                            / max(self.walk_speed, 1e-3))
+        # Defensive: _update_motion_state never calls _check_stuck() again
+        # while a recovery is in progress, but a clear guarantees no stale
+        # pre-recovery samples could ever factor into a later check.
+        self._motion_samples.clear()
+
+    def _advance_recovery(self) -> Twist:
+        """Called every _publish_cmd_vel tick (0.1 s) while a recovery is
+        active: drives the current leg and, on completion (by distance/
+        angle or by the time-cap fallback), advances to the next leg or
+        exits recovery outright. Reverse then rotate, straight through —
+        no dead tick in between."""
+        cmd = Twist()
+        now = time.time()
+
+        if self._recovery_phase == RECOVER_REVERSE:
+            start_x, start_y = self._recovery_phase_start_pos
+            reversed_dist = math.hypot(self.pos_x - start_x,
+                                       self.pos_y - start_y)
+            elapsed = now - self._recovery_phase_start_time
+            if (reversed_dist >= self._escape_reverse_target_m
+                    or elapsed >= self._reverse_time_cap_sec):
+                # Reverse leg done — pick the escape rotation (unseeded:
+                # motion is deliberately unseeded) and fall through to start
+                # the rotate leg in this same tick.
+                if self._escape_escalated:
+                    # Turn broadly away but never straight back along the
+                    # incoming axis: uniform over [90, 270] deg, rejecting
+                    # the +/-20 deg band around a straight reversal (180 deg).
+                    while True:
+                        turn = random.uniform(
+                            _RECOVERY_ROTATE_ESCALATE_MIN_RAD,
+                            _RECOVERY_ROTATE_ESCALATE_MAX_RAD)
+                        if not (_RECOVERY_ROTATE_ESCALATE_EXCLUDE_LO_RAD
+                                <= turn
+                                <= _RECOVERY_ROTATE_ESCALATE_EXCLUDE_HI_RAD):
+                            break
+                else:
+                    turn = random.uniform(_RECOVERY_ROTATE_MIN_RAD,
+                                          _RECOVERY_ROTATE_MAX_RAD)
+                self._recovery_target_yaw = self.yaw + turn
+                self._recovery_phase = RECOVER_ROTATE
+                self._recovery_phase_start_time = now
+            else:
+                cmd.linear.x  = -self.walk_speed
+                cmd.angular.z = 0.0
+                return cmd
+
+        # RECOVER_ROTATE (reached either directly or by fallthrough above).
+        diff = math.atan2(math.sin(self._recovery_target_yaw - self.yaw),
+                          math.cos(self._recovery_target_yaw - self.yaw))
+        elapsed = now - self._recovery_phase_start_time
+        if (abs(diff) < _RECOVERY_ROTATE_TOLERANCE_RAD
+                or elapsed >= self._rotate_time_cap_sec):
+            self._exit_recovery()
+            return cmd   # zero Twist: hold still for the rest of this tick
+        cmd.linear.x  = 0.0
+        cmd.angular.z = math.copysign(self.walk_turn_max, diff)
+        return cmd
+
+    def _exit_recovery(self):
+        """Recovery complete: latch the escape (post-rotation) heading and
+        open the FLOCK-suppression window so the robot commits to leaving the
+        area, then resume the normal state machine (it settles into FLOCK or
+        EXPLORE on its own next tick) and re-arm the stuck detector with a
+        clean window."""
+        self._recovery_phase = None
+        self._state = EXPLORE
+        self._escape_heading        = self.yaw
+        self._escape_suppress_until = (time.time()
+                                       + self._escape_suppress_sec_current)
+        # Escalation is per-instance: clear the flag now the recovery is
+        # done. The next trigger re-derives it from _last_escape_pos/_time,
+        # so a later escape with no nearby repeat starts un-escalated.
+        self._escape_escalated = False
+        self._motion_samples.clear()
 
     # ── Proximity ────────────────────────────────────────────────────────────
 
