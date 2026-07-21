@@ -6,3 +6,5 @@ ros2_ws/log/
 .venv/
 venv/
 experiments/logs/
+frames_*.gv
+frames_*.pdf
