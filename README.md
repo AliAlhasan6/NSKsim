@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/AliAlhasan6/NSKsim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AliAlhasan6/NSKsim/actions/workflows/ci.yml)
 
-![NSKsim running: Gazebo world and RViz similarity graph](docs/nsksim_run.png)
+![NSKsim v1.1.0 — five TurtleBot3 burgers sharing knowledge in the maze world](docs/nsksim_tb3_gazebo.png)
 
 
 A multi-robot simulation in which five differential-drive robots share **compressed
