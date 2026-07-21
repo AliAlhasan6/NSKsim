@@ -7,7 +7,10 @@ Launches:
      burger models (topics rewritten into /robot_N namespaces, after 2 s)
   2. NSK engine lifecycle node, auto-driven configure → activate
      (services /nsk/compress, /nsk/merge, /nsk/similarity_query once active)
-  3. ros_gz_bridge for all 5 robots (cmd_vel + odom + scan)
+  3. ros_gz_bridge: per-robot cmd_vel + odom + scan, plus the shared
+     gz→ROS /tf (dynamic odom→base_footprint for all robots)
+  3b. Per-robot robot_state_publisher: static base_footprint→base_link→
+     base_scan chain to /tf_static, from the namespaced URDF (after 4 s)
   4. 5 NSKRobotNode instances (after 5 s delay)
   5. ConvergenceMonitorNode (after 6 s delay)
   6. RViz2 with preconfigured layout (after 7 s delay)
@@ -39,6 +42,12 @@ VENV_SITE_PACKAGES = '/home/lawlite/Desktop/NSKsim/venv/lib/python3.12/site-pack
 
 TURTLEBOT3_BURGER_SDF = ('/opt/ros/jazzy/share/turtlebot3_gazebo/models/'
                          'turtlebot3_burger/model.sdf')
+
+# Stock burger URDF: a xacro template that prefixes every link/joint frame
+# with ${namespace}. robot_state_publisher needs it substituted to robot_N/ so
+# the static TF frames match the gz-side (robot_N/base_footprint, etc.).
+TURTLEBOT3_BURGER_URDF = ('/opt/ros/jazzy/share/turtlebot3_description/urdf/'
+                          'turtlebot3_burger.urdf')
 
 # Spawn poses carried over from the inline dot models that used to live in
 # knowledge_world.sdf: (x, y, yaw) for robot_0..robot_4. The yaw component
@@ -72,6 +81,10 @@ def make_namespaced_burger_sdf(robot_id: int) -> str:
         ('<child_frame_id>base_footprint</child_frame_id>',
          f'<child_frame_id>{ns}/base_footprint</child_frame_id>'),
         ('<topic>scan</topic>', f'<topic>/{ns}/scan</topic>'),
+        # SLAM looks up robot_N/base_scan, but the stock sensor advertises the
+        # bare frame base_scan; prefix its gz_frame_id to match the TF tree.
+        ('<gz_frame_id>base_scan</gz_frame_id>',
+         f'<gz_frame_id>{ns}/base_scan</gz_frame_id>'),
         ('<topic>imu</topic>', f'<topic>/{ns}/imu</topic>'),
         ('<topic>joint_states</topic>',
          f'<topic>/{ns}/joint_states</topic>'),
@@ -82,6 +95,18 @@ def make_namespaced_burger_sdf(robot_id: int) -> str:
     out.write(sdf)
     out.close()
     return out.name
+
+
+def make_namespaced_burger_urdf(robot_id: int) -> str:
+    """Read the stock burger URDF template and substitute its ${namespace}
+    token with 'robot_N/' (trailing slash), so every link/joint frame becomes
+    robot_N/base_footprint, robot_N/base_scan, etc. — matching the gz-side TF
+    prefix. Returns the substituted URDF as a string for RSP's
+    robot_description. The stock template is read only, never modified.
+    """
+    with open(TURTLEBOT3_BURGER_URDF) as f:
+        urdf = f.read()
+    return urdf.replace('${namespace}', f'robot_{robot_id}/')
 
 
 def generate_launch_description():
@@ -126,6 +151,16 @@ def generate_launch_description():
             # delimiter, unlike the bidirectional '@...@' used above.
             f'/robot_{n}/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
         ]
+
+    # All 5 DiffDrive plugins publish their dynamic odom→base_footprint
+    # transform to one shared gz topic /tf (gz.msgs.Pose_V), with frames
+    # already robot_N/-prefixed (see the SDF frame rewrites above). Bridge it
+    # once, gz→ROS only ('['), into ROS /tf — no namespace remap needed since
+    # both sides are the global /tf. RSP supplies the static links on
+    # /tf_static; the two trees meet at each robot's base_footprint.
+    bridge_topics += [
+        '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+    ]
 
     # ── NSK engine lifecycle node + auto-driven transitions ─────────────────
     # unconfigured → configure (emitted below; launch's lifecycle event
@@ -245,6 +280,36 @@ def generate_launch_description():
                          + bridge_topics,
                     output='screen',
                 ),
+            ],
+        ),
+
+        # ── 3b. Per-robot robot_state_publisher (after 4 s) ─────────────────
+        # Publishes the burger's static frame chain (base_footprint→base_link→
+        # base_scan, plus wheel/imu/caster links) from the namespaced URDF.
+        # 'tf'/'tf_static' are remapped to the global topics so all robots
+        # share one TF tree, kept distinct by their robot_N/ frame prefix; this
+        # meets the bridged dynamic odom→base_footprint at base_footprint.
+        # (SLAM will supply map→odom next.)
+        TimerAction(
+            period=4.0,
+            actions=[
+                Node(
+                    package='robot_state_publisher',
+                    executable='robot_state_publisher',
+                    name='robot_state_publisher',
+                    namespace=f'/robot_{n}',
+                    parameters=[{
+                        'robot_description': ParameterValue(
+                            make_namespaced_burger_urdf(n), value_type=str),
+                        'use_sim_time': True,
+                    }],
+                    remappings=[
+                        (f'/robot_{n}/tf', '/tf'),
+                        (f'/robot_{n}/tf_static', '/tf_static'),
+                    ],
+                    output='screen',
+                )
+                for n in range(NUM_ROBOTS)
             ],
         ),
 
