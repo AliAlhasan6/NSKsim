@@ -7,7 +7,7 @@ Launches:
      burger models (topics rewritten into /robot_N namespaces, after 2 s)
   2. NSK engine lifecycle node, auto-driven configure → activate
      (services /nsk/compress, /nsk/merge, /nsk/similarity_query once active)
-  3. ros_gz_bridge for all 5 robots (cmd_vel + odom)
+  3. ros_gz_bridge for all 5 robots (cmd_vel + odom + scan)
   4. 5 NSKRobotNode instances (after 5 s delay)
   5. ConvergenceMonitorNode (after 6 s delay)
   6. RViz2 with preconfigured layout (after 7 s delay)
@@ -121,6 +121,10 @@ def generate_launch_description():
         bridge_topics += [
             f'/robot_{n}/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
             f'/robot_{n}/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
+            # Lidar is gz→ROS only: the burger's sensor publishes on the gz
+            # side and ROS consumes it (Phase B). '[' is the input-only
+            # delimiter, unlike the bidirectional '@...@' used above.
+            f'/robot_{n}/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
         ]
 
     # ── NSK engine lifecycle node + auto-driven transitions ─────────────────
