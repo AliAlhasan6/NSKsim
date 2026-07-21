@@ -117,6 +117,8 @@ See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Research findings: pair-cluster fragmentation
 
+![Convergence — RViz similarity graph, with live inter-robot links](docs/nsksim_tb3_rviz.png)
+
 The first full convergence run
 ([`experiments/logs/2026-07-09_convergence_run_5robots.log`](experiments/logs/2026-07-09_convergence_run_5robots.log),
 5 robots, 20 m world, 3 m comm range) did **not** converge — and the failure mode is
