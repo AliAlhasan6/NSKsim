@@ -26,7 +26,7 @@ from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
                             RegisterEventHandler, SetEnvironmentVariable,
                             TimerAction)
 from launch.events import matches_action
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.event_handlers import OnStateTransition
@@ -138,6 +138,14 @@ def generate_launch_description():
             'spawn_y':             spawn_ys[robot_id],
             'spawn_xs':            spawn_xs,
             'spawn_ys':            spawn_ys,
+            # True when this robot's id is in the nav_robots launch arg (a list
+            # literal such as [0]); mutes its wander cmd_vel so Nav2 can drive
+            # it. Evaluated at launch time via PythonExpression so CLI overrides
+            # (nav_robots:=[0]) are honored, typed bool as seed/csv_path are.
+            'nav_controlled': ParameterValue(
+                PythonExpression([str(robot_id), ' in ',
+                                  LaunchConfiguration('nav_robots')]),
+                value_type=bool),
         }
 
     # ── Bridge topic specs ──────────────────────────────────────────────────
@@ -236,6 +244,12 @@ def generate_launch_description():
             default_value='',
             description='Per-cycle CSV export path for the convergence '
                         "monitor ('' = disabled)",
+        ),
+        DeclareLaunchArgument(
+            'nav_robots',
+            default_value='[]',
+            description='List of robot IDs whose wander driver is muted so '
+                        'Nav2 can drive them, e.g. [0]',
         ),
 
         # ── 1. Gazebo Harmonic ───────────────────────────────────────────────

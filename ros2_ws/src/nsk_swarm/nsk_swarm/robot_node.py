@@ -123,6 +123,11 @@ class NSKRobotNode(Node):
         'escape_suppress_sec':      4.0,
         'escape_repeat_radius_m':   1.0,
         'escape_repeat_window_sec': 60.0,
+        # Mute this robot's wander cmd_vel output so an external controller
+        # (Nav2) can drive the wheels; knowledge sharing/convergence run on
+        # separate timers and are unaffected. Set per-robot from the launch
+        # file's nav_robots argument.
+        'nav_controlled': False,
     }
 
     def __init__(self):
@@ -166,6 +171,7 @@ class NSKRobotNode(Node):
             'escape_repeat_radius_m').value
         self.escape_repeat_window_sec = self.get_parameter(
             'escape_repeat_window_sec').value
+        self.nav_controlled = self.get_parameter('nav_controlled').value
 
         # Position state
         self.pos_x = 0.0
@@ -395,6 +401,12 @@ class NSKRobotNode(Node):
                     -self.walk_turn_max, self.walk_turn_max)
 
     def _publish_cmd_vel(self):
+        # nav_controlled: an external controller (Nav2) owns the wheels, so the
+        # wander driver publishes no cmd_vel. Sharing/convergence run on
+        # separate timers and are unaffected. This is the sole cmd_vel publish
+        # site, so the early return fully mutes wheel output.
+        if self.nav_controlled:
+            return
         if self._recovery_phase is not None:
             cmd = self._advance_recovery()
         else:
