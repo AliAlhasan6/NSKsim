@@ -1,0 +1,89 @@
+# slam_robot0.yaml — slam_toolbox online_async mapping params for robot_0.
+#
+# Adapted from /opt/ros/jazzy/share/slam_toolbox/config/mapper_params_online_async.yaml
+# with the ROS frame/topic params rebound to robot_0's namespaced TF tree:
+#   base_frame: robot_0/base_footprint   (dynamic odom child, from the gz DiffDrive bridge)
+#   odom_frame: robot_0/odom             (bridged gz odometry frame)
+#   map_frame:  robot_0/map              (this node publishes robot_0/map -> robot_0/odom on /tf)
+#   scan_topic: /robot_0/scan            (absolute; bridged gz->ROS LaserScan)
+#
+# tf2 uses the absolute /tf topic, and the whole swarm shares one global /tf tree
+# keyed by robot_N/-prefixed frames, so this node needs NO /tf remap: launched under
+# the /robot_0 namespace it still broadcasts map->odom onto the global /tf. The map
+# OccupancyGrid is published on the relative 'map' topic -> /robot_0/map.
+#
+# For robots 1-4 copy this file to slam_robotN.yaml and s/robot_0/robot_N/g; the
+# explore.launch.py robot_id arg selects the matching file.
+slam_toolbox:
+  ros__parameters:
+
+    # Plugin params
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ROS Parameters — robot_0 namespaced TF tree
+    use_sim_time: true
+    odom_frame: robot_0/odom
+    map_frame: robot_0/map
+    base_frame: robot_0/base_footprint
+    scan_topic: /robot_0/scan
+    use_map_saver: true
+    mode: mapping
+
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.02   # map->odom broadcast period; 0 disables
+    map_update_interval: 2.0         # rebuild/publish the map every 2 s (faster than the 5 s default so the explorer sees fresh frontiers)
+    resolution: 0.05
+    restamp_tf: false
+    min_laser_range: 0.0
+    max_laser_range: 3.5             # burger LDS-01 usable range
+    minimum_time_interval: 0.5
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000
+    enable_interactive_mode: true
+
+    # General Parameters — smaller travel thresholds than the 0.5 default so a
+    # slow burger threading a tight maze still triggers frequent scan processing.
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2
+    check_min_dist_and_heading_precisely: false
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # Correlation Parameters
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # Loop Closure Parameters
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # Scan Matcher Parameters
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
+    min_pass_through: 2
+    occupancy_threshold: 0.1

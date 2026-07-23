@@ -6,5 +6,8 @@ ros2_ws/log/
 .venv/
 venv/
 experiments/logs/
+experiments/maps/
+experiments/slam/
+experiments/bags/
 frames_*.gv
 frames_*.pdf

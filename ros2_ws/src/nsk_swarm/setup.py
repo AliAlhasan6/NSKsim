@@ -39,6 +39,7 @@ setup(
         'console_scripts': [
             'robot_node         = nsk_swarm.robot_node:main',
             'convergence_monitor = nsk_swarm.convergence_monitor:main',
+            'frontier_explorer   = nsk_swarm.frontier_explorer:main',
             'nsk_engine          = nsk_engine.engine_server:main',
         ],
     },
