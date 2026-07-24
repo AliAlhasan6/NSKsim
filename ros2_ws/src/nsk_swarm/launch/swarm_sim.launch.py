@@ -285,6 +285,23 @@ def generate_launch_description():
         engine_activate_on_inactive,
         engine_configure,
 
+        # ── 2b. Dedicated /clock bridge (gz→ROS) ────────────────────────────
+        # Gazebo's sim clock must reach ROS as ABSOLUTE /clock or every
+        # use_sim_time node stays frozen at zero. Kept as its own bridge,
+        # SEPARATE from the main bridge below and OUTSIDE any namespace push so
+        # the topic resolves to /clock (not /robot_N/clock). use_sim_time is
+        # forced False here: a bridge that waited on the very clock it publishes
+        # would deadlock. Started immediately (no timer) so the clock is live
+        # before the sim-time nodes (RSP at 4 s, robots at 5 s) come up.
+        Node(
+            package='ros_gz_bridge',
+            executable='parameter_bridge',
+            name='clock_bridge',
+            arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+            parameters=[{'use_sim_time': False}],
+            output='screen',
+        ),
+
         # ── 3. ros_gz_bridge ────────────────────────────────────────────────
         TimerAction(
             period=3.0,
