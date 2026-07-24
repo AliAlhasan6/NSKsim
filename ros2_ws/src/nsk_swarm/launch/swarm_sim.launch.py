@@ -49,18 +49,34 @@ TURTLEBOT3_BURGER_SDF = ('/opt/ros/jazzy/share/turtlebot3_gazebo/models/'
 TURTLEBOT3_BURGER_URDF = ('/opt/ros/jazzy/share/turtlebot3_description/urdf/'
                           'turtlebot3_burger.urdf')
 
-# Spawn poses carried over from the inline dot models that used to live in
-# knowledge_world.sdf: (x, y, yaw) for robot_0..robot_4. The yaw component
-# is retained for the record but intentionally NOT applied at spawn: the
-# burger's DiffDrive odometry is expressed in a frame oriented along the
-# spawn yaw, so the pure-translation spawn_x/spawn_y correction in the
-# robot nodes and monitor is exact only when every robot spawns with yaw 0.
+# Spawn poses: (x, y, yaw) for robot_0..robot_4, a regular pentagon on a
+# 0.9 m ring about the origin.
+#
+# These replace the ~3.8 m-radius ring inherited from the inline dot models
+# that used to live in knowledge_world.sdf. On that ring NONE of the 10 pairs
+# started inside the 3.0 m comm_range (nearest pair 4.20 m), and since frontier
+# exploration only pushes robots further apart, sharing encounters were
+# effectively impossible and EXP-01's reconciliation dynamics could never occur.
+# Clustering the spawns puts every pair in range at t=0 and lets exploration
+# diverge them from there.
+#
+# Verified properties of the pentagon below: all 10 pairwise distances are
+# < 3.0 m (max 1.72 m, the non-adjacent pairs); min separation 1.06 m, which
+# clears the burger's ~0.21 m footprint by a wide margin, so the spawn is
+# collision-free. Nearest maze wall (maze_h1 at y=2.9) is ~2.0 m away.
+#
+# The yaw component is retained for the record but intentionally NOT applied at
+# spawn: the burger's DiffDrive odometry is expressed in a frame oriented along
+# the spawn yaw, so the pure-translation spawn_x/spawn_y correction in the robot
+# nodes and monitor is exact only when every robot spawns with yaw 0. These
+# poses are pure-translation offsets and hold all yaw at 0, so that correction
+# stays exact.
 DOT_POSES = [
-    (3.0, 0.0, 0.0),
-    (1.2, 3.8, 4.71238898),
-    (-3.2, 2.4, 0.0),
-    (-3.2, -2.4, 0.78539816),
-    (1.2, -3.8, 1.57079633),
+    (0.86,  0.28, 0.0),
+    (0.00,  0.90, 0.0),
+    (-0.86, 0.28, 0.0),
+    (-0.53, -0.73, 0.0),
+    (0.53, -0.73, 0.0),
 ]
 
 
