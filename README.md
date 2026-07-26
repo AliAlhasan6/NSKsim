@@ -176,6 +176,11 @@ ros2 launch nsk_swarm swarm_sim.launch.py \
   venv_site_packages:=$(pwd)/venv/lib/python3.12/site-packages
 ```
 
+Add `rviz:=true` for the visualisation above. It is **off by default and must
+stay off for any timed run**: rendering the 5-robot scene takes `/clock` from
+~99 Hz to 0.5 Hz, which starves the robot nodes' `/nsk/*` service calls and
+invalidates every RTF and coverage number the run produces.
+
 > **Note — checkpoint not included.** The trained weights (`joint_best.pt`:
 > embedder and merger states, trained on FB15k-237) belong to the external NSK
 > research repo and are not part of this repository. The engine's
@@ -193,7 +198,7 @@ NSKsim/
 │   ├── nsk_swarm/                # main package
 │   │   ├── nsk_swarm/            #   robot_node, convergence_monitor, graph_serialiser
 │   │   ├── nsk_engine/           #   lifecycle engine server + AgentManager (torch side)
-│   │   ├── launch/               #   swarm_sim.launch.py (Gazebo + engine + robots + RViz)
+│   │   ├── launch/               #   swarm_sim.launch.py (Gazebo + engine + robots; RViz opt-in)
 │   │   ├── worlds/ config/ rviz/ #   SDF world, parameters, RViz layout
 │   │   └── test/                 #   55-test pytest suite (logic / node / DDS layers)
 │   └── nsk_swarm_interfaces/     # Compress / Merge / SimilarityQuery .srv definitions

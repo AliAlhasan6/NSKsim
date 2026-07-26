@@ -28,15 +28,23 @@ providing sibling slam_robotN.yaml / nav2_robotN.yaml).
 Usage:
   ros2 launch nsk_swarm explore.launch.py                 # robot_0
   ros2 launch nsk_swarm explore.launch.py robot_id:=3     # robot_3 (needs *_robot3.yaml)
+  ros2 launch nsk_swarm explore.launch.py rviz:=true      # + RViz (eyeballing only; see note)
+
+RViz is OFF by default and MUST stay so for timed runs: its rendering steals
+cycles and corrupts the real-time-factor numbers this rig exists to measure.
+rviz:=true opens a view preconfigured for the robot's namespace (Fixed Frame
+robot_<id>/map, Map /robot_<id>/map, LaserScan /robot_<id>/scan).
 """
 
 import os
+import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, EmitEvent, GroupAction,
-                            IncludeLaunchDescription, RegisterEventHandler)
+                            IncludeLaunchDescription, OpaqueFunction,
+                            RegisterEventHandler)
 from launch.events import matches_action
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -58,6 +66,7 @@ def generate_launch_description():
     nav2_bringup_share = get_package_share_directory('nav2_bringup')
     navigation_launch = os.path.join(
         nav2_bringup_share, 'launch', 'navigation_launch.py')
+    nsk_swarm_share = get_package_share_directory('nsk_swarm')
 
     robot_id = LaunchConfiguration('robot_id')
     # robot_<id> namespace as a substitution (concatenation of str + LaunchConfig).
@@ -83,6 +92,15 @@ def generate_launch_description():
         default_value=[os.path.join(EXP_NAV, 'nav2_robot'), robot_id, '.yaml'],
         description='Nav2 params (frames namespaced to robot_<id>, '
                     'enable_stamped_cmd_vel:false).')
+
+    declare_rviz = DeclareLaunchArgument(
+        'rviz', default_value='false',
+        description='Launch an RViz preconfigured for robot_<id> (Fixed Frame '
+                    'robot_<id>/map, Map /robot_<id>/map, LaserScan '
+                    '/robot_<id>/scan). MUST default false: RViz rendering '
+                    'steals cycles and CORRUPTS the RTF measurements this rig '
+                    'exists to take. Enable only for eyeballing, never during a '
+                    'timed run.')
 
     # ── 1. SLAM (online async) ──────────────────────────────────────────────
     # No /tf remap: launched under /robot_<id> it still broadcasts map->odom onto
@@ -192,12 +210,22 @@ def generate_launch_description():
     # ── 3. Frontier explorer ────────────────────────────────────────────────
     # No namespace= here: FrontierExplorer(BasicNavigator) applies the robot_<id>
     # namespace itself from the robot_id parameter, so its actions resolve to
-    # /robot_<id>/navigate_to_pose. The name must stay 'frontier_explorer' so the
-    # launch-delivered robot_id parameter reaches the bootstrap read in main().
+    # /robot_<id>/navigate_to_pose.
+    #
+    # NO name= either. This process spins TWO nodes concurrently: the sensor node
+    # (code name frontier_explorer_sensors) and the navigator (code name
+    # frontier_explorer). A launch name= becomes a bare `-r __node:=frontier_explorer`
+    # remap, which is PROCESS-WIDE, not scoped to one node — so it renames BOTH,
+    # collapsing them into two /robot_<id>/frontier_explorer entries and a rosout
+    # "duplicate publisher" warning. Dropping name= lets the code-declared names
+    # stand (…/frontier_explorer + …/frontier_explorer_sensors), no collision.
+    # The robot_id parameter still arrives: with no namespace= set here the node
+    # name isn't fully specified, so launch_ros writes the params under the /**
+    # wildcard (see Node._create_params_file_from_dict) — they reach every node in
+    # the process, including main()'s bootstrap read, regardless of node name.
     explorer_node = Node(
         package='nsk_swarm',
         executable='frontier_explorer',
-        name='frontier_explorer',
         parameters=[{
             'robot_id': ParameterValue(robot_id, value_type=int),
             'use_sim_time': True,
@@ -205,13 +233,46 @@ def generate_launch_description():
         output='screen',
     )
 
+    # ── 4. RViz (opt-in; OFF by default) ─────────────────────────────────────
+    # Ship one namespace-agnostic rviz/explore.rviz template with a ROBOT_NS
+    # placeholder; resolve it to robot_<id> at launch time and hand rviz2 the
+    # rewritten copy via -d. This has to be an OpaqueFunction because the fix is a
+    # string substitution INSIDE the file's contents (frames + topics), which a
+    # plain launch substitution can't do — the same reason SLAM's params go
+    # through RewrittenYaml above. Gated on rviz:=true; returns nothing (so rviz
+    # never starts) when false, the default, to keep RTF measurements clean.
+    def _rviz_actions(context):
+        if LaunchConfiguration('rviz').perform(context).lower() not in ('true', '1'):
+            return []
+        ns = 'robot_' + LaunchConfiguration('robot_id').perform(context)
+        template = os.path.join(nsk_swarm_share, 'rviz', 'explore.rviz')
+        with open(template) as f:
+            cfg = f.read().replace('ROBOT_NS', ns)
+        tmp = tempfile.NamedTemporaryFile(
+            mode='w', prefix=f'explore_{ns}_', suffix='.rviz', delete=False)
+        tmp.write(cfg)
+        tmp.close()
+        return [Node(
+            package='rviz2',
+            executable='rviz2',
+            name='rviz2',
+            namespace=ns,
+            arguments=['-d', tmp.name],
+            parameters=[{'use_sim_time': True}],
+            output='screen',
+        )]
+
+    rviz_group = OpaqueFunction(function=_rviz_actions)
+
     return LaunchDescription([
         declare_robot_id,
         declare_slam_params,
         declare_nav2_params,
+        declare_rviz,
         slam_node,
         slam_configure,
         slam_activate,
         nav2_group,
         explorer_node,
+        rviz_group,
     ])

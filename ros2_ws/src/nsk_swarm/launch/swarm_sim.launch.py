@@ -13,7 +13,11 @@ Launches:
      base_scan chain to /tf_static, from the namespaced URDF (after 4 s)
   4. 5 NSKRobotNode instances (after 5 s delay)
   5. ConvergenceMonitorNode (after 6 s delay)
-  6. RViz2 with preconfigured layout (after 7 s delay)
+  6. RViz2 with preconfigured layout (after 7 s delay) — ONLY with rviz:=true
+
+RViz is OFF by default and MUST stay so for any measured run: rendering the
+5-robot scene collapses /clock from ~99 Hz to 0.500 Hz and starves the whole
+stack. Use rviz:=true for eyeballing only, never during a timed run.
 """
 
 import os
@@ -23,8 +27,8 @@ import lifecycle_msgs.msg
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
-                            RegisterEventHandler, SetEnvironmentVariable,
-                            TimerAction)
+                            OpaqueFunction, RegisterEventHandler,
+                            SetEnvironmentVariable, TimerAction)
 from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import LifecycleNode, Node
@@ -162,6 +166,13 @@ def generate_launch_description():
                 PythonExpression([str(robot_id), ' in ',
                                   LaunchConfiguration('nav_robots')]),
                 value_type=bool),
+            # Whether the legacy wander driver may drive this robot at all —
+            # a separate question from nav_controlled above. Off by default.
+            # A bare LaunchConfiguration is yaml-parsed to the *string*
+            # 'false', which is truthy on the node side; pin the type as
+            # seed/csv_path do.
+            'wander_enabled': ParameterValue(
+                LaunchConfiguration('wander'), value_type=bool),
         }
 
     # ── Bridge topic specs ──────────────────────────────────────────────────
@@ -226,6 +237,42 @@ def generate_launch_description():
         transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
     ))
 
+    # ── RViz2 (opt-in; OFF by default) ──────────────────────────────────────
+    # RViz used to launch here UNCONDITIONALLY on a 7 s timer, and it was
+    # quietly wrecking every measurement this rig has ever taken: rendering the
+    # 5-robot scene collapsed /clock from ~99 Hz to 0.500 Hz (200x slower than
+    # real time), which starved everything downstream — all five robot nodes
+    # timed out on /nsk/similarity_query and /nsk/compress, and bt_navigator
+    # could not answer its own get_state service. Every RTF and coverage number
+    # recorded before this gate was taken with that load on the machine.
+    #
+    # Gated the same way explore.launch.py gates its own RViz: an OpaqueFunction
+    # returning NOTHING when the flag is false, so the node is absent from the
+    # launch tree rather than merely condition-suppressed. (No string
+    # substitution into the config is needed here — nsk_convergence.rviz is
+    # namespace-agnostic — but keeping the two launch files structurally
+    # identical is worth more than saving the indirection, and it is what makes
+    # "no rviz2 node with default args" a testable statement.)
+    def _rviz_actions(context):
+        if LaunchConfiguration('rviz').perform(context).lower() not in ('true', '1'):
+            return []
+        # 7 s, unchanged from the original — RViz starts last, after the robot
+        # nodes and the monitor, so it subscribes to topics that already exist.
+        return [TimerAction(
+            period=7.0,
+            actions=[
+                Node(
+                    package='rviz2',
+                    executable='rviz2',
+                    name='rviz2',
+                    arguments=['-d', rviz_config],
+                    output='screen',
+                ),
+            ],
+        )]
+
+    rviz_group = OpaqueFunction(function=_rviz_actions)
+
     return LaunchDescription([
 
         # ── 0. Venv on PYTHONPATH for the Python nodes ───────────────────────
@@ -266,6 +313,26 @@ def generate_launch_description():
             default_value='[]',
             description='List of robot IDs whose wander driver is muted so '
                         'Nav2 can drive them, e.g. [0]',
+        ),
+        DeclareLaunchArgument(
+            'rviz',
+            default_value='false',
+            description='Launch RViz2 with the convergence layout. MUST '
+                        'default false: rendering the 5-robot scene CORRUPTS '
+                        'the RTF measurements this rig exists to take — '
+                        'measured at /clock 99 Hz -> 0.500 Hz (200x), with the '
+                        'robot nodes timing out on /nsk/similarity_query and '
+                        '/nsk/compress and bt_navigator unable to answer its '
+                        'own get_state. Enable only for eyeballing, never '
+                        'during a timed run.',
+        ),
+        DeclareLaunchArgument(
+            'wander',
+            default_value='false',
+            description='Enable the legacy dot-era wander driver on every '
+                        'robot node (opt-in; off by default, so robots hold '
+                        'their spawn poses unless another controller drives '
+                        'them)',
         ),
 
         # ── 1. Gazebo Harmonic ───────────────────────────────────────────────
@@ -401,17 +468,6 @@ def generate_launch_description():
             ],
         ),
 
-        # ── 6. RViz2 (after 7 s) ────────────────────────────────────────────
-        TimerAction(
-            period=7.0,
-            actions=[
-                Node(
-                    package='rviz2',
-                    executable='rviz2',
-                    name='rviz2',
-                    arguments=['-d', rviz_config],
-                    output='screen',
-                ),
-            ],
-        ),
+        # ── 6. RViz2 (opt-in; OFF by default, after 7 s) ─────────────────────
+        rviz_group,
     ])
