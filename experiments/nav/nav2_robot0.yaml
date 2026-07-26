@@ -27,7 +27,12 @@ bt_navigator:
     odom_topic: /robot_0/odom
     bt_loop_duration: 10
     default_server_timeout: 20
-    wait_for_service_timeout: 1000
+    # Raised 1000 -> 5000 ms: a slow-to-acknowledge follow_path action server
+    # (bt_navigator "Timed out while waiting for action server to acknowledge
+    # goal request") is an INFRASTRUCTURE hiccup, not evidence the frontier is
+    # unreachable. A longer wait lets the stack ACK instead of surfacing a
+    # spurious FAILED that used to poison a perfectly good frontier.
+    wait_for_service_timeout: 5000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]
     navigate_to_pose:
