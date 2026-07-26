@@ -5,11 +5,28 @@ PYTHONPATH; no NSK checkpoint or dataset is needed for a synthetic Data.
 """
 
 import json
+import os
 
-import torch
-from torch_geometric.data import Data
+import pytest
 
 from nsk_swarm.graph_serialiser import dict_to_graph, graph_to_dict
+
+# torch / torch_geometric are venv-only (see conftest.py for why this skips
+# rather than fails). A skipif MARKER, not pytest.skip(allow_module_level) —
+# under this project's plugin set a module-level Skipped aborts the whole
+# session; see the note in test_engine_lifecycle.py.
+try:
+    import torch
+    from torch_geometric.data import Data
+except ImportError:
+    if os.environ.get('NSK_REQUIRE_TORCH', '') not in ('', '0', 'false'):
+        raise           # CI installs torch on purpose; a missing one is fatal
+    torch = Data = None
+
+pytestmark = pytest.mark.skipif(
+    torch is None,
+    reason='torch / torch_geometric are not importable — put the project venv '
+           'on PYTHONPATH to run the serialiser round-trip')
 
 
 def make_graph() -> Data:

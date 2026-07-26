@@ -43,11 +43,36 @@ jobs:
           colcon build
 
       - name: Test
+        env:
+          # torch is installed above ON PURPOSE, so a torch that goes missing
+          # here must FAIL the job. Without this the suite would skip its
+          # torch-dependent tests and still report green (see test/conftest.py).
+          NSK_REQUIRE_TORCH: '1'
         run: |
           source /opt/ros/jazzy/setup.bash
           cd ros2_ws
           source install/setup.bash
-          # colcon test exits 0 even when tests fail; colcon test-result is
-          # the gate — it returns nonzero on any failure or error.
-          colcon test --packages-select nsk_swarm nsk_swarm_interfaces
+
+          # `shell: bash` is GitHub's default, i.e. `bash --noprofile --norc -eo
+          # pipefail`. colcon test exits NONZERO on a collection failure (pytest
+          # exits 2 and no test runs at all), so -e aborted the step right here —
+          # before colcon test-result, the only command that reports WHY. Run
+          # 30223348815 died exactly that way: "exited with code 2" and not one
+          # line of diagnosis. Swallow the status; test-result stays the gate,
+          # returning nonzero on any failure or error.
+          colcon test --packages-select nsk_swarm nsk_swarm_interfaces || true
+
+          # test-result prints a collection failure's MESSAGE ("collection
+          # failure") and nothing else — the traceback exists only in the JUnit
+          # XML. Dump it unconditionally, folded, so a green run stays readable
+          # and a broken one always carries its cause in the console.
+          for xml in build/*/pytest.xml; do
+            [ -e "$xml" ] || continue
+            echo "::group::$xml"
+            cat "$xml"
+            echo ""            # pytest.xml has no trailing newline; without this
+                               # ::endgroup:: lands mid-line and never closes the fold
+            echo "::endgroup::"
+          done
+
           colcon test-result --verbose

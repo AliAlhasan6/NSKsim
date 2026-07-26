@@ -16,19 +16,38 @@ TransitionCallbackReturn — no executor, spinning, or service client needed.
 """
 
 import json
+import os
 import sys
 import types
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-import torch
 from rclpy.lifecycle import TransitionCallbackReturn
 from rclpy.parameter import Parameter
 
 from nsk_swarm_interfaces.srv import Compress, Merge, SimilarityQuery
 
-from nsk_engine.engine_server import NSKEngineNode
+# torch is venv-only, and nsk_engine.engine_server imports it at module level,
+# so both go behind one guard (see conftest.py for why this skips rather than
+# fails). A skipif MARKER, deliberately — NOT pytest.skip(allow_module_level)
+# or pytest.importorskip: with this project's plugin set loaded (the ament /
+# colcon plugins colcon test brings in), a module-level Skipped aborts the
+# whole SESSION. Measured: the suite then collects 0 items and exits 5, which
+# is the same "one file silences everything" failure this guard exists to fix.
+# The marker skips only this module.
+try:
+    import torch
+    from nsk_engine.engine_server import NSKEngineNode
+except ImportError:
+    if os.environ.get('NSK_REQUIRE_TORCH', '') not in ('', '0', 'false'):
+        raise           # CI installs torch on purpose; a missing one is fatal
+    torch = NSKEngineNode = None
+
+pytestmark = pytest.mark.skipif(
+    torch is None,
+    reason='torch is not importable — put the project venv on PYTHONPATH to '
+           'run the engine lifecycle tests')
 
 NSK_SERVICE_NAMES = {'/nsk/compress', '/nsk/merge', '/nsk/similarity_query'}
 

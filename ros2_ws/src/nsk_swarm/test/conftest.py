@@ -5,6 +5,23 @@ Run from the package root:
 with the ROS 2 Jazzy + workspace environments sourced (for rclpy and
 nsk_swarm_interfaces) and the project venv's site-packages on PYTHONPATH
 (for torch / torch_geometric).
+
+Missing torch: skipped locally, fatal in CI
+-------------------------------------------
+torch and torch_geometric live ONLY in the project venv, so a bare
+`python3 -m pytest` under system Python cannot import them. That used to take
+down far more than the tests that needed them: a module-level `import torch` in
+one file is a COLLECTION error, and pytest aborts the whole session on one
+(exit code 2, "Interrupted: 1 error during collection"). The other 140-odd
+tests — none of which touch torch — never ran, and reported nothing.
+
+So the two torch-dependent modules (test_engine_lifecycle.py,
+test_graph_serialiser.py) skip themselves at module level when torch is absent.
+That is right for a local shell without the venv and WRONG for CI, where torch
+is installed deliberately and a missing one means the install broke: skipping
+there would shrink the suite silently and still report green. Hence the
+NSK_REQUIRE_TORCH escape hatch — set to 1 by .github/workflows/ci.yml, it turns
+the skip back into the ImportError that fails the job.
 """
 
 import os
