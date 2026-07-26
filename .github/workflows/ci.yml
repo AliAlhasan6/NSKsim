@@ -27,7 +27,7 @@ jobs:
           path: ~/.cache/pip
           key: pip-${{ hashFiles('.github/workflows/ci.yml') }}
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           # ros:jazzy ships without pip; its Ubuntu 24.04 Python is
           # externally managed (PEP 668), hence --break-system-packages.
@@ -35,6 +35,24 @@ jobs:
           apt-get install -y --no-install-recommends python3-pip
           pip3 install --break-system-packages torch --index-url https://download.pytorch.org/whl/cpu
           pip3 install --break-system-packages torch_geometric networkx
+
+          # The ros:jazzy image is ros-core — no Nav2, no slam_toolbox. These
+          # are import-time dependencies of the SUITE, not optional extras:
+          #   navigation2  -> nav2_simple_commander, imported at module level by
+          #                   frontier_explorer (FrontierExplorer subclasses
+          #                   BasicNavigator, so the import cannot be deferred)
+          #   nav2-bringup -> navigation_launch.py, which explore.launch.py
+          #                   includes and test_launch_descriptions resolves via
+          #                   get_package_share_directory. NOT pulled in by the
+          #                   navigation2 metapackage — it must be named here.
+          #   slam-toolbox -> not needed to BUILD explore.launch.py's
+          #                   description (the node's package is resolved only at
+          #                   execute time), but it keeps this image able to
+          #                   actually run the launch file it tests.
+          # Run 30224260962 died on exactly this: ModuleNotFoundError for
+          # nav2_simple_commander, one import taking the whole collection down.
+          apt-get install -y --no-install-recommends \
+            ros-jazzy-navigation2 ros-jazzy-nav2-bringup ros-jazzy-slam-toolbox
 
       - name: Build workspace
         run: |
@@ -44,10 +62,15 @@ jobs:
 
       - name: Test
         env:
-          # torch is installed above ON PURPOSE, so a torch that goes missing
-          # here must FAIL the job. Without this the suite would skip its
-          # torch-dependent tests and still report green (see test/conftest.py).
+          # Everything the step above installs is installed ON PURPOSE, so a
+          # dependency that goes missing here must FAIL the job. Without these
+          # the suite would skip the affected tests and still report green —
+          # the readiness-gate and launch-description tests exist to catch what
+          # static review misses, and a skipped one is decoration. Local shells
+          # without the venv or without Nav2 still skip cleanly (see
+          # test/conftest.py).
           NSK_REQUIRE_TORCH: '1'
+          NSK_REQUIRE_NAV2: '1'
         run: |
           source /opt/ros/jazzy/setup.bash
           cd ros2_ws

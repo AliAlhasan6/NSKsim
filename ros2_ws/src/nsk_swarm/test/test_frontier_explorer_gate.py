@@ -19,12 +19,33 @@ so the whole 120-second budget is exercised without sleeping for any of it and
 every assertion about elapsed time is exact rather than flaky.
 """
 
+import os
 from types import SimpleNamespace
 
 import pytest
 
-from nsk_swarm import frontier_explorer as fx
-from nsk_swarm.frontier_explorer import FrontierExplorer
+# nav2_simple_commander (ros-jazzy-navigation2) is a hard, module-level
+# dependency of frontier_explorer — FrontierExplorer SUBCLASSES BasicNavigator,
+# so the import cannot be deferred into a function. Guarded in the same shape as
+# the torch guard (see conftest.py), including why it is a skipif MARKER and not
+# pytest.skip(allow_module_level): under this project's plugin set a
+# module-level Skipped aborts the whole session.
+#
+# CI sets NSK_REQUIRE_NAV2=1 and installs Nav2 deliberately, so a miss there is
+# fatal. These tests are the reason the gate is trusted; skipping them in CI
+# would leave the readiness gate covered by nothing.
+try:
+    from nsk_swarm import frontier_explorer as fx
+    from nsk_swarm.frontier_explorer import FrontierExplorer
+except ImportError:
+    if os.environ.get('NSK_REQUIRE_NAV2', '') not in ('', '0', 'false'):
+        raise
+    fx = FrontierExplorer = None
+
+pytestmark = pytest.mark.skipif(
+    fx is None,
+    reason='nav2_simple_commander is not importable — install '
+           'ros-jazzy-navigation2 to run the Nav2 readiness-gate tests')
 
 
 class FakeClock:

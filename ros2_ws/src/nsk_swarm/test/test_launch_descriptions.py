@@ -33,7 +33,23 @@ from launch.actions import (DeclareLaunchArgument, GroupAction,
                             TimerAction)
 from launch_ros.actions import LifecycleNode, Node, PushROSNamespace, SetRemap
 
-from nsk_swarm.frontier_explorer import NAV2_REQUIRED_SERVERS
+# Set to 1 by .github/workflows/ci.yml, which installs Nav2 on purpose: there,
+# anything missing is a broken image, so every skip below becomes a hard
+# failure. These tests exist to catch launch-description defects that review
+# misses — a skipped one in CI is decoration. Local shells without Nav2 still
+# skip cleanly. Only the tests that actually need Nav2 are affected; the
+# swarm_sim ones require none of it and always run.
+REQUIRE_NAV2 = os.environ.get('NSK_REQUIRE_NAV2', '') not in ('', '0', 'false')
+
+# frontier_explorer imports nav2_simple_commander at module level (see
+# test_frontier_explorer_gate.py). Only one test below needs this constant, so
+# guard the import rather than skipping the whole module.
+try:
+    from nsk_swarm.frontier_explorer import NAV2_REQUIRED_SERVERS
+except ImportError:
+    if REQUIRE_NAV2:
+        raise
+    NAV2_REQUIRED_SERVERS = None
 
 
 LAUNCH_DIR = os.path.join(
@@ -79,8 +95,12 @@ def build(filename):
     try:
         return load(filename).generate_launch_description()
     except PackageNotFoundError as exc:
-        # An unfindable package share dir means the environment isn't sourced,
-        # not that the launch file is broken; make the skip actionable.
+        # An unfindable package share dir means the environment isn't sourced
+        # (or Nav2 isn't installed), not that the launch file is broken; make
+        # the skip actionable. In CI every package IS installed, so the same
+        # condition is a broken image and must fail the job, not vanish.
+        if REQUIRE_NAV2:
+            raise
         pytest.skip(f'{filename}: package {exc} not found — source the ROS 2 '
                     f'and workspace environments to run this test')
 
@@ -216,6 +236,9 @@ def test_explore_nav2_group_pushes_the_namespace_and_keeps_the_global_tf():
     assert sum(isinstance(s, SetRemap) for s in subs) == 2
 
 
+@pytest.mark.skipif(NAV2_REQUIRED_SERVERS is None,
+                    reason='nav2_simple_commander is not importable — install '
+                           'ros-jazzy-navigation2 to run this test')
 def test_explore_nav2_include_brings_up_the_servers_the_gate_waits_on():
     # frontier_explorer's readiness gate blocks on the lifecycle state of
     # NAV2_REQUIRED_SERVERS, by name. If the include stopped launching one of
@@ -225,6 +248,11 @@ def test_explore_nav2_include_brings_up_the_servers_the_gate_waits_on():
     ld = build('explore.launch.py')
     executables = {executable for _package, executable in nodes(ld)}
     if 'bt_navigator' not in executables:
+        # In CI nav2_bringup is installed, so an unresolvable include is a real
+        # defect (or a nav2 layout change) and must fail rather than skip.
+        assert not REQUIRE_NAV2, (
+            'nav2_bringup navigation_launch.py did not resolve to its server '
+            "nodes — the include or nav2's launch layout changed")
         pytest.skip('nav2_bringup navigation_launch.py could not be resolved '
                     'without a launch context on this install')
     for server in NAV2_REQUIRED_SERVERS:
