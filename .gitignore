@@ -7,7 +7,9 @@ ros2_ws/log/
 venv/
 experiments/logs/
 experiments/maps/
-experiments/slam/
+experiments/slam/*
+!experiments/slam/*.py
+!experiments/slam/*.yaml
 experiments/bags/
 frames_*.gv
 frames_*.pdf
