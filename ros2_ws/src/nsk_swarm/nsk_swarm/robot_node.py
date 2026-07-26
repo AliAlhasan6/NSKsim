@@ -128,6 +128,14 @@ class NSKRobotNode(Node):
         # separate timers and are unaffected. Set per-robot from the launch
         # file's nav_robots argument.
         'nav_controlled': False,
+        # Should this node drive the wheels at all? Off by default: the
+        # legacy dot-era wander is opt-in, wanted in no planned run
+        # configuration, and left ungated it walks peer robots out of their
+        # spawn cluster into the maze walls. Distinct from nav_controlled,
+        # which answers a different question ("does another controller own
+        # the wheels?") — both must permit motion for cmd_vel to be
+        # published. Set from the launch file's wander argument.
+        'wander_enabled': False,
     }
 
     def __init__(self):
@@ -172,6 +180,7 @@ class NSKRobotNode(Node):
         self.escape_repeat_window_sec = self.get_parameter(
             'escape_repeat_window_sec').value
         self.nav_controlled = self.get_parameter('nav_controlled').value
+        self.wander_enabled = self.get_parameter('wander_enabled').value
 
         # Position state
         self.pos_x = 0.0
@@ -401,10 +410,19 @@ class NSKRobotNode(Node):
                     -self.walk_turn_max, self.walk_turn_max)
 
     def _publish_cmd_vel(self):
-        # nav_controlled: an external controller (Nav2) owns the wheels, so the
-        # wander driver publishes no cmd_vel. Sharing/convergence run on
-        # separate timers and are unaffected. This is the sole cmd_vel publish
-        # site, so the early return fully mutes wheel output.
+        # Two independent gates, both of which must permit motion. This is the
+        # sole cmd_vel publish site, so either early return fully mutes wheel
+        # output; sharing/convergence run on separate timers and are
+        # unaffected by both. (Muted output also means no motion samples, so
+        # the stuck detector stays idle — correct: a robot this node isn't
+        # driving cannot be wall-pinned by this node.)
+        #
+        # wander_enabled: should this node drive at all? Off by default, so
+        # the legacy wander behaviour never runs unless explicitly asked for.
+        if not self.wander_enabled:
+            return
+        # nav_controlled: an external controller (Nav2) owns the wheels, so
+        # even an enabled wander driver must stay off them.
         if self.nav_controlled:
             return
         if self._recovery_phase is not None:
