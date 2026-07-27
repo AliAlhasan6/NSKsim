@@ -26,12 +26,19 @@ bt_navigator:
     robot_base_frame: robot_0/base_footprint
     odom_topic: /robot_0/odom
     bt_loop_duration: 10
-    default_server_timeout: 20
-    # Raised 1000 -> 5000 ms: a slow-to-acknowledge follow_path action server
-    # (bt_navigator "Timed out while waiting for action server to acknowledge
-    # goal request") is an INFRASTRUCTURE hiccup, not evidence the frontier is
-    # unreachable. A longer wait lets the stack ACK instead of surfacing a
-    # spurious FAILED that used to poison a perfectly good frontier.
+    # default_server_timeout is the BtActionNode ACK window (ms): after
+    # async_send_goal the BT action client waits this long for the server to
+    # acknowledge, and on expiry emits "Timed out while waiting for action
+    # server to acknowledge goal request for <action>". Nav2's stock 20 ms is
+    # too tight at RTF ~0.77 with 5 robots contending — it cost 4 of 7 goals in
+    # explore_gate1.log. Raised 20 -> 500 ms. Distinct from
+    # wait_for_service_timeout below, which governs how long the client waits
+    # for the server to EXIST ("not available after waiting") and cannot
+    # produce the acknowledge-timeout message.
+    default_server_timeout: 500
+    # Raised 1000 -> 5000 ms. NOTE: originally justified by the acknowledge-
+    # timeout message above — that attribution was wrong. Retained as
+    # reasonable slack for lifecycle bring-up, not as a fix for that failure.
     wait_for_service_timeout: 5000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]
