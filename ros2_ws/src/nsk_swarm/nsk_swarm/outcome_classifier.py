@@ -9,9 +9,12 @@ The distinction this class exists to make:
 
   * WORLD evidence — the frontier really is a bad place to send the robot. The
     supervisor watched the robot in sim time and it made no progress
-    (FUTILE_NO_PROGRESS) or blew the sim budget (FUTILE_SIM_TIMEOUT); or Nav2
-    reported the goal reached but the robot never actually moved (a frontier
-    inside goal tolerance). Blacklist immediately — retrying learns nothing.
+    (FUTILE_NO_PROGRESS) or blew the sim budget (FUTILE_SIM_TIMEOUT); the
+    planner itself declared the goal unusable — outside the map, occupied, or
+    with no valid path (UNREACHABLE_NO_PATH, decoded by the explorer from the
+    Nav2 result's error_code); or Nav2 reported the goal reached but the robot
+    never actually moved (a frontier inside goal tolerance). Blacklist
+    immediately — retrying learns nothing.
 
   * STACK failure — Nav2 could not run the goal for reasons that say nothing
     about the world: FAILED / CANCELED (classically the bt_navigator "Timed out
@@ -35,7 +38,13 @@ from nsk_swarm.goal_supervisor import FUTILE_NO_PROGRESS, FUTILE_SIM_TIMEOUT
 # Outcome strings the explorer forwards. FUTILE_* come from GoalSupervisor; the
 # rest are Nav2 TaskResult .name values plus the explorer's own 'WALL_GUARD'.
 SUCCEEDED = 'SUCCEEDED'
-_WORLD_OUTCOMES = frozenset({FUTILE_NO_PROGRESS, FUTILE_SIM_TIMEOUT})
+# Planner abort the explorer decoded from the Nav2 result error_code (see
+# UNREACHABLE_CODES in frontier_explorer): the goal is outside the map, occupied,
+# or has no valid path. Nav2 hands it to the explorer as a bare 'FAILED', which
+# would route it to the STACK branch and retry a frontier that cannot ever work.
+UNREACHABLE_NO_PATH = 'UNREACHABLE_NO_PATH'
+_WORLD_OUTCOMES = frozenset({FUTILE_NO_PROGRESS, FUTILE_SIM_TIMEOUT,
+                             UNREACHABLE_NO_PATH})
 _STACK_OUTCOMES = frozenset({'FAILED', 'CANCELED', 'UNKNOWN', 'WALL_GUARD'})
 
 MAX_FRONTIER_RETRIES = 3    # consecutive STACK failures on one frontier before it is blacklisted
@@ -53,6 +62,10 @@ class OutcomeClassifier:
     ``Decision`` and mutates the internal counters; the caller acts on
     ``blacklist`` / ``stop_unhealthy`` and logs ``reason``.
     """
+
+    # Re-exported as a class attribute so callers can spell
+    # OutcomeClassifier.UNREACHABLE_NO_PATH without importing the module constant.
+    UNREACHABLE_NO_PATH = UNREACHABLE_NO_PATH
 
     MAX_FRONTIER_RETRIES = MAX_FRONTIER_RETRIES
     CONSEC_STACK_FAILURES = CONSEC_STACK_FAILURES

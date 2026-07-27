@@ -12,6 +12,7 @@ poison a perfectly good frontier on the first occurrence.
 from nsk_swarm.goal_supervisor import FUTILE_NO_PROGRESS, FUTILE_SIM_TIMEOUT
 from nsk_swarm.outcome_classifier import (CONSEC_STACK_FAILURES,
                                           MAX_FRONTIER_RETRIES,
+                                          UNREACHABLE_NO_PATH,
                                           OutcomeClassifier)
 
 # Frontier key quantum used in the explorer (== BLACKLIST_RADIUS).
@@ -93,6 +94,32 @@ def test_futile_sim_timeout_blacklists_immediately():
     clf = make_classifier()
     d = clf.classify(FUTILE_SIM_TIMEOUT, (4.0, 4.0))
     assert d.blacklist is True and d.category == 'WORLD'
+
+
+def test_unreachable_no_path_blacklists_immediately():
+    # The planner itself condemned the goal (error_code 204/206/208, decoded by
+    # the explorer). No amount of retrying makes a goal outside the map, inside
+    # an obstacle, or with no valid path become plannable.
+    clf = make_classifier()
+    d = clf.classify(UNREACHABLE_NO_PATH, (-3.36, 5.05))   # a rung2a repeat offender (x43)
+    assert d.blacklist is True
+    assert d.stop_unhealthy is False
+    assert d.category == 'WORLD'
+
+
+def test_unreachable_streak_does_not_trip_stack_health_guard():
+    # Regression guard for the backwards verdict that killed rung2a at goal #79.
+    # These aborts used to reach the classifier as a bare 'FAILED', so five
+    # distinct unplannable frontiers looked like five consecutive STACK failures
+    # and the run stopped claiming "the frontiers are reachable, the STACK is
+    # not" — precisely inverted. As WORLD evidence each one retires its own
+    # frontier and none of them touch the cross-frontier stack-health counter.
+    clf = make_classifier()
+    for i in range(CONSEC_STACK_FAILURES):
+        d = clf.classify(UNREACHABLE_NO_PATH, (10.0 * i, 0.0))
+        assert d.stop_unhealthy is False, f'stack guard tripped at frontier {i}'
+        assert d.blacklist is True
+        assert d.category == 'WORLD'
 
 
 def test_succeeded_without_motion_blacklists_but_is_not_a_failure():

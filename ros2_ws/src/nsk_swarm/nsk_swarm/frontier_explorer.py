@@ -116,6 +116,16 @@ MIN_MOVE = 0.1           # m; if the robot travelled less than this during a goa
                          # was unproductive (inside tolerance) and gets blacklisted
 MIN_GOAL_PERIOD = 2.0    # s; floor on the interval between goal dispatches (rate-limit the loop)
 
+# ── planner-abort classification ────────────────────────────────────────────
+# Nav2 ComputePathToPose error codes that are WORLD evidence: the goal itself is
+# geometrically unusable, so retrying learns nothing.
+# 204 GOAL_OUTSIDE_MAP, 206 GOAL_OCCUPIED, 208 NO_VALID_PATH.
+# Deliberately EXCLUDES 201 INVALID_PLANNER, 202 TF_ERROR, 207 TIMEOUT
+# (infrastructure — the retry ladder is correct for those) and 203
+# START_OUTSIDE_MAP / 205 START_OCCUPIED (wrong with the ROBOT's pose, not the
+# frontier — blacklisting the frontier would be wrong).
+UNREACHABLE_CODES = frozenset({204, 206, 208})
+
 # ── sim-time wait bounds (RTF-invariant; measured against /clock) ────────────
 # Goal supervision itself lives in GoalSupervisor (progress + sim-timeout, both
 # in sim seconds). The remaining sim-time budget here bounds the map-refresh wait
@@ -549,6 +559,34 @@ class FrontierExplorer(BasicNavigator):
                       f'{now - self._stall_since:.0f}s wall — is /clock publishing?')
             self._stall_warned = True
 
+    def _terminal_outcome(self):
+        """Outcome string for the goal Nav2 just finished, with its error fields.
+
+        BasicNavigator.getResult() collapses every abort to TaskResult.FAILED,
+        discarding the ``error_code`` Nav2 publishes on the NavigateToPose result
+        — which is exactly the discriminator between "the planner says this
+        frontier is unusable" (WORLD evidence, retire it now) and "the stack
+        hiccuped" (retryable). isTaskComplete() keeps only ``.status``, but it
+        leaves ``self.result_future`` live, so the result message is still
+        reachable from here.
+
+        Returns ``(outcome, error_code, error_msg)``; error_code is None when the
+        result carried no readable code. Defensive by construction: ANY missing
+        field or unexpected shape falls back to the plain TaskResult name, so a
+        change in Nav2's result type can never break navigation.
+        """
+        name = self.getResult().name       # fallback, computed before anything can fail
+        try:
+            wrapper = self.result_future.result()
+            res = None if wrapper is None else wrapper.result
+            code = res.error_code
+            msg = getattr(res, 'error_msg', '') or ''
+        except (AttributeError, TypeError):
+            return name, None, ''
+        if code in UNREACHABLE_CODES:
+            return OutcomeClassifier.UNREACHABLE_NO_PATH, code, msg
+        return name, code, msg
+
     def _supervise_goal(self, goal_num):
         """Drive the active Nav2 goal to a terminal outcome under RTF-invariant
         progress supervision.
@@ -556,14 +594,19 @@ class FrontierExplorer(BasicNavigator):
         Feeds a GoalSupervisor from the sensor node's sim clock + TF every slice
         (isTaskComplete() spins the navigator internally, so Nav2 keeps making
         progress and this doesn't busy-spin). Returns ``(outcome, end_xy,
-        window_move)`` where ``window_move`` is the supervisor's trailing-window
-        displacement at the moment of the verdict (meaningful for
+        window_move, err)`` where ``window_move`` is the supervisor's
+        trailing-window displacement at the moment of the verdict (meaningful for
         FUTILE_NO_PROGRESS, where it — not the whole-goal net — is what fired it),
-        and outcome is one of:
+        ``err`` is the ``(error_code, error_msg)`` pair off the Nav2 result (only
+        Nav2's own terminations carry one; the rest report ``(None, '')``), and
+        outcome is one of:
           * GoalSupervisor.FUTILE_NO_PROGRESS / FUTILE_SIM_TIMEOUT — the
             supervisor gave up (sim-time judgement); the goal is cancelled here.
           * 'WALL_GUARD' — GOAL_WALL_GUARD wall seconds elapsed: an
             infrastructure failure, not slow progress; the goal is cancelled here.
+          * OutcomeClassifier.UNREACHABLE_NO_PATH — Nav2 aborted with a planner
+            error_code that condemns the GOAL (see UNREACHABLE_CODES), not the
+            stack; WORLD evidence, so the frontier is retired on this one hit.
           * a TaskResult name ('SUCCEEDED'/'FAILED'/'CANCELED'/'UNKNOWN') when
             Nav2 finishes the goal on its own.
         Wall clock is used ONLY for the guard + the clock-stall warning.
@@ -580,7 +623,7 @@ class FrontierExplorer(BasicNavigator):
                 v = sup.verdict()
                 if v != GoalSupervisor.RUNNING:
                     self.cancelTask()
-                    return v, last_xy, sup.window_move()
+                    return v, last_xy, sup.window_move(), (None, '')
 
             self._check_clock_stall(self.sensor.sim_time())
 
@@ -591,17 +634,18 @@ class FrontierExplorer(BasicNavigator):
                            f'(Nav2/SLAM/clock wedged?), not slow progress; '
                            f'cancelling.')
                 self.cancelTask()
-                return 'WALL_GUARD', last_xy, sup.window_move()
+                return 'WALL_GUARD', last_xy, sup.window_move(), (None, '')
 
             if self.isTaskComplete():
-                return (self.getResult().name,
-                        (last_xy or self.sensor.robot_xy()), sup.window_move())
+                outcome, code, msg = self._terminal_outcome()
+                return (outcome, (last_xy or self.sensor.robot_xy()),
+                        sup.window_move(), (code, msg))
 
             self._hb('nav', f'goal #{goal_num} navigating '
                             f'(sim {sup.elapsed():.0f}s, wall {wall_elapsed:.0f}s)',
                      period=5.0)
             time.sleep(0.05)
-        return 'CANCELED', last_xy, sup.window_move()
+        return 'CANCELED', last_xy, sup.window_move(), (None, '')
 
     # ── auditable termination ────────────────────────────────────────────────
     def _log_termination_audit(self, goal_num):
@@ -719,7 +763,8 @@ class FrontierExplorer(BasicNavigator):
             _, seq_before = self.sensor.get_map()
 
             self.goToPose(self._make_goal(gx, gy))
-            outcome, end_xy, window_move = self._supervise_goal(goal_num)
+            outcome, end_xy, window_move, (err_code, err_msg) = \
+                self._supervise_goal(goal_num)
 
             # Per-goal telemetry (RTF-invariant sim duration alongside the wall
             # duration, so a slow RTF is visible as sim<<wall, not as a failure).
@@ -749,14 +794,25 @@ class FrontierExplorer(BasicNavigator):
             # displacement that actually triggered the verdict — since the
             # whole-goal net= can be large (the robot drove, THEN stalled) and on
             # its own makes a correct FUTILE verdict look wrong.
+            # A Nav2 abort also prints the result's error_code/error_msg. The
+            # NUMBER matters as much as the text: bt_navigator publishes the
+            # LOWEST non-zero code across compute_path_error_code and
+            # follow_path_error_code, and FollowPath's codes are the 1xx series
+            # against ComputePathToPose's 2xx — so a goal that failed BOTH ways
+            # reports the 1xx and is (correctly, conservatively) left on the
+            # retry ladder. Without the number that case is indistinguishable
+            # from the classification simply not firing.
             window_note = ''
             if outcome == GoalSupervisor.FUTILE_NO_PROGRESS:
                 window_note = (f' window={window_move:.2f}m/'
                                f'{GoalSupervisor.PROGRESS_WINDOW:.0f}s')
+            err_note = f' error_code={err_code}' if err_code else ''
+            if err_msg:
+                err_note += f' error_msg="{err_msg}"'
             self.info(f'[robot_{self.robot_id}] goal #{goal_num} END '
                       f'frontier=({fx:.2f}, {fy:.2f}) outcome={outcome} '
                       f'sim={sim_dur:.1f}s wall={wall_dur:.1f}s net={net:.2f}m'
-                      f'{window_note} blacklisted={decision.blacklist}')
+                      f'{window_note}{err_note} blacklisted={decision.blacklist}')
 
             if decision.stop_unhealthy:
                 return False
