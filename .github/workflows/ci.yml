@@ -25,7 +25,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: pip-torch-cpu-v1
 
       - name: Install dependencies
         run: |
