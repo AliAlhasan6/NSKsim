@@ -60,11 +60,15 @@ LAUNCH_DIR = os.path.join(
 def scratch_tempdir():
     """Redirect tempfile to a scratch dir for the duration of this module.
 
-    swarm_sim.launch.py writes five namespaced burger SDFs through
-    NamedTemporaryFile(delete=False) every time its description is built —
-    correct for a real launch, litter when a test builds it repeatedly.
-    Pointing tempfile.tempdir at a directory we delete afterwards keeps /tmp
-    clean without touching the launch file's behaviour.
+    Both launch files write NamedTemporaryFile(delete=False) copies of stock
+    assets they rewrite — swarm_sim's five namespaced burger SDFs, explore's
+    ROBOT_NS-substituted RViz config. Both writes happen when the action that
+    consumes them is PERFORMED, not when the description is built, so the tests
+    below currently trigger neither: they build the tree and walk it, and the
+    one that resolves an OpaqueFunction resolves the rviz:=false path that
+    returns nothing. Kept as a cheap guard for the moment a test does perform
+    one — pointing tempfile.tempdir at a directory we delete afterwards keeps
+    /tmp clean without touching either launch file's behaviour.
     """
     scratch = tempfile.mkdtemp(prefix='nsk_launch_test_')
     previous = tempfile.tempdir
@@ -79,8 +83,11 @@ def load(filename):
 
     Launch files aren't importable as package modules ('.launch.py' is not an
     identifier), so they're loaded by location — the same file `ros2 launch`
-    reads. Importing only runs module-level code; the tempfile-writing work
-    happens in generate_launch_description(), i.e. in build() below.
+    reads. Importing only runs module-level code, and build() below touches no
+    disk either: swarm_sim.launch.py reads the stock TurtleBot3 SDF/URDF behind
+    a Substitution (LazyRobotAsset), so the read happens only once the spawn
+    and robot_state_publisher actions are performed. That is what lets these
+    tests run in a container without turtlebot3_gazebo installed.
     """
     path = os.path.join(LAUNCH_DIR, filename)
     spec = importlib.util.spec_from_file_location(

@@ -25,7 +25,7 @@ import tempfile
 
 import lifecycle_msgs.msg
 from ament_index_python.packages import get_package_share_directory
-from launch import LaunchDescription
+from launch import LaunchDescription, Substitution
 from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
                             OpaqueFunction, RegisterEventHandler,
                             SetEnvironmentVariable, TimerAction)
@@ -89,6 +89,9 @@ def make_namespaced_burger_sdf(robot_id: int) -> str:
     the robot_N namespace and return the path of a tempfile holding the
     result. Geometry, inertia, joints, and sensor parameters are untouched;
     each replaced string occurs exactly once in the stock model.
+
+    Called at launch EXECUTE time via LazyRobotAsset, never while the launch
+    description is being built — see that class.
     """
     with open(TURTLEBOT3_BURGER_SDF) as f:
         sdf = f.read()
@@ -123,10 +126,47 @@ def make_namespaced_burger_urdf(robot_id: int) -> str:
     robot_N/base_footprint, robot_N/base_scan, etc. — matching the gz-side TF
     prefix. Returns the substituted URDF as a string for RSP's
     robot_description. The stock template is read only, never modified.
+
+    Called at launch EXECUTE time via LazyRobotAsset, never while the launch
+    description is being built — see that class.
     """
     with open(TURTLEBOT3_BURGER_URDF) as f:
         urdf = f.read()
     return urdf.replace('${namespace}', f'robot_{robot_id}/')
+
+
+class LazyRobotAsset(Substitution):
+    """One of the make_namespaced_* helpers above, deferred to execute time.
+
+    Both helpers read a stock TurtleBot3 file out of /opt/ros/jazzy/share, and
+    both used to be CALLED while generate_launch_description() assembled the
+    tree. That made merely BUILDING the description a filesystem operation:
+    anywhere turtlebot3_gazebo / turtlebot3_description are absent — a CI
+    container, a fresh clone, any machine that isn't this rig — the description
+    could not be constructed at all, and the five launch-description tests died
+    on FileNotFoundError before they could assert anything.
+
+    Wrapping the call in a Substitution moves the read to the moment the action
+    that consumes it runs: `ros2 launch` is unchanged (Node performs its
+    arguments and parameters at execute time, when the packages must be present
+    anyway for Gazebo to spawn anything), while constructing the description
+    touches no disk. The Node objects stay statically in the tree, so the tests
+    still see all five spawns and all five robot_state_publishers.
+
+    A missing TurtleBot3 install therefore surfaces when the spawn timer fires
+    rather than at description build; it is the same FileNotFoundError naming
+    the same path, and a boot without those packages was never going to work.
+    """
+
+    def __init__(self, make, robot_id: int):
+        self._make = make
+        self._robot_id = robot_id
+
+    def describe(self) -> str:
+        return f'{self._make.__name__}({self._robot_id})'
+
+    def perform(self, context) -> str:
+        return self._make(self._robot_id)
 
 
 def generate_launch_description():
@@ -353,7 +393,7 @@ def generate_launch_description():
                     name=f'spawn_robot_{n}',
                     arguments=[
                         '-world', 'knowledge_world',
-                        '-file', make_namespaced_burger_sdf(n),
+                        '-file', LazyRobotAsset(make_namespaced_burger_sdf, n),
                         '-name', f'robot_{n}',
                         '-x', str(x), '-y', str(y), '-z', '0.01',
                     ],
@@ -414,7 +454,8 @@ def generate_launch_description():
                     namespace=f'/robot_{n}',
                     parameters=[{
                         'robot_description': ParameterValue(
-                            make_namespaced_burger_urdf(n), value_type=str),
+                            LazyRobotAsset(make_namespaced_burger_urdf, n),
+                            value_type=str),
                         'use_sim_time': True,
                     }],
                     remappings=[

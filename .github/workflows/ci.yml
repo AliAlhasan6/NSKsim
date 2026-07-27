@@ -54,6 +54,18 @@ jobs:
           apt-get install -y --no-install-recommends \
             ros-jazzy-navigation2 ros-jazzy-nav2-bringup ros-jazzy-slam-toolbox
 
+          # NOT installed, deliberately: ros-jazzy-turtlebot3-gazebo and
+          # ros-jazzy-turtlebot3-description. swarm_sim.launch.py used to read
+          # the stock burger SDF/URDF off disk while BUILDING its launch
+          # description, so all five of its description tests died here on
+          # FileNotFoundError for .../turtlebot3_burger/model.sdf (run
+          # 30224660259: 147 tests, 5 failures, one cause). That read is now
+          # deferred to execute time via LazyRobotAsset, so the description
+          # builds without touching disk and the tests need no TurtleBot3 at
+          # all. If a TurtleBot3 path turns up in a log here again, the launch
+          # file has regressed to a build-time read — fix it there rather than
+          # installing these packages, which this job has no other use for.
+
       - name: Build workspace
         run: |
           source /opt/ros/jazzy/setup.bash
