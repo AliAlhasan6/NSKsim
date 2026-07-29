@@ -31,6 +31,7 @@ from launch import LaunchContext, LaunchDescription
 from launch.actions import (DeclareLaunchArgument, GroupAction,
                             IncludeLaunchDescription, OpaqueFunction,
                             TimerAction)
+from launch.utilities import perform_substitutions
 from launch_ros.actions import LifecycleNode, Node, PushROSNamespace, SetRemap
 
 # Set to 1 by .github/workflows/ci.yml, which installs Nav2 on purpose: there,
@@ -333,6 +334,84 @@ def test_explore_does_not_launch_rviz_by_default():
     ld = build('explore.launch.py')
     assert declared_defaults(ld)['rviz'] == 'false'
     assert RVIZ not in nodes(resolved(ld))
+
+
+def explorer_parameter(name, **arguments):
+    """Evaluate one parameter on the frontier_explorer node, as launch would.
+
+    Command-line `arguments` land in the context first and the declared defaults
+    fill in the rest (same sequence as `resolved`), then the ParameterValue is
+    evaluated against it — which is what applies its `value_type` cast.
+
+    Two launch_ros details this has to work around, both of which silently
+    return a WRONG answer rather than raising:
+
+    1. The parameter names in a Node's dict block are not strings. Node.__init__
+       runs normalize_parameters() at construction, and normalize_parameter_dict
+       rewrites every key through normalize_to_list_of_substitutions and stores
+       it as a tuple of TextSubstitution. So `name in block` is false for every
+       parameter on every Node; the keys have to be performed before comparing.
+
+    2. ParameterValue.evaluate() caches into __evaluated_parameter_value, and
+       the .value property then returns that cached SCALAR instead of the
+       original substitution — so a second evaluate() on the same object
+       re-evaluates a plain bool and hands back the FIRST answer whatever the
+       new context says. Hence the build per call: each one gets untouched
+       ParameterValue objects, which is also what a real `ros2 launch` does.
+       Sharing one description across calls makes every spelling resolve to
+       whatever the first one did.
+    """
+    launch_description = build('explore.launch.py')
+
+    context = LaunchContext()
+    context.launch_configurations.update(arguments)
+    for entity in launch_description.entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+
+    explorer = [e for e in _walk(launch_description)
+                if isinstance(e, Node) and e.node_executable == 'frontier_explorer']
+    assert len(explorer) == 1, f'expected one explorer node, got {len(explorer)}'
+    for block in explorer[0]._Node__parameters:
+        if not isinstance(block, dict):
+            continue
+        for key, value in block.items():
+            if perform_substitutions(context, list(key)) == name:
+                return value.evaluate(context)
+    raise AssertionError(f'{name} is not a parameter on the explorer node')
+
+
+def test_explore_declares_the_precheck_argument_defaulting_off():
+    # The A/B variable. A run that does not name it must reproduce the previous
+    # rung exactly, so the default is what makes the comparison a comparison.
+    ld = build('explore.launch.py')
+    assert declared_defaults(ld)['reachability_precheck'] == 'false'
+
+
+def test_precheck_argument_reaches_the_explorer_as_a_bool():
+    # Both spellings of the A/B switch must arrive as actual bools.
+    default = explorer_parameter('reachability_precheck')
+    assert default is False, f'default resolved to {default!r}, not False'
+
+    off = explorer_parameter('reachability_precheck',
+                             reachability_precheck='false')
+    assert off is False, f'reachability_precheck:=false resolved to {off!r}'
+
+    on = explorer_parameter('reachability_precheck',
+                            reachability_precheck='true')
+    assert on is True, f'reachability_precheck:=true resolved to {on!r}'
+
+
+def test_numeric_precheck_spellings_stay_bools():
+    # What value_type=bool actually buys. launch_ros' type inference reads the
+    # word forms right on its own, but infers '1' as the INT 1 — and main()
+    # declares reachability_precheck with a False default, so rclpy would reject
+    # an int for it and the explorer would die at startup on a spelling of "on"
+    # that looks entirely reasonable at the command line.
+    for raw, expected in (('1', True), ('0', False)):
+        got = explorer_parameter('reachability_precheck',
+                                 reachability_precheck=raw)
+        assert got is expected, f'precheck:={raw} resolved to {got!r} ({type(got).__name__})'
 
 
 def test_swarm_sim_clock_bridge_starts_immediately():

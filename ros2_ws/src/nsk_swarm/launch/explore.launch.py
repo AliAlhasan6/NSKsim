@@ -93,6 +93,19 @@ def generate_launch_description():
         description='Nav2 params (frames namespaced to robot_<id>, '
                     'enable_stamped_cmd_vel:false).')
 
+    declare_precheck = DeclareLaunchArgument(
+        'reachability_precheck', default_value='false',
+        description='Ask the planner whether a frontier is plannable BEFORE '
+                    'dispatching a goal to it (ComputePathToPose per candidate, '
+                    'walking the nearest-first list until one is reachable), and '
+                    're-query it when a goal fails with a FollowPath 1xx code '
+                    'that masked the planner\'s own verdict. MUST default false: '
+                    'it is the A/B variable, so a run that does not set it '
+                    'explicitly has to reproduce the previous rung exactly. Costs '
+                    'at most PRECHECK_MAX_PROBES round trips or '
+                    'PRECHECK_CYCLE_BUDGET wall seconds per selection cycle, '
+                    'whichever binds first (see also PLAN_CALL_WAIT).')
+
     declare_rviz = DeclareLaunchArgument(
         'rviz', default_value='false',
         description='Launch an RViz preconfigured for robot_<id> (Fixed Frame '
@@ -228,6 +241,15 @@ def generate_launch_description():
         executable='frontier_explorer',
         parameters=[{
             'robot_id': ParameterValue(robot_id, value_type=int),
+            # value_type=bool pins the type instead of leaving it to launch_ros'
+            # inference. Inference reads the word forms correctly ('false' ->
+            # False), but 'reachability_precheck:=1' infers as the INT 1, and
+            # main() declares this parameter with a False default — a bool — which
+            # rclpy will not accept an int for, so the explorer would die at
+            # startup on a spelling of "on" that looks perfectly reasonable. The
+            # cast maps 0/1 onto False/True and makes every spelling work.
+            'reachability_precheck': ParameterValue(
+                LaunchConfiguration('reachability_precheck'), value_type=bool),
             'use_sim_time': True,
         }],
         output='screen',
@@ -268,6 +290,7 @@ def generate_launch_description():
         declare_robot_id,
         declare_slam_params,
         declare_nav2_params,
+        declare_precheck,
         declare_rviz,
         slam_node,
         slam_configure,

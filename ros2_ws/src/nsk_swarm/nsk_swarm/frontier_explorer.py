@@ -72,6 +72,7 @@ import time
 from collections import deque
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -81,6 +82,7 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
 
 from geometry_msgs.msg import PoseStamped
 from lifecycle_msgs.srv import GetState
+from nav2_msgs.action import ComputePathToPose
 from nav_msgs.msg import OccupancyGrid
 from tf2_ros import Buffer, TransformListener
 
@@ -88,6 +90,9 @@ from nav2_simple_commander.robot_navigator import BasicNavigator
 
 from nsk_swarm.goal_supervisor import GoalSupervisor
 from nsk_swarm.outcome_classifier import OutcomeClassifier
+from nsk_swarm.reachability import (UNREACHABLE_CODES, RetirementLedger,
+                                    triage)
+from nsk_swarm import reachability
 
 UNKNOWN = -1          # OccupancyGrid unknown cell
 OCC_THRESH = 50       # cost >= this counts as an obstacle; below (and >=0) is free
@@ -117,14 +122,97 @@ MIN_MOVE = 0.1           # m; if the robot travelled less than this during a goa
 MIN_GOAL_PERIOD = 2.0    # s; floor on the interval between goal dispatches (rate-limit the loop)
 
 # ── planner-abort classification ────────────────────────────────────────────
-# Nav2 ComputePathToPose error codes that are WORLD evidence: the goal itself is
-# geometrically unusable, so retrying learns nothing.
-# 204 GOAL_OUTSIDE_MAP, 206 GOAL_OCCUPIED, 208 NO_VALID_PATH.
-# Deliberately EXCLUDES 201 INVALID_PLANNER, 202 TF_ERROR, 207 TIMEOUT
-# (infrastructure — the retry ladder is correct for those) and 203
-# START_OUTSIDE_MAP / 205 START_OCCUPIED (wrong with the ROBOT's pose, not the
-# frontier — blacklisting the frontier would be wrong).
-UNREACHABLE_CODES = frozenset({204, 206, 208})
+# UNREACHABLE_CODES (204/206/208 — the codes that condemn the GOAL rather than
+# the stack) now lives in nsk_swarm.reachability alongside the triage that reads
+# it, so the whole decision is unit-testable without rclpy. Imported above and
+# re-exported here, since this module's name for it is what the tests and the
+# b26d146 commentary refer to.
+
+# ── reachability pre-check (parameter-gated, default OFF) ───────────────────
+# Selection asks the planner whether a candidate is plannable BEFORE dispatching
+# it, instead of discovering it from a failed goal. See nsk_swarm.reachability.
+#
+# Probing is ESCALATING and single-cycle: selection walks down the nearest-first
+# list until a candidate is reachable or a bound is hit, rather than examining a
+# fixed window and deferring. It used to probe the top 3 only, and rung2c halted
+# after 15 goals with 41 candidates it had never asked about — deferring to a
+# fresher map cannot help, because the robot does not move during a DEFER, so
+# the map barely changes and the next cycle re-derives the same verdict from the
+# same three candidates. Worse, INCONCLUSIVE retires NOTHING (correctly — see
+# nsk_swarm.reachability), so an unanswered candidate keeps its nearest-first
+# position forever and a narrow window parked behind one never advances at all.
+# Walking the list WITHIN the cycle steps past UNREACHABLE and INCONCLUSIVE
+# alike, which is the only thing that actually makes progress here.
+#
+# TWO bounds, because one is the wrong shape. A probe is nearly free today
+# (planner_server reports planning_time ~0.000s), so any probe COUNT is
+# affordable — but NavFn's cost grows with the map, and a count tuned against a
+# free probe silently becomes a multi-second stall once the map is large. The
+# wall deadline bounds the quantity that actually hurts, which in turn is what
+# makes the count safe to set generously:
+#   * healthy probe, ~20 ms round trip -> the deadline admits ~500, so the COUNT
+#     binds at 12 and a bad cycle costs ~0.2 s.
+#   * degenerate probe, PLAN_CALL_WAIT=2.0 s with no answer -> the deadline
+#     admits 5, binding long before 12 x 2 s = 24 s of stalled selection.
+# The deadline is checked BEFORE each probe, so a cycle costs at most
+# PRECHECK_CYCLE_BUDGET + PLAN_CALL_WAIT ~ 12 s — the same order as
+# MAP_REFRESH_SIM, i.e. never more than the map wait this escalation replaces.
+PRECHECK_MAX_PROBES = 12    # candidates probed in ONE selection cycle, nearest-first;
+                            # stop at the first reachable one. 4x the old window, and
+                            # with retirement draining up to 12/cycle a 44-cluster map
+                            # is fully examined in ~4 cycles — inside MAX_CONSEC_DEFERS.
+PRECHECK_CYCLE_BUDGET = 10.0  # s wall; deadline for the whole probe sequence of one
+                            # cycle. WALL for the same reason PLAN_CALL_WAIT is: it
+                            # bounds a stall, and a stalled planner is exactly where
+                            # sim time stops being a safe measuring stick.
+RETIRE_TTL_MAPS = 10      # SLAM map versions a pre-check retirement survives before
+                          # the frontier is reconsidered (reachability grows with the map)
+PLAN_CALL_WAIT = 2.0      # s wall; per-candidate budget for one ComputePathToPose
+                          # round trip. WALL, not sim: it bounds a call that must never
+                          # park the loop, and a planner that never answers is exactly
+                          # the case where sim time is not a safe measuring stick.
+
+# Consecutive DEFER cycles (see _Defer) before the run STOPS instead of waiting
+# again. Each cycle is individually bounded — _wait_for_fresh_map is timeout-
+# capped and MIN_GOAL_PERIOD floors the interval — so a DEFER loop cannot spin;
+# but "cannot spin" is not "must end", and an uncapped one is a silent hang,
+# precisely the failure mode this module's structure exists to make impossible.
+#
+# Why waiting cannot rescue it, and hence why the cap is small: the robot does
+# NOT move during a DEFER. The map therefore barely changes, so the input to the
+# next selection is nearly the input to the last one and the verdict is nearly
+# guaranteed to repeat. The only moving part is a retirement TTL expiring, which
+# brings back a frontier the planner already condemned. A handful of cycles is
+# enough to cover SLAM being mid-update; past that, more waiting buys nothing.
+#
+# Unreachable with the pre-check OFF: nothing retires, so _select_goal never
+# returns DEFER and this cap is inert. The A/B baseline is untouched.
+MAX_CONSEC_DEFERS = 10
+
+# NavigateToPose collapses the planner and controller codes into one field and
+# the controller's 1xx series wins by message-order priority (see the END-log
+# comment in explore()). A goal that FAILED reporting a code in this range is a
+# candidate for the post-hoc re-query: its planner verdict, if any, is masked.
+FOLLOW_PATH_CODES = range(100, 200)
+
+
+class _Defer:
+    """Sentinel: no goal this cycle, but exploration is NOT finished.
+
+    A distinct type rather than None because None already means "no frontiers
+    remain" and ends the run. Conflating "the pre-check could not clear a
+    candidate right now" with "the maze is mapped" would stop the run early and
+    report a completion that never happened — the precise failure the
+    termination audit exists to make impossible.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return 'DEFER'
+
+
+DEFER = _Defer()
 
 # ── sim-time wait bounds (RTF-invariant; measured against /clock) ────────────
 # Goal supervision itself lives in GoalSupervisor (progress + sim-timeout, both
@@ -173,6 +261,11 @@ class _SensorNode(Node):
         cbg = ReentrantCallbackGroup()
         self._cbg = cbg
         self._state_clients = {}   # server name -> lifecycle get_state client
+        # ComputePathToPose client for the reachability pre-check, created
+        # lazily on first use so a run with the pre-check OFF never advertises
+        # it. NOT named `_services`: that attribute name is the Node's own
+        # internal service registry and assigning to it breaks the node.
+        self._plan_client = None
 
         # SLAM publishes a latched (transient-local) map; match its QoS.
         map_qos = QoSProfile(
@@ -254,6 +347,95 @@ class _SensorNode(Node):
         except Exception:
             return None
 
+    @staticmethod
+    def _await(future, deadline):
+        """Poll `future` from the CALLING thread until done or `deadline` (wall).
+
+        The counterpart to the async discipline `lifecycle_state` documents: the
+        future is completed by the MultiThreadedExecutor spinning this node in
+        the background thread, and nothing here ever parks an executor thread on
+        a result that same executor has to deliver.
+        """
+        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return future.done()
+
+    def plan_to(self, x, y, frame, timeout=PLAN_CALL_WAIT):
+        """Ask planner_server for a path to (x, y): the reachability pre-check.
+
+        Returns ``(error_code, path_xy, planning_time_s, error_msg)`` where
+        ``path_xy`` is [(x, y), ...] of the planned poses, or ``None`` when no
+        answer was obtained — server not up, goal rejected, or the round trip
+        exceeded `timeout` wall seconds.
+
+        ``None`` is INCONCLUSIVE, never "unreachable". A planner that did not
+        answer has told us nothing about the world, and retiring a frontier on
+        that would blacklist good goals whenever the stack hiccuped.
+
+        Asynchronous throughout, for the same reason `lifecycle_state` is (see
+        its docstring): a synchronous call from a callback on a single-threaded
+        executor is this project's deadlock trap, and it hangs silently. Both
+        the goal-acceptance and the result futures are polled from the calling
+        thread against one shared wall deadline, so the whole call is bounded
+        even if Nav2 accepts the goal and then never finishes it.
+
+        `use_start` is False and `planner_id` empty: plan from the robot's
+        CURRENT pose with the configured default planner, which is exactly the
+        query bt_navigator would issue for this goal.
+        """
+        if self._plan_client is None:
+            self._plan_client = ActionClient(
+                self, ComputePathToPose, f'/{self.ns}/compute_path_to_pose',
+                callback_group=self._cbg)
+        client = self._plan_client
+        if not client.server_is_ready():
+            return None
+
+        goal = ComputePathToPose.Goal()
+        goal.goal = PoseStamped()
+        goal.goal.header.frame_id = frame
+        goal.goal.header.stamp = self.get_clock().now().to_msg()
+        goal.goal.pose.position.x = float(x)
+        goal.goal.pose.position.y = float(y)
+        goal.goal.pose.orientation.w = 1.0
+        goal.planner_id = ''
+        goal.use_start = False
+
+        deadline = time.monotonic() + timeout
+        send_future = client.send_goal_async(goal)
+        if not self._await(send_future, deadline):
+            send_future.cancel()
+            return None
+        try:
+            handle = send_future.result()
+        except Exception:
+            return None
+        if handle is None or not handle.accepted:
+            return None
+
+        result_future = handle.get_result_async()
+        if not self._await(result_future, deadline):
+            # Abandon the query rather than leave it running: cancel is
+            # fire-and-forget, since waiting on it would reintroduce exactly the
+            # unbounded block this method exists to avoid.
+            result_future.cancel()
+            try:
+                handle.cancel_goal_async()
+            except Exception:
+                pass
+            return None
+        try:
+            res = result_future.result().result
+            path_xy = [(p.pose.position.x, p.pose.position.y)
+                       for p in res.path.poses]
+            ptime = res.planning_time.sec + res.planning_time.nanosec * 1e-9
+            return (int(res.error_code), path_xy, ptime,
+                    getattr(res, 'error_msg', '') or '')
+        except (AttributeError, TypeError):
+            # Defensive, as _terminal_outcome is: an unexpected result shape
+            # reads as "no answer", never as evidence against the frontier.
+            return None
+
     def sim_time(self):
         """Current simulation time in seconds (from /clock via use_sim_time).
 
@@ -266,7 +448,8 @@ class _SensorNode(Node):
 class FrontierExplorer(BasicNavigator):
     """A BasicNavigator that also detects frontiers and self-assigns goals."""
 
-    def __init__(self, robot_id: int, sensor: _SensorNode):
+    def __init__(self, robot_id: int, sensor: _SensorNode,
+                 reachability_precheck: bool = False):
         # BasicNavigator uses relative action/topic names, so passing the
         # namespace here yields /robot_N/navigate_to_pose etc.
         super().__init__(node_name='frontier_explorer',
@@ -292,6 +475,26 @@ class FrontierExplorer(BasicNavigator):
         # blacklisting the whole map. Keyed on BLACKLIST_RADIUS (the same
         # quantum the blacklist geometry uses).
         self._classifier = OutcomeClassifier(BLACKLIST_RADIUS)
+
+        # Reachability pre-check (parameter-gated, default OFF so a run is a
+        # clean A/B against the previous rung). When ON, selection probes the
+        # planner before dispatching and the terminal outcome re-queries it when
+        # the planner's verdict was masked by a controller code. When OFF, both
+        # paths are inert and the loop behaves exactly as it did before.
+        self._precheck = bool(reachability_precheck)
+        # Retirements are TTL'd in SLAM map versions, NOT permanent: a frontier
+        # walled off by unknown space now can become plannable once the map
+        # fills in. Keyed on BLACKLIST_RADIUS, the same quantum the blacklist
+        # geometry and the classifier use.
+        self._retirements = RetirementLedger(BLACKLIST_RADIUS, RETIRE_TTL_MAPS)
+        # Set by _select_goal on every DEFER: did that cycle rest on definitive
+        # planner verdicts for EVERY candidate, or was the claim incomplete —
+        # either because a probe went unanswered or because the probe budget ran
+        # out before the candidate list did? explore() folds both across a defer
+        # streak, the first to pick WORLD-vs-STACK and the second to say which
+        # of the two stack faults to report.
+        self._last_defer_definitive = True
+        self._last_defer_truncated = False
 
         # Clock-stall detector state (wall clock; infra-failure warning only).
         self._stall_sim_last = None    # last sim time we saw advance
@@ -400,29 +603,38 @@ class FrontierExplorer(BasicNavigator):
         return any(math.hypot(x - bx, y - by) < BLACKLIST_RADIUS
                    for bx, by in self._blacklist)
 
-    def _select_goal(self, rx, ry):
-        """Choose where to drive next given the robot at (rx, ry).
+    def _ordered_candidates(self, rx, ry, map_seq=0):
+        """Dispatchable candidates given the robot at (rx, ry), best first.
 
-        Returns ``(goal_xy, frontier_xy, ncells)`` or ``None`` when no
-        non-blacklisted frontier remains (exploration complete).
+        Returns ``[(goal_xy, frontier_xy, ncells), ...]`` in the explorer's
+        existing utility order — nearest frontier first. Element 0 is exactly
+        what selection has always chosen; the rest exist so the pre-check has
+        alternatives to fall back on.
 
-        Prefers the NEAREST non-blacklisted frontier that is already far enough
-        (>= MIN_GOAL_DIST) to make the robot drive, and sends it as-is. If every
+        Prefers NEAREST non-blacklisted frontiers already far enough
+        (>= MIN_GOAL_DIST) to make the robot drive, sent as-is. If every
         remaining frontier is within goal tolerance (a goal there yields no
-        motion), the nearest is kept but its goal is PROJECTED outward along
-        robot->frontier to GOAL_PROJECT_DIST, so Nav2 has to move to reach it —
-        this is what actually pushes the robot into unexplored space.
+        motion), the list degenerates to the single nearest one PROJECTED
+        outward along robot->frontier to GOAL_PROJECT_DIST, so Nav2 has to move
+        to reach it — this is what actually pushes the robot into unexplored
+        space. Note the goal and the frontier differ in that case: the pre-check
+        must probe the GOAL (that is what gets dispatched) while retirement
+        keys on the FRONTIER.
+
+        `map_seq` is the current SLAM map version, used to expire pre-check
+        retirements; the default keeps callers that don't pre-check unaffected.
         """
         centroids = [c for c in self._frontier_centroids()
-                     if not self._blacklisted(c[0], c[1])]
+                     if not self._blacklisted(c[0], c[1])
+                     and not self._retirements.is_retired((c[0], c[1]), map_seq)]
         if not centroids:
-            return None
+            return []
         centroids.sort(key=lambda c: math.hypot(c[0] - rx, c[1] - ry))
 
-        # Nearest frontier already beyond tolerance -> drive straight to it.
-        for cx, cy, n in centroids:
-            if math.hypot(cx - rx, cy - ry) >= MIN_GOAL_DIST:
-                return (cx, cy), (cx, cy), n
+        far = [((cx, cy), (cx, cy), n) for cx, cy, n in centroids
+               if math.hypot(cx - rx, cy - ry) >= MIN_GOAL_DIST]
+        if far:
+            return far
 
         # All remaining frontiers are too close: project the nearest outward so
         # the goal is far enough to induce motion toward the unknown boundary.
@@ -430,9 +642,130 @@ class FrontierExplorer(BasicNavigator):
         d = math.hypot(cx - rx, cy - ry)
         if d < 1e-2:
             # Centroid sits on the robot — no usable heading; nothing to do here.
-            return None
+            return []
         ux, uy = (cx - rx) / d, (cy - ry) / d
-        return (rx + ux * GOAL_PROJECT_DIST, ry + uy * GOAL_PROJECT_DIST), (cx, cy), n
+        return [((rx + ux * GOAL_PROJECT_DIST, ry + uy * GOAL_PROJECT_DIST),
+                 (cx, cy), n)]
+
+    def _probe(self, goal_xy, idx):
+        """Pre-check one candidate goal against the planner. Returns a verdict.
+
+        One ComputePathToPose round trip, triaged into REACHABLE / UNREACHABLE /
+        INCONCLUSIVE (see nsk_swarm.reachability). Logs the planner's own
+        planning_time, error_code and error_msg for every call — that is the run
+        data the probe budget gets tuned from (PRECHECK_MAX_PROBES and
+        PRECHECK_CYCLE_BUDGET), and without it a pre-check that quietly times
+        out every cycle is indistinguishable from one that is working.
+        """
+        gx, gy = goal_xy
+        reply = self.sensor.plan_to(gx, gy, self.map_frame)
+        if reply is None:
+            self.info(f'[robot_{self.robot_id}] precheck cand#{idx} '
+                      f'({gx:.2f}, {gy:.2f}) -> no answer within '
+                      f'{PLAN_CALL_WAIT:.1f}s wall — INCONCLUSIVE')
+            return reachability.INCONCLUSIVE
+
+        code, path_xy, ptime, msg = reply
+        verdict = triage(code, path_xy, goal_xy)
+        msg_note = f' error_msg="{msg}"' if msg else ''
+        self.info(f'[robot_{self.robot_id}] precheck cand#{idx} '
+                  f'({gx:.2f}, {gy:.2f}) -> {verdict} error_code={code} '
+                  f'planning_time={ptime:.3f}s poses={len(path_xy)}{msg_note}')
+        return verdict
+
+    def _select_goal(self, rx, ry, map_seq=0):
+        """Choose where to drive next given the robot at (rx, ry).
+
+        Returns one of:
+          * ``(goal_xy, frontier_xy, ncells)`` — dispatch it.
+          * ``None`` — nothing left to try and nothing pending: exploration is
+            complete, and the caller ends the run.
+          * ``DEFER`` — frontiers remain but none is dispatchable THIS cycle
+            (the pre-check cleared none, or the only survivors are retired and
+            not yet expired). The caller waits for a fresher map and retries,
+            up to MAX_CONSEC_DEFERS times. Distinct from ``None`` on purpose: a
+            cycle the pre-check could not resolve is not evidence the maze is
+            mapped, and collapsing the two would end the run early with work
+            outstanding.
+
+        Every DEFER also sets ``_last_defer_definitive``: True only when the
+        cycle asked about EVERY candidate and got a definitive planner verdict
+        for each. Any INCONCLUSIVE probe clears it, and so does running out of
+        probe budget — a cycle that stopped early cannot claim "nothing is
+        reachable" while candidates it never queried sit in the list.
+        ``_last_defer_truncated`` records which of those two it was, so the stop
+        message names the real fault. explore() accumulates both over a defer
+        streak to decide whether hitting the cap is an ANSWER ("nothing
+        reachable remains") or a MALFUNCTION ("the planner never told us" /
+        "the budget was too small"), which is the same WORLD-vs-STACK split
+        OutcomeClassifier draws for goal outcomes.
+
+        With the pre-check OFF this is the historical behaviour exactly: the
+        best candidate, dispatched unexamined. Nothing retires, so DEFER is
+        unreachable on that path.
+        """
+        candidates = self._ordered_candidates(rx, ry, map_seq)
+        if not candidates:
+            # Retirements are the only thing that can hide a live frontier here;
+            # while any are outstanding the map is not finished, it is pending.
+            # Definitive: every survivor is parked by a verdict already in hand.
+            if self._retirements.active(map_seq):
+                self._last_defer_definitive = True
+                return DEFER
+            return None
+        if not self._precheck:
+            return candidates[0]
+
+        # Probe in utility order and take the first candidate the planner can
+        # actually reach. UNREACHABLE retires the frontier (TTL'd, so a growing
+        # map reconsiders it); INCONCLUSIVE retires NOTHING — a timeout or a TF
+        # error is evidence about the stack, not about the world.
+        #
+        # Keep going down the WHOLE list, not a fixed window: an all-unreachable
+        # head says nothing about position 12, and deferring to re-ask a
+        # stationary robot's barely-changed map is how rung2c halted with 41
+        # candidates unexamined. The two bounds below are what keep this from
+        # spending the run's wall clock on one selection (see PRECHECK_MAX_PROBES).
+        inconclusive = 0
+        probed = 0
+        deadline = time.monotonic() + PRECHECK_CYCLE_BUDGET
+        truncated = None            # None => the list itself ran out
+        for idx, (goal_xy, frontier_xy, ncells) in enumerate(candidates):
+            if probed >= PRECHECK_MAX_PROBES:
+                truncated = f'probe cap {PRECHECK_MAX_PROBES}'
+                break
+            # Checked BEFORE the probe, so the worst case is this budget plus
+            # one PLAN_CALL_WAIT rather than an unbounded overshoot.
+            if time.monotonic() >= deadline:
+                truncated = f'{PRECHECK_CYCLE_BUDGET:.0f}s wall budget'
+                break
+            probed += 1
+            verdict = self._probe(goal_xy, idx)
+            if verdict == reachability.REACHABLE:
+                return goal_xy, frontier_xy, ncells
+            if verdict == reachability.UNREACHABLE:
+                until = self._retirements.retire(frontier_xy, map_seq)
+                self.warn(f'[robot_{self.robot_id}] frontier '
+                          f'({frontier_xy[0]:.2f}, {frontier_xy[1]:.2f}) '
+                          f'unplannable — retiring until map #{until} '
+                          f'(now #{map_seq}, TTL {RETIRE_TTL_MAPS} maps)')
+            else:
+                inconclusive += 1
+
+        # A cycle may claim "nothing reachable remains" only if it asked about
+        # EVERY candidate and got a definitive answer for each. One unanswered
+        # probe breaks that, and so does stopping on a bound with candidates
+        # still unexamined. Conservative on purpose — the cost of being wrong
+        # here is a run that reports a completion it never established.
+        self._last_defer_truncated = truncated is not None
+        self._last_defer_definitive = (inconclusive == 0 and truncated is None)
+        stopped = (f'stopped by {truncated}, {len(candidates) - probed} unexamined'
+                   if truncated else 'whole list examined')
+        self._hb('precheck', f'no reachable frontier: probed {probed} of '
+                             f'{len(candidates)} candidates '
+                             f'({inconclusive} inconclusive, {stopped}) — '
+                             f'deferring to a fresher map', period=5.0)
+        return DEFER
 
     def _make_goal(self, x, y):
         goal = PoseStamped()
@@ -559,7 +892,7 @@ class FrontierExplorer(BasicNavigator):
                       f'{now - self._stall_since:.0f}s wall — is /clock publishing?')
             self._stall_warned = True
 
-    def _terminal_outcome(self):
+    def _terminal_outcome(self, goal_xy=None):
         """Outcome string for the goal Nav2 just finished, with its error fields.
 
         BasicNavigator.getResult() collapses every abort to TaskResult.FAILED,
@@ -570,8 +903,41 @@ class FrontierExplorer(BasicNavigator):
         leaves ``self.result_future`` live, so the result message is still
         reachable from here.
 
-        Returns ``(outcome, error_code, error_msg)``; error_code is None when the
-        result carried no readable code. Defensive by construction: ANY missing
+        Unmasking the planner's verdict
+        -------------------------------
+        That single ``error_code`` is an AGGREGATE, and it loses the information
+        this classification needs. bt_navigator keeps the planner's and the
+        controller's codes as separate BLACKBOARD entries (the BT's
+        ``compute_path_error_code`` / ``follow_path_error_code`` ports) and
+        ``BtActionServer::populateErrorCode`` writes only the LOWEST non-zero one
+        into the result. FollowPath's codes are the 1xx series against
+        ComputePathToPose's 2xx, so whenever a goal failed both ways the
+        controller code wins and the planner abort is invisible. The blackboard
+        is process-local to bt_navigator; the components are never published, so
+        there is no field to read them from — measured in rung2b, 22 goals
+        reported 1xx and exactly ONE was classified UNREACHABLE_NO_PATH.
+
+        Worse, ``cleanErrorCodes()`` runs only at goal COMPLETION, so a code set
+        once persists across BT ticks for the rest of that goal: a transient
+        early FollowPath failure masks a genuine planner abort seconds later.
+
+        So when the aggregate reports a FollowPath code, ask the planner
+        directly — one ComputePathToPose at the same goal point, whose
+        ``error_code`` is the planner's alone and cannot be masked by
+        construction. This is the backstop for the 208s the selection pre-check
+        cannot catch (``allow_unknown: true`` means the planner plans through
+        unmapped space and rarely returns 208 until it has actually tried).
+
+        It is a FRESH query: the robot and the map have both moved on, so it
+        answers "is this goal plannable now", not "what did the planner say
+        then". For deciding whether to retire the frontier that is the operative
+        question anyway. Gated on the pre-check parameter and only consulted for
+        a FAILED goal carrying a 1xx, so it costs nothing on the OFF path and
+        nothing on goals whose code was already legible.
+
+        Returns ``(outcome, error_code, error_msg, recheck_code)``; error_code is
+        None when the result carried no readable code, and recheck_code is None
+        unless the re-query actually ran. Defensive by construction: ANY missing
         field or unexpected shape falls back to the plain TaskResult name, so a
         change in Nav2's result type can never break navigation.
         """
@@ -582,12 +948,32 @@ class FrontierExplorer(BasicNavigator):
             code = res.error_code
             msg = getattr(res, 'error_msg', '') or ''
         except (AttributeError, TypeError):
-            return name, None, ''
+            return name, None, '', None
         if code in UNREACHABLE_CODES:
-            return OutcomeClassifier.UNREACHABLE_NO_PATH, code, msg
-        return name, code, msg
+            return OutcomeClassifier.UNREACHABLE_NO_PATH, code, msg, None
 
-    def _supervise_goal(self, goal_num):
+        if (self._precheck and goal_xy is not None and
+                name == 'FAILED' and code in FOLLOW_PATH_CODES):
+            reply = self.sensor.plan_to(goal_xy[0], goal_xy[1], self.map_frame)
+            if reply is None:
+                self.info(f'[robot_{self.robot_id}] planner re-query after '
+                          f'error_code={code}: no answer — leaving on the retry '
+                          f'ladder')
+                return name, code, msg, None
+            rcode, rpath, rtime, rmsg = reply
+            verdict = triage(rcode, rpath, goal_xy)
+            rmsg_note = f' error_msg="{rmsg}"' if rmsg else ''
+            self.info(f'[robot_{self.robot_id}] planner re-query after '
+                      f'error_code={code} -> {verdict} error_code={rcode} '
+                      f'planning_time={rtime:.3f}s{rmsg_note}')
+            if verdict == reachability.UNREACHABLE:
+                # The controller code was masking a real planner abort.
+                return OutcomeClassifier.UNREACHABLE_NO_PATH, code, msg, rcode
+            return name, code, msg, rcode
+
+        return name, code, msg, None
+
+    def _supervise_goal(self, goal_num, goal_xy=None):
         """Drive the active Nav2 goal to a terminal outcome under RTF-invariant
         progress supervision.
 
@@ -597,9 +983,9 @@ class FrontierExplorer(BasicNavigator):
         window_move, err)`` where ``window_move`` is the supervisor's
         trailing-window displacement at the moment of the verdict (meaningful for
         FUTILE_NO_PROGRESS, where it — not the whole-goal net — is what fired it),
-        ``err`` is the ``(error_code, error_msg)`` pair off the Nav2 result (only
-        Nav2's own terminations carry one; the rest report ``(None, '')``), and
-        outcome is one of:
+        ``err`` is the ``(error_code, error_msg, recheck_code)`` triple off the
+        Nav2 result (only Nav2's own terminations carry one; the rest report
+        ``(None, '', None)``), and outcome is one of:
           * GoalSupervisor.FUTILE_NO_PROGRESS / FUTILE_SIM_TIMEOUT — the
             supervisor gave up (sim-time judgement); the goal is cancelled here.
           * 'WALL_GUARD' — GOAL_WALL_GUARD wall seconds elapsed: an
@@ -607,6 +993,8 @@ class FrontierExplorer(BasicNavigator):
           * OutcomeClassifier.UNREACHABLE_NO_PATH — Nav2 aborted with a planner
             error_code that condemns the GOAL (see UNREACHABLE_CODES), not the
             stack; WORLD evidence, so the frontier is retired on this one hit.
+            Also reached via the masked-code re-query in `_terminal_outcome`,
+            which `goal_xy` is threaded through for.
           * a TaskResult name ('SUCCEEDED'/'FAILED'/'CANCELED'/'UNKNOWN') when
             Nav2 finishes the goal on its own.
         Wall clock is used ONLY for the guard + the clock-stall warning.
@@ -623,7 +1011,7 @@ class FrontierExplorer(BasicNavigator):
                 v = sup.verdict()
                 if v != GoalSupervisor.RUNNING:
                     self.cancelTask()
-                    return v, last_xy, sup.window_move(), (None, '')
+                    return v, last_xy, sup.window_move(), (None, '', None)
 
             self._check_clock_stall(self.sensor.sim_time())
 
@@ -634,18 +1022,18 @@ class FrontierExplorer(BasicNavigator):
                            f'(Nav2/SLAM/clock wedged?), not slow progress; '
                            f'cancelling.')
                 self.cancelTask()
-                return 'WALL_GUARD', last_xy, sup.window_move(), (None, '')
+                return 'WALL_GUARD', last_xy, sup.window_move(), (None, '', None)
 
             if self.isTaskComplete():
-                outcome, code, msg = self._terminal_outcome()
+                outcome, code, msg, recheck = self._terminal_outcome(goal_xy)
                 return (outcome, (last_xy or self.sensor.robot_xy()),
-                        sup.window_move(), (code, msg))
+                        sup.window_move(), (code, msg, recheck))
 
             self._hb('nav', f'goal #{goal_num} navigating '
                             f'(sim {sup.elapsed():.0f}s, wall {wall_elapsed:.0f}s)',
                      period=5.0)
             time.sleep(0.05)
-        return 'CANCELED', last_xy, sup.window_move(), (None, '')
+        return 'CANCELED', last_xy, sup.window_move(), (None, '', None)
 
     # ── auditable termination ────────────────────────────────────────────────
     def _log_termination_audit(self, goal_num):
@@ -656,6 +1044,7 @@ class FrontierExplorer(BasicNavigator):
         If live (sized, non-blacklisted) frontier cells still remain, the run was
         HALTED with work outstanding, not completed: say so at WARN.
         """
+        _, map_seq = self.sensor.get_map()
         clusters = self._frontier_clusters()
         total = len(clusters)
         below_min = sum(1 for _, _, n in clusters if n < MIN_CLUSTER)
@@ -665,11 +1054,18 @@ class FrontierExplorer(BasicNavigator):
             1 for x, y, _ in sized
             if not self._blacklisted(x, y) and self._classifier.failure_count((x, y)) > 0)
         remaining_cells = sum(n for x, y, n in sized if not self._blacklisted(x, y))
+        # Pre-check retirements still live at this map version. Reaching the
+        # audit with any outstanding would mean the run ended while frontiers
+        # were merely PARKED, not exhausted — _select_goal returns DEFER rather
+        # than None in that case, so this should read 0 here; it is printed so
+        # the claim is checkable from the log rather than assumed.
+        retired = self._retirements.active(map_seq)
 
         self.info(
             f'[robot_{self.robot_id}] termination audit after {goal_num} goals: '
             f'{total} frontier clusters detected this scan '
             f'({blacklisted} blacklisted, {retry_pending} retry-pending, '
+            f'{retired} retired-unexpired, '
             f'{below_min} below MIN_CLUSTER={MIN_CLUSTER}).')
         if remaining_cells > 0:
             self.warn(
@@ -685,12 +1081,16 @@ class FrontierExplorer(BasicNavigator):
     def explore(self):
         """Run the explore loop to completion.
 
-        Returns True when exploration ran and terminated on its own terms
-        (frontiers exhausted, or rclpy shut down under us), False when it could
-        not run at all or was stopped by an infrastructure failure — Nav2 never
-        activating, SLAM never publishing a map, or a run-wide streak of stack
-        failures. main() turns a False into a non-zero exit status, so a boot
-        that never explored can't be mistaken for a clean run.
+        Returns True when exploration ran and terminated on its own terms —
+        frontiers exhausted, rclpy shut down under us, or (pre-check only)
+        MAX_CONSEC_DEFERS cycles in which the planner definitively condemned
+        every candidate it was asked about. False when it could not run at all
+        or was stopped by an infrastructure failure: Nav2 never activating,
+        SLAM never publishing a map, a run-wide streak of stack failures, or
+        MAX_CONSEC_DEFERS cycles in which the pre-check never got an answer.
+        main() turns a False into a non-zero exit status, so neither a boot that
+        never explored nor a run wedged behind an unresponsive planner can be
+        mistaken for a clean one.
         """
         # Wait for Nav2 to come up. We use SLAM (no amcl), so wait on the
         # bt_navigator lifecycle node and skip the amcl initial-pose wait.
@@ -712,6 +1112,13 @@ class FrontierExplorer(BasicNavigator):
         self.info(f'[robot_{self.robot_id}] map received — exploring.')
 
         goal_num = 0
+        # Defer-streak state. `defer_definitive` stays True only while every
+        # cycle in the CURRENT streak got definitive planner verdicts; both
+        # reset the moment a goal is actually dispatched, so an occasional
+        # deferral in an otherwise healthy run never accumulates toward the cap.
+        consec_defers = 0
+        defer_definitive = True
+        defer_truncated = False
         while rclpy.ok():
             pose = self.sensor.robot_xy()
             if pose is None:
@@ -720,10 +1127,80 @@ class FrontierExplorer(BasicNavigator):
                 continue
             rx, ry = pose
 
-            sel = self._select_goal(rx, ry)
+            # Map version as SELECTION sees it: the pre-check's TTL clock, and
+            # what a DEFER waits to advance past. Deliberately not reused as the
+            # post-goal freshness baseline below — the pre-check spends wall
+            # time, so by dispatch the map may already have moved on.
+            _, seq_at_select = self.sensor.get_map()
+
+            sel = self._select_goal(rx, ry, seq_at_select)
             if sel is None:
                 self._log_termination_audit(goal_num)
                 break
+            if sel is DEFER:
+                # Frontiers remain but none is dispatchable yet. Wait for SLAM
+                # to publish a newer map — that is the only thing that can
+                # change the answer — then re-select. Bounded and heartbeated
+                # by _wait_for_fresh_map, and rate-limited after it, so a
+                # planner that never clears a candidate cannot spin this loop.
+                #
+                # It could still never LEAVE it, though, and an explorer that
+                # waits forever is the silent hang this module is built to
+                # prevent. So the streak is capped, and which of the two ways it
+                # ends is decided by what the deferrals were made of — the same
+                # WORLD-vs-STACK distinction OutcomeClassifier draws for goals.
+                consec_defers += 1
+                defer_definitive = defer_definitive and self._last_defer_definitive
+                defer_truncated = defer_truncated or self._last_defer_truncated
+                if consec_defers >= MAX_CONSEC_DEFERS:
+                    if defer_definitive:
+                        # WORLD: the planner answered every time and the answer
+                        # was "no". That is a result, not a malfunction. Let the
+                        # termination audit account for the frontiers left
+                        # behind (it WARNs that the map is not complete) and end
+                        # the run on its own terms.
+                        self.warn(
+                            f'[robot_{self.robot_id}] {consec_defers} consecutive '
+                            f'selection cycles produced no dispatchable goal and '
+                            f'the planner condemned every candidate it was asked '
+                            f'about — no reachable frontier remains within the '
+                            f'pre-check budget; stopping.')
+                        self._log_termination_audit(goal_num)
+                        break
+                    # STACK: "nothing is reachable" was never established, so a
+                    # zero exit here would let a fault pass for a completed map.
+                    # Two ways to land here, and they need different fixes, so
+                    # name the one that actually happened.
+                    if defer_truncated:
+                        # The probe budget ran out before the candidate list did.
+                        # Not a planner fault — we simply stopped asking, and the
+                        # candidates we skipped may well have been reachable.
+                        self.error(
+                            f'[robot_{self.robot_id}] {consec_defers} consecutive '
+                            f'selection cycles produced no dispatchable goal and at '
+                            f'least one of them ran out of probe budget before it '
+                            f'ran out of candidates — some frontiers were never '
+                            f'examined, so this is NOT "nothing is reachable". '
+                            f'Raise PRECHECK_MAX_PROBES (now {PRECHECK_MAX_PROBES}) '
+                            f'or PRECHECK_CYCLE_BUDGET (now '
+                            f'{PRECHECK_CYCLE_BUDGET:.0f}s wall); '
+                            f'do not read this as a completed map.')
+                    else:
+                        # At least one candidate per cycle went unanswered — a
+                        # wedged or merely slow planner_server.
+                        self.error(
+                            f'[robot_{self.robot_id}] {consec_defers} consecutive '
+                            f'selection cycles produced no dispatchable goal and the '
+                            f'pre-check never got a usable answer for some candidate '
+                            f'— planner_server is not responding within '
+                            f'{PLAN_CALL_WAIT:.1f}s wall, not "nothing is reachable". '
+                            f'Raise PLAN_CALL_WAIT or set reachability_precheck:=false; '
+                            f'do not read this as a completed map.')
+                    self._log_termination_audit(goal_num)
+                    return False
+                self._wait_for_fresh_map(seq_at_select)
+                self._sleep(MIN_GOAL_PERIOD)
+                continue
             (gx, gy), (fx, fy), ncells = sel
 
             # Fix: don't re-dispatch a goal essentially identical to the last one.
@@ -753,6 +1230,10 @@ class FrontierExplorer(BasicNavigator):
                     continue
 
             goal_num += 1
+            # A dispatched goal proves selection is still productive: the streak
+            # is broken, not merely paused.
+            consec_defers = 0
+            defer_definitive = True
             dist = math.hypot(gx - rx, gy - ry)
             self.info(f'[robot_{self.robot_id}] goal #{goal_num} -> ({gx:.2f}, {gy:.2f}) '
                       f'[{ncells} cells, frontier ({fx:.2f}, {fy:.2f}), {dist:.2f} m away]')
@@ -763,8 +1244,8 @@ class FrontierExplorer(BasicNavigator):
             _, seq_before = self.sensor.get_map()
 
             self.goToPose(self._make_goal(gx, gy))
-            outcome, end_xy, window_move, (err_code, err_msg) = \
-                self._supervise_goal(goal_num)
+            outcome, end_xy, window_move, (err_code, err_msg, recheck_code) = \
+                self._supervise_goal(goal_num, (gx, gy))
 
             # Per-goal telemetry (RTF-invariant sim duration alongside the wall
             # duration, so a slow RTF is visible as sim<<wall, not as a failure).
@@ -799,9 +1280,15 @@ class FrontierExplorer(BasicNavigator):
             # LOWEST non-zero code across compute_path_error_code and
             # follow_path_error_code, and FollowPath's codes are the 1xx series
             # against ComputePathToPose's 2xx — so a goal that failed BOTH ways
-            # reports the 1xx and is (correctly, conservatively) left on the
-            # retry ladder. Without the number that case is indistinguishable
-            # from the classification simply not firing.
+            # reports the 1xx and the planner's verdict is masked. Without the
+            # number that case is indistinguishable from the classification
+            # simply not firing.
+            #
+            # planner_recheck= is that mask lifted: the code from the direct
+            # ComputePathToPose re-query `_terminal_outcome` issues for exactly
+            # those 1xx goals. Reading the two together is what turns "22 goals
+            # reported 1xx" into a count of how many were really planner aborts
+            # — the pair is the measurement this rung exists to take.
             window_note = ''
             if outcome == GoalSupervisor.FUTILE_NO_PROGRESS:
                 window_note = (f' window={window_move:.2f}m/'
@@ -809,6 +1296,8 @@ class FrontierExplorer(BasicNavigator):
             err_note = f' error_code={err_code}' if err_code else ''
             if err_msg:
                 err_note += f' error_msg="{err_msg}"'
+            if recheck_code is not None:
+                err_note += f' planner_recheck={recheck_code}'
             self.info(f'[robot_{self.robot_id}] goal #{goal_num} END '
                       f'frontier=({fx:.2f}, {fy:.2f}) outcome={outcome} '
                       f'sim={sim_dur:.1f}s wall={wall_dur:.1f}s net={net:.2f}m'
@@ -837,7 +1326,13 @@ def main(args=None):
     # id up front to build its namespace.
     boot = rclpy.create_node('frontier_explorer')
     boot.declare_parameter('robot_id', 0)
+    # Reachability pre-check: OFF by default so a run is a clean A/B against the
+    # previous rung, and so this can never change behaviour by merely existing.
+    # Read here beside robot_id because launch delivers params under the /**
+    # wildcard (see explore.launch.py), which this bootstrap node also matches.
+    boot.declare_parameter('reachability_precheck', False)
     robot_id = int(boot.get_parameter('robot_id').value)
+    precheck = bool(boot.get_parameter('reachability_precheck').value)
     boot.destroy_node()
 
     # The sensor node (map + TF + clock) is spun continuously by its own
@@ -849,7 +1344,7 @@ def main(args=None):
     sensor_thread = threading.Thread(target=sensor_exec.spin, daemon=True)
     sensor_thread.start()
 
-    explorer = FrontierExplorer(robot_id, sensor)
+    explorer = FrontierExplorer(robot_id, sensor, reachability_precheck=precheck)
     # False -> exit non-zero, so a run that never got to explore (Nav2 or SLAM
     # never came up) is not reported by launch as "finished cleanly". A SIGINT
     # from launch's own shutdown is an orderly stop, not a failure.
