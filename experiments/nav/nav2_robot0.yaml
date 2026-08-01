@@ -95,7 +95,16 @@ controller_server:
       sim_time: 1.7
       linear_granularity: 0.05
       angular_granularity: 0.025
-      transform_tolerance: 0.2
+      # Raised 0.2 -> 0.5, above the observed TF excursion tail: tf2_monitor saw
+      # 0.15 s and 0.23 s excursions against a 0.07 s steady state. 0.5 s at
+      # max_vel_x 0.22 m/s is ~0.11 m of positional uncertainty. The relevant
+      # margin is the clearance between the footprint edge and the inflated
+      # envelope: inflation_radius 0.25 - robot_radius 0.11 = 0.14 m. So 0.11 m
+      # of staleness cannot push the true footprint past the inflation
+      # boundary, leaving ~0.03 m of headroom. This bound scales with
+      # max_vel_x: if the robot is sped up, transform_tolerance must come down
+      # or inflation_radius must go up.
+      transform_tolerance: 0.5
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True
@@ -116,6 +125,16 @@ local_costmap:
       publish_frequency: 2.0
       global_frame: robot_0/odom
       robot_base_frame: robot_0/base_footprint
+      # Was unset, i.e. the Nav2 default of 0.3. Set to 0.5 to sit above the
+      # observed TF excursion tail: tf2_monitor saw 0.15 s and 0.23 s excursions
+      # against a 0.07 s steady state. 0.5 s at 0.22 m/s is ~0.11 m of
+      # positional uncertainty. The relevant margin is the clearance between the
+      # footprint edge and the inflated envelope: inflation_radius 0.25 -
+      # robot_radius 0.11 = 0.14 m. So 0.11 m of staleness cannot push the true
+      # footprint past the inflation boundary, leaving ~0.03 m of headroom. This
+      # bound scales with max_vel_x: if the robot is sped up, transform_tolerance
+      # must come down or inflation_radius must go up.
+      transform_tolerance: 0.5
       rolling_window: true
       width: 3
       height: 3
@@ -157,6 +176,16 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: robot_0/map
       robot_base_frame: robot_0/base_footprint
+      # Was unset, i.e. the Nav2 default of 0.3. Set to 0.5 to sit above the
+      # observed TF excursion tail: tf2_monitor saw 0.15 s and 0.23 s excursions
+      # against a 0.07 s steady state. 0.5 s at 0.22 m/s is ~0.11 m of
+      # positional uncertainty. The relevant margin is the clearance between the
+      # footprint edge and the inflated envelope: inflation_radius 0.25 -
+      # robot_radius 0.11 = 0.14 m. So 0.11 m of staleness cannot push the true
+      # footprint past the inflation boundary, leaving ~0.03 m of headroom. This
+      # bound scales with max_vel_x: if the robot is sped up, transform_tolerance
+      # must come down or inflation_radius must go up.
+      transform_tolerance: 0.5
       robot_radius: 0.11
       resolution: 0.05
       track_unknown_space: true

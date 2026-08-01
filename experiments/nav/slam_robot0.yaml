@@ -43,7 +43,16 @@ slam_toolbox:
     min_laser_range: 0.0
     max_laser_range: 3.5             # burger LDS-01 usable range
     minimum_time_interval: 0.5
-    transform_timeout: 0.2
+    # Raised 0.2 -> 0.5, above the observed TF excursion tail: tf2_monitor saw
+    # 0.15 s and 0.23 s excursions against a 0.07 s steady state. 0.5 s at
+    # max_vel_x 0.22 m/s is ~0.11 m of positional uncertainty. The relevant
+    # margin is the clearance between the footprint edge and the inflated
+    # envelope: inflation_radius 0.25 - robot_radius 0.11 = 0.14 m. So 0.11 m of
+    # staleness cannot push the true footprint past the inflation boundary,
+    # leaving ~0.03 m of headroom. This bound scales with max_vel_x: if the robot
+    # is sped up, transform_tolerance must come down or inflation_radius must go
+    # up.
+    transform_timeout: 0.5
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
     enable_interactive_mode: true
