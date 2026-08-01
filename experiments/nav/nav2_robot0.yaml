@@ -95,15 +95,35 @@ controller_server:
       sim_time: 1.7
       linear_granularity: 0.05
       angular_granularity: 0.025
-      # Raised 0.2 -> 0.5, above the observed TF excursion tail: tf2_monitor saw
-      # 0.15 s and 0.23 s excursions against a 0.07 s steady state. 0.5 s at
-      # max_vel_x 0.22 m/s is ~0.11 m of positional uncertainty. The relevant
-      # margin is the clearance between the footprint edge and the inflated
-      # envelope: inflation_radius 0.25 - robot_radius 0.11 = 0.14 m. So 0.11 m
-      # of staleness cannot push the true footprint past the inflation
-      # boundary, leaving ~0.03 m of headroom. This bound scales with
-      # max_vel_x: if the robot is sped up, transform_tolerance must come down
-      # or inflation_radius must go up.
+      # Raised 0.2 -> 0.5. NOTE: the mechanism given in ea59e20 -- that 0.2 s
+      # sat inside a load-driven TF excursion tail -- is wrong. The rung2e pilot
+      # (172 goals, ~70 min) disproved it: 19 goals still failed with
+      # error_code=102, each with a matching "Transform data too old" from this
+      # server's tf_help, so the fault was not eliminated. All 19 fall inside one
+      # region -- x in [-2.3, -5.8], y in [6.0, 9.1] -- and zero occur anywhere
+      # else in the 20x20 m world; several are exact repeats of the same
+      # frontier. Load-driven jitter would scatter across the run and across the
+      # map. It did not. The failures are spatially localised.
+      #
+      # That region is feature-poor. knowledge_world.sdf puts all four interior
+      # walls in the central band (y=+3.0, y=-3.0, x=-4.0, x=+4.0), so the region
+      # is north of every one of them, and the x=-10 boundary is 4.2 m away --
+      # past the 3.5 m lidar ceiling. Whatever is in range there is a wall
+      # running along x, and a single straight wall gives no constraint along its
+      # own length: the degenerate case for laser scan matching. The pose graph
+      # stalls, and map->odom goes stale in content while staying fresh in
+      # timestamp.
+      #
+      # So 0.5 s did not fix the fault, it made it non-terminal: the run absorbed
+      # all 19 and reached frontier exhaustion, where rung2b and rung2d each died
+      # on the first occurrence. The underlying cause is scan-matching degeneracy
+      # in featureless regions and no value of this parameter addresses it.
+      #
+      # The clearance bound is unchanged and still holds: 0.5 s at max_vel_x
+      # 0.22 m/s is ~0.11 m of positional uncertainty, against a footprint-to-
+      # inflated-envelope clearance of inflation_radius 0.25 - robot_radius
+      # 0.11 = 0.14 m, leaving ~0.03 m of headroom. It scales with max_vel_x: if
+      # the robot is sped up, this must come down or inflation_radius must go up.
       transform_tolerance: 0.5
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
@@ -125,15 +145,16 @@ local_costmap:
       publish_frequency: 2.0
       global_frame: robot_0/odom
       robot_base_frame: robot_0/base_footprint
-      # Was unset, i.e. the Nav2 default of 0.3. Set to 0.5 to sit above the
-      # observed TF excursion tail: tf2_monitor saw 0.15 s and 0.23 s excursions
-      # against a 0.07 s steady state. 0.5 s at 0.22 m/s is ~0.11 m of
-      # positional uncertainty. The relevant margin is the clearance between the
-      # footprint edge and the inflated envelope: inflation_radius 0.25 -
-      # robot_radius 0.11 = 0.14 m. So 0.11 m of staleness cannot push the true
-      # footprint past the inflation boundary, leaving ~0.03 m of headroom. This
-      # bound scales with max_vel_x: if the robot is sped up, transform_tolerance
-      # must come down or inflation_radius must go up.
+      # Was unset, i.e. the Nav2 default of 0.3. Set to 0.5 to match
+      # controller_server; see the full rationale on FollowPath's
+      # transform_tolerance above. In short: the load-driven excursion-tail story
+      # in ea59e20 is wrong. rung2e showed the error_code=102 failures are
+      # spatially localised to one feature-poor region (x in [-2.3, -5.8], y in
+      # [6.0, 9.1]) where scan matching against a single straight wall is
+      # degenerate; 0.5 s did not eliminate them, it made them non-terminal.
+      # The clearance bound is unchanged: 0.5 s at 0.22 m/s is ~0.11 m of
+      # positional uncertainty against inflation_radius 0.25 - robot_radius
+      # 0.11 = 0.14 m of clearance, ~0.03 m of headroom, scaling with max_vel_x.
       transform_tolerance: 0.5
       rolling_window: true
       width: 3
@@ -176,15 +197,18 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: robot_0/map
       robot_base_frame: robot_0/base_footprint
-      # Was unset, i.e. the Nav2 default of 0.3. Set to 0.5 to sit above the
-      # observed TF excursion tail: tf2_monitor saw 0.15 s and 0.23 s excursions
-      # against a 0.07 s steady state. 0.5 s at 0.22 m/s is ~0.11 m of
-      # positional uncertainty. The relevant margin is the clearance between the
-      # footprint edge and the inflated envelope: inflation_radius 0.25 -
-      # robot_radius 0.11 = 0.14 m. So 0.11 m of staleness cannot push the true
-      # footprint past the inflation boundary, leaving ~0.03 m of headroom. This
-      # bound scales with max_vel_x: if the robot is sped up, transform_tolerance
-      # must come down or inflation_radius must go up.
+      # Was unset, i.e. the Nav2 default of 0.3. Set to 0.5 to match
+      # controller_server; see the full rationale on FollowPath's
+      # transform_tolerance above. In short: the load-driven excursion-tail story
+      # in ea59e20 is wrong. rung2e showed the error_code=102 failures are
+      # spatially localised to one feature-poor region (x in [-2.3, -5.8], y in
+      # [6.0, 9.1]) where scan matching against a single straight wall is
+      # degenerate; 0.5 s did not eliminate them, it made them non-terminal.
+      # This costmap is the one keyed on robot_0/map, so it is the direct
+      # consumer of the map->odom that goes stale when the pose graph stalls.
+      # The clearance bound is unchanged: 0.5 s at 0.22 m/s is ~0.11 m of
+      # positional uncertainty against inflation_radius 0.25 - robot_radius
+      # 0.11 = 0.14 m of clearance, ~0.03 m of headroom, scaling with max_vel_x.
       transform_tolerance: 0.5
       robot_radius: 0.11
       resolution: 0.05

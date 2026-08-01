@@ -43,15 +43,36 @@ slam_toolbox:
     min_laser_range: 0.0
     max_laser_range: 3.5             # burger LDS-01 usable range
     minimum_time_interval: 0.5
-    # Raised 0.2 -> 0.5, above the observed TF excursion tail: tf2_monitor saw
-    # 0.15 s and 0.23 s excursions against a 0.07 s steady state. 0.5 s at
-    # max_vel_x 0.22 m/s is ~0.11 m of positional uncertainty. The relevant
-    # margin is the clearance between the footprint edge and the inflated
-    # envelope: inflation_radius 0.25 - robot_radius 0.11 = 0.14 m. So 0.11 m of
-    # staleness cannot push the true footprint past the inflation boundary,
-    # leaving ~0.03 m of headroom. This bound scales with max_vel_x: if the robot
-    # is sped up, transform_tolerance must come down or inflation_radius must go
-    # up.
+    # Raised 0.2 -> 0.5. NOTE: the mechanism given in ea59e20 -- that 0.2 s sat
+    # inside a load-driven TF excursion tail -- is wrong. The rung2e pilot
+    # (172 goals, ~70 min) disproved it: 19 goals still failed with
+    # error_code=102 and controller_server logged 19 matching "Transform data
+    # too old", so the fault was not eliminated. All 19 fall inside one region --
+    # x in [-2.3, -5.8], y in [6.0, 9.1] -- and zero occur anywhere else in the
+    # 20x20 m world; several are exact repeats of the same frontier. Load-driven
+    # jitter would scatter across the run and across the map. It did not.
+    #
+    # This node is where the real fault lives. knowledge_world.sdf puts all four
+    # interior walls in the central band (y=+3.0, y=-3.0, x=-4.0, x=+4.0); that
+    # region is north of every one of them, and the x=-10 boundary is 4.2 m away,
+    # past the max_laser_range 3.5 ceiling set above. Whatever is in range there
+    # is a wall running along x, and a single straight wall gives no constraint
+    # along its own length -- the degenerate case for laser scan matching. The
+    # pose graph stalls and the map->odom broadcast goes stale in content while
+    # transform_publish_period keeps it fresh in timestamp, which is why
+    # consumers see a valid-looking but wrong transform rather than a gap.
+    #
+    # So 0.5 s did not fix the fault, it made it non-terminal: the run absorbed
+    # all 19 and reached frontier exhaustion, where rung2b and rung2d each died
+    # on the first occurrence. Fixing the cause means addressing the degeneracy
+    # itself (scan-match confidence gating, or denying frontiers in featureless
+    # regions), not this timeout.
+    #
+    # The clearance bound is unchanged and still holds: 0.5 s at max_vel_x
+    # 0.22 m/s is ~0.11 m of positional uncertainty, against a footprint-to-
+    # inflated-envelope clearance of inflation_radius 0.25 - robot_radius
+    # 0.11 = 0.14 m, leaving ~0.03 m of headroom. It scales with max_vel_x: if
+    # the robot is sped up, this must come down or inflation_radius must go up.
     transform_timeout: 0.5
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
