@@ -1117,3 +1117,189 @@ def test_a_dispatched_goal_resets_the_start_blocked_streak(monkeypatch):
     assert stub.explore() is True
     assert not [m for lvl, m in stub.logged if lvl == 'ERROR']
     assert stub.audits == [2]
+
+
+# ── the post-goal re-query: the same misattribution, worse consequence ──────
+#
+# Selection retires a frontier for RETIRE_TTL_MAPS maps. _terminal_outcome maps
+# the same verdict to OutcomeClassifier.UNREACHABLE_NO_PATH, which is WORLD
+# evidence and blacklists PERMANENTLY — no TTL, no way back. So a robot that
+# wedges AFTER dispatch destroys frontiers where one that wedges before
+# selection merely parks them. Every test here asserts the DOWNSTREAM effect
+# through a real OutcomeClassifier, because the outcome string is only
+# interesting for what the classifier then does with it.
+
+def make_terminal_stub(result_code, result_name='FAILED', replies=None,
+                       pose=(0.0, 0.0), start_probe=None, precheck=True):
+    """Bind the real _terminal_outcome over a scripted Nav2 result.
+
+    `result_code` is the aggregate error_code on the NavigateToPose result —
+    the number bt_navigator actually published. `replies` scripts the planner
+    for the re-query; `start_probe` is the verdict the start probe returns.
+    """
+    planner = FakePlanner(replies or {})
+    stub = SimpleNamespace(
+        robot_id=0,
+        map_frame='robot_0/map',
+        base_frame='robot_0/base_footprint',
+        sensor=SimpleNamespace(plan_to=planner.plan_to, robot_xy=lambda: pose),
+        _precheck=precheck,
+        start_probes=[],
+        planner=planner,
+        logged=[])
+    stub.info = lambda msg: stub.logged.append(('INFO', msg))
+    stub.warn = lambda msg: stub.logged.append(('WARN', msg))
+    verdict = reachability.START_OK if start_probe is None else start_probe
+    stub._start_probe = lambda rx, ry, deadline=None: (
+        stub.start_probes.append((rx, ry)) or verdict)
+    stub.getResult = lambda: SimpleNamespace(name=result_name)
+    stub.result_future = SimpleNamespace(
+        result=lambda: SimpleNamespace(
+            result=SimpleNamespace(error_code=result_code, error_msg='')))
+    stub._start_at_fault = FrontierExplorer._start_at_fault.__get__(stub)
+    stub._terminal_outcome = FrontierExplorer._terminal_outcome.__get__(stub)
+    return stub
+
+
+def blacklists(outcome, frontier=(0.0, 1.0)):
+    """What a REAL OutcomeClassifier does with `outcome` — the thing that bites."""
+    classifier = fx.OutcomeClassifier(fx.BLACKLIST_RADIUS)
+    return classifier.classify(outcome, frontier, moved=False).blacklist
+
+
+# --- the aggregate-code exit (no re-query runs) ------------------------------
+
+def test_a_wedged_robot_does_not_permanently_blacklist_on_a_bare_208():
+    # The likeliest wedged-after-dispatch path: with no path there is no
+    # FollowPath failure to mask the planner, so the 208 arrives unmasked and
+    # the 1xx-gated re-query never runs at all.
+    stub = make_terminal_stub(208, start_probe=reachability.START_BLOCKED)
+    outcome, code, _msg, recheck = stub._terminal_outcome((0.0, 1.0))
+
+    assert outcome == 'FAILED'
+    assert blacklists(outcome) is False
+    assert code == 208
+    assert recheck is None          # no re-query on this exit
+    assert stub.start_probes == [(0.0, 0.0)]
+    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+    assert any('START is at fault' in m for m in warns), warns
+
+
+def test_a_healthy_robot_still_condemns_the_goal_on_a_bare_208():
+    # REGRESSION PIN (passes with or without the fix, by design): a cleared
+    # start leaves the planner's verdict standing, permanent blacklist included.
+    stub = make_terminal_stub(208)                      # start probe -> START_OK
+    outcome, _c, _m, _r = stub._terminal_outcome((0.0, 1.0))
+
+    assert outcome == fx.OutcomeClassifier.UNREACHABLE_NO_PATH
+    assert blacklists(outcome) is True
+
+
+def test_goal_side_aggregate_codes_never_probe_the_start():
+    # GUARD (trivially true when reverted): 204/206 name the goal.
+    for code in (204, 206):
+        stub = make_terminal_stub(code, start_probe=reachability.START_BLOCKED)
+        outcome, _c, _m, _r = stub._terminal_outcome((0.0, 1.0))
+
+        assert outcome == fx.OutcomeClassifier.UNREACHABLE_NO_PATH
+        assert blacklists(outcome) is True
+        assert stub.start_probes == []
+
+
+def test_the_precheck_off_path_issues_no_start_probe():
+    # The A/B baseline: with the pre-check OFF nothing queries the planner, and
+    # this exit is otherwise not gated on it.
+    stub = make_terminal_stub(208, precheck=False,
+                              start_probe=reachability.START_BLOCKED)
+    outcome, _c, _m, _r = stub._terminal_outcome((0.0, 1.0))
+
+    assert outcome == fx.OutcomeClassifier.UNREACHABLE_NO_PATH
+    assert stub.start_probes == []
+
+
+# --- the re-query exit (a 1xx masked the planner) ----------------------------
+
+def test_a_wedged_robot_does_not_permanently_blacklist_after_a_masked_208():
+    stub = make_terminal_stub(102, replies={(0.0, 1.0): condemns(208)},
+                              start_probe=reachability.START_BLOCKED)
+    outcome, code, _msg, recheck = stub._terminal_outcome((0.0, 1.0))
+
+    assert outcome == 'FAILED'
+    assert blacklists(outcome) is False
+    # The END line must tell the two readings apart on outcome= alone, with the
+    # same planner_recheck= on both.
+    assert (code, recheck) == (102, 208)
+    assert stub.start_probes == [(0.0, 0.0)]
+
+
+def test_a_healthy_robot_still_unmasks_the_planner_abort():
+    # REGRESSION PIN (passes either way): this is 9824e3a's whole purpose and
+    # must survive the start check.
+    stub = make_terminal_stub(102, replies={(0.0, 1.0): condemns(208)})
+    outcome, code, _msg, recheck = stub._terminal_outcome((0.0, 1.0))
+
+    assert outcome == fx.OutcomeClassifier.UNREACHABLE_NO_PATH
+    assert blacklists(outcome) is True
+    assert (code, recheck) == (102, 208)
+
+
+def test_a_start_side_requery_code_is_reported_and_keeps_the_frontier():
+    # 203/205 on the re-query. triage() calls these INCONCLUSIVE, so the
+    # frontier already survived — what was missing is the run SAYING the start
+    # was at fault. No probe: the code is the diagnosis.
+    for rcode in (203, 205):
+        stub = make_terminal_stub(102,
+                                  replies={(0.0, 1.0): condemns(rcode)},
+                                  start_probe=reachability.START_BLOCKED)
+        outcome, _c, _m, recheck = stub._terminal_outcome((0.0, 1.0))
+
+        assert outcome == 'FAILED'
+        assert blacklists(outcome) is False
+        assert recheck == rcode
+        assert stub.start_probes == []
+        warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+        assert any('START is at fault' in m for m in warns), warns
+
+
+def test_goal_side_requery_codes_never_probe_the_start():
+    # GUARD (trivially true when reverted).
+    for rcode in (204, 206):
+        stub = make_terminal_stub(102, replies={(0.0, 1.0): condemns(rcode)},
+                                  start_probe=reachability.START_BLOCKED)
+        outcome, _c, _m, _r = stub._terminal_outcome((0.0, 1.0))
+
+        assert outcome == fx.OutcomeClassifier.UNREACHABLE_NO_PATH
+        assert blacklists(outcome) is True
+        assert stub.start_probes == []
+
+
+def test_an_unreadable_pose_never_guesses_one():
+    # GUARD (trivially true when reverted): no TF, no probe, and the planner's
+    # verdict stands rather than being overridden on a guessed origin.
+    stub = make_terminal_stub(102, replies={(0.0, 1.0): condemns(208)},
+                              pose=None, start_probe=reachability.START_BLOCKED)
+    outcome, _c, _m, _r = stub._terminal_outcome((0.0, 1.0))
+
+    assert outcome == fx.OutcomeClassifier.UNREACHABLE_NO_PATH
+    assert stub.start_probes == []
+    infos = [m for lvl, m in stub.logged if lvl == 'INFO']
+    assert any('no pose to probe from' in m for m in infos), infos
+
+
+def test_the_start_is_probed_at_most_once_per_terminal_outcome():
+    # Both exits can reach the same question; only one of them runs per call.
+    stub = make_terminal_stub(208, replies={(0.0, 1.0): condemns(208)},
+                              start_probe=reachability.START_BLOCKED)
+    stub._terminal_outcome((0.0, 1.0))
+    assert len(stub.start_probes) == 1
+
+
+def test_an_inconclusive_start_probe_leaves_the_planners_verdict_standing():
+    # Anything short of START_BLOCKED is not evidence the robot is stuck, and
+    # overriding a planner verdict on a non-answer would be the mirror of the
+    # bug being fixed.
+    stub = make_terminal_stub(208, start_probe=reachability.INCONCLUSIVE)
+    outcome, _c, _m, _r = stub._terminal_outcome((0.0, 1.0))
+
+    assert outcome == fx.OutcomeClassifier.UNREACHABLE_NO_PATH
+    assert blacklists(outcome) is True

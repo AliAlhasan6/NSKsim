@@ -911,6 +911,48 @@ class FrontierExplorer(BasicNavigator):
         # outcomes return early.
         return reachability.START_BLOCKED
 
+    def _start_at_fault(self, code):
+        """True when `code` condemns the ROBOT's pose rather than the goal.
+
+        The post-goal counterpart to selection's branch, and the stakes here are
+        higher. Selection retires a frontier under a TTL of RETIRE_TTL_MAPS maps;
+        _terminal_outcome maps the same verdict to
+        OutcomeClassifier.UNREACHABLE_NO_PATH, which is WORLD evidence and
+        blacklists the frontier PERMANENTLY, with no TTL and no way back. A robot
+        that wedges AFTER dispatch therefore destroys frontiers outright, where
+        one that wedges before selection only parks them.
+
+        Conservative in every direction that matters — it returns False unless
+        the start is positively shown to be the problem:
+          * 204/206 name the goal, so there is nothing to ask about.
+          * No pose means no probe. A guessed origin would probe somewhere the
+            robot is not and answer a different question.
+          * Anything short of START_BLOCKED leaves the planner's verdict standing.
+        """
+        if code not in reachability.AMBIGUOUS_CODES:
+            return False
+
+        pose = self.sensor.robot_xy()
+        if pose is None:
+            self.info(f'[robot_{self.robot_id}] start probe skipped after '
+                      f'error_code={code}: no {self.map_frame}->'
+                      f'{self.base_frame} TF, so there is no pose to probe from '
+                      f'— leaving the verdict as the planner reported it')
+            return False
+
+        rx, ry = pose
+        if self._start_probe(rx, ry) != reachability.START_BLOCKED:
+            return False
+
+        self.warn(f'[robot_{self.robot_id}] start pose ({rx:.2f}, {ry:.2f}) '
+                  f'unplannable — every probe to a free cell '
+                  f'~{START_PROBE_DIST:.1f} m out failed, so error_code={code} '
+                  f'after this goal condemns the START, not the goal. The START '
+                  f'is at fault: routing to the retry ladder and leaving the '
+                  f'frontier eligible, because a WORLD verdict here would '
+                  f'blacklist it permanently with no TTL.')
+        return True
+
     def _select_goal(self, rx, ry, map_seq=0):
         """Choose where to drive next given the robot at (rx, ry).
 
@@ -1235,11 +1277,25 @@ class FrontierExplorer(BasicNavigator):
         a FAILED goal carrying a 1xx, so it costs nothing on the OFF path and
         nothing on goals whose code was already legible.
 
+        Which endpoint did the planner condemn
+        --------------------------------------
+        A planner code condemns an ENDPOINT, and 208 NO_VALID_PATH names neither.
+        Mapping it to UNREACHABLE_NO_PATH is WORLD evidence, and here that means
+        a PERMANENT blacklist with no TTL — strictly worse than selection's
+        TTL'd retirement for the identical mistake. So both places this method
+        can reach that verdict first ask whether the robot can plan out of its
+        own pose at all (`_start_at_fault`); when it cannot, the outcome stays
+        the plain TaskResult name, which is a STACK outcome and routes to the
+        retry ladder with the frontier intact.
+
         Returns ``(outcome, error_code, error_msg, recheck_code)``; error_code is
         None when the result carried no readable code, and recheck_code is None
-        unless the re-query actually ran. Defensive by construction: ANY missing
-        field or unexpected shape falls back to the plain TaskResult name, so a
-        change in Nav2's result type can never break navigation.
+        unless the re-query actually ran. The pair is what distinguishes the two
+        readings in the per-goal END line: a start-side verdict reads
+        ``outcome=FAILED`` beside the same ``planner_recheck=`` a goal-side
+        ``outcome=UNREACHABLE_NO_PATH`` carries. Defensive by construction: ANY
+        missing field or unexpected shape falls back to the plain TaskResult
+        name, so a change in Nav2's result type can never break navigation.
         """
         name = self.getResult().name       # fallback, computed before anything can fail
         try:
@@ -1250,6 +1306,15 @@ class FrontierExplorer(BasicNavigator):
         except (AttributeError, TypeError):
             return name, None, '', None
         if code in UNREACHABLE_CODES:
+            # The aggregate is the planner's own verdict, unmasked — and this is
+            # the likelier way a robot wedged AFTER dispatch arrives here, not
+            # the re-query below: with no path there is no FollowPath failure to
+            # mask it, so the 208 comes through directly and the re-query (gated
+            # on a 1xx) never runs. Same question as everywhere else, then:
+            # which endpoint did 208 condemn? Gated on the pre-check so the OFF
+            # path issues no queries and stays a clean A/B.
+            if self._precheck and self._start_at_fault(code):
+                return name, code, msg, None
             return OutcomeClassifier.UNREACHABLE_NO_PATH, code, msg, None
 
         if (self._precheck and goal_xy is not None and
@@ -1266,7 +1331,24 @@ class FrontierExplorer(BasicNavigator):
             self.info(f'[robot_{self.robot_id}] planner re-query after '
                       f'error_code={code} -> {verdict} error_code={rcode} '
                       f'planning_time={rtime:.3f}s{rmsg_note}')
+            if rcode in reachability.START_SIDE_CODES:
+                # The planner named the START itself (203/205). No probe: the
+                # code is already the diagnosis. triage() calls these
+                # INCONCLUSIVE, so the fall-through at the end of this block
+                # would reach the retry ladder anyway and the frontier would
+                # survive — this branch exists so the run SAYS the start was at
+                # fault instead of leaving it to be inferred from a silence.
+                self.warn(f'[robot_{self.robot_id}] planner re-query after '
+                          f'error_code={code} returned error_code={rcode}, which '
+                          f'condemns the START, not the goal. The START is at '
+                          f'fault: routing to the retry ladder and leaving the '
+                          f'frontier eligible.')
+                return name, code, msg, rcode
             if verdict == reachability.UNREACHABLE:
+                # 208 names no endpoint, so ask which one before spending a
+                # PERMANENT blacklist on the frontier (see _start_at_fault).
+                if self._start_at_fault(rcode):
+                    return name, code, msg, rcode
                 # The controller code was masking a real planner abort.
                 return OutcomeClassifier.UNREACHABLE_NO_PATH, code, msg, rcode
             return name, code, msg, rcode
