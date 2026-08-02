@@ -41,6 +41,18 @@ it, so a permanent blacklist would throw away real exploration targets. The TTL
 is counted in SLAM map versions rather than seconds: it tracks the thing that
 actually changes reachability, and a stalled SLAM correctly never expires a
 retirement (no new map, no new information, no reason to re-try).
+
+Why the START needs its own verdict
+-----------------------------------
+`triage` asks "is this GOAL reachable". A planner reply can equally condemn the
+START — the robot's own pose — and the two are different questions with opposite
+remedies: one retires a frontier, the other says the frontier was never the
+problem. 203/205 state it outright. 208 does not: NO_VALID_PATH reports that the
+search failed without naming the end that failed it, so a robot parked inside
+its own costmap inflation answers 208 for every goal it is asked about,
+including reachable ones. `start_verdict` reads a reply as evidence about the
+START, and is a SEPARATE function rather than a widening of `triage` (see its
+docstring for why that distinction is load-bearing).
 """
 
 import math
@@ -66,10 +78,38 @@ ENDPOINT_TOL = 0.25
 # is expected, not a bug — 208 is the case the post-hoc re-query backstops.
 UNREACHABLE_CODES = frozenset({204, 206, 208})
 
+# ── planner verdicts that condemn the START ─────────────────────────────────
+# The ROBOT's own pose is at fault and the goal is not implicated at all:
+# 203 START_OUTSIDE_MAP, 205 START_OCCUPIED (both defined in
+# nav2_msgs/action/ComputePathToPose.action). The code IS the diagnosis here —
+# no probe is needed or warranted — and retiring a frontier on one of these
+# would blame the wrong end of the query.
+START_SIDE_CODES = frozenset({203, 205})
+
+# ── planner verdicts that name no endpoint at all ───────────────────────────
+# 208 NO_VALID_PATH reports that the search failed; it does NOT say WHICH
+# endpoint made it fail. That ambiguity is the whole problem: a robot sitting in
+# its own inflation band returns 208 for every goal, reachable ones included, so
+# a 208 taken at face value condemns frontiers that were never at fault. This is
+# therefore the only set that warrants a start probe.
+#
+# 204 GOAL_OUTSIDE_MAP and 206 GOAL_OCCUPIED stay goal-side by construction —
+# they name the goal — and 203/205 are already answered by START_SIDE_CODES, so
+# neither group needs a probe and neither belongs here.
+AMBIGUOUS_CODES = frozenset({208})
+
 # ── verdicts ────────────────────────────────────────────────────────────────
 REACHABLE = 'REACHABLE'          # plan it: the planner reached the point itself
 UNREACHABLE = 'UNREACHABLE'      # retire it: the planner condemned the goal
 INCONCLUSIVE = 'INCONCLUSIVE'    # skip this cycle, retire NOTHING
+
+# Start-side verdicts, from `start_verdict`. Their names deliberately contain
+# neither REACHABLE nor INCONCLUSIVE as a substring: the explorer's log tests
+# (test_frontier_explorer_precheck.py:435 and :444) match verdict names as
+# SUBSTRINGS of logged text, so a name containing either would make those
+# assertions fire on the wrong line.
+START_OK = 'START_OK'            # the planner can propagate a path from this pose
+START_BLOCKED = 'START_BLOCKED'  # the START is at fault, whatever the goal was
 
 
 def endpoint_within(path_xy, requested_xy, tol=ENDPOINT_TOL) -> bool:
@@ -107,6 +147,59 @@ def triage(error_code, path_xy, requested_xy, tol=ENDPOINT_TOL) -> str:
         return UNREACHABLE
     if error_code == 0 and endpoint_within(path_xy, requested_xy, tol):
         return REACHABLE
+    return INCONCLUSIVE
+
+
+def start_verdict(error_code, path_xy) -> str:
+    """Classify one ComputePathToPose result as evidence about the START pose.
+
+    `error_code` is the result's code, or None when the call timed out, was
+    rejected, or the server never answered. Three outcomes:
+      * START_BLOCKED  — the robot's own pose is unplannable.
+      * START_OK       — the planner propagated a path out of this pose.
+      * INCONCLUSIVE   — the reply says nothing either way (reuses triage's
+                         constant: the doctrine is identical, and a caller that
+                         treats INCONCLUSIVE as "retire nothing, retry later"
+                         is already correct for both).
+
+    Why this is a separate function and not a fourth verdict from `triage`
+    ----------------------------------------------------------------------
+    `triage`'s consumers compare its result with `==` and end in a bare `else`
+    (frontier_explorer.py:744-752, and again at :969). A fourth value in THAT
+    vocabulary would not raise anywhere — it would fall into the `else` and be
+    silently counted as inconclusive, and the `== UNREACHABLE` test at :969
+    would silently be False. A separate function cannot reach those comparisons,
+    so the new verdicts can only be observed by call sites written to handle
+    them.
+
+    Why there is NO endpoint check
+    ------------------------------
+    This is where `start_verdict` and `triage` genuinely diverge, and it is
+    deliberate. `triage` must verify the path ENDS at the point asked about,
+    because NavfnPlanner's `tolerance: 0.5` lets a "success" answer about a
+    different point (see the module docstring). Here the question is only
+    whether the planner can propagate out of the current pose AT ALL: a start
+    inside an obstacle or an inflation band yields no path to anywhere, so any
+    non-empty path is proof the start is usable, however far short of the probe
+    target it stops. Applying the endpoint rule here would discard exactly the
+    evidence being sought — the same reply is START_OK here and INCONCLUSIVE
+    through `triage`.
+
+    On the UNREACHABLE_CODES branch
+    -------------------------------
+    Meaningful ONLY for a probe reply. Those codes condemn the point that was
+    asked about, so on a candidate they are goal-side evidence and `triage` is
+    the right reader. Reaching them HERE means the caller already established
+    the original code was ambiguous (AMBIGUOUS_CODES) and then failed to plan to
+    a deliberately benign nearby target as well — at which point the common
+    factor is the start, not the goal.
+    """
+    if error_code in START_SIDE_CODES:
+        return START_BLOCKED
+    if error_code in UNREACHABLE_CODES:
+        return START_BLOCKED
+    if error_code == 0 and path_xy:
+        return START_OK
     return INCONCLUSIVE
 
 

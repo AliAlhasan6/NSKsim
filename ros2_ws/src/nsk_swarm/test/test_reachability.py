@@ -19,9 +19,11 @@ Two things are load-bearing here and neither is obvious from the code:
     OutcomeClassifier already exists to prevent, reintroduced one layer up.
 """
 
-from nsk_swarm.reachability import (ENDPOINT_TOL, INCONCLUSIVE, REACHABLE,
-                                    UNREACHABLE, UNREACHABLE_CODES,
-                                    RetirementLedger, endpoint_within, triage)
+from nsk_swarm.reachability import (AMBIGUOUS_CODES, ENDPOINT_TOL,
+                                    INCONCLUSIVE, REACHABLE, START_BLOCKED,
+                                    START_OK, START_SIDE_CODES, UNREACHABLE,
+                                    UNREACHABLE_CODES, RetirementLedger,
+                                    endpoint_within, start_verdict, triage)
 
 # A goal point and a path that genuinely arrives at it.
 GOAL = (2.0, 3.0)
@@ -103,6 +105,84 @@ def test_no_answer_is_inconclusive():
     # plan_to returns None for a timeout, a rejected goal, or a server that is
     # not up. Silence is never evidence against a frontier.
     assert triage(None, None, GOAL) == INCONCLUSIVE
+
+
+# ── start_verdict ───────────────────────────────────────────────────────────
+#
+# The same replies read as evidence about the START rather than the goal. The
+# vocabulary is separate from triage's on purpose (see start_verdict's
+# docstring): triage's consumers end in a bare `else`, so a fourth value there
+# would be swallowed silently rather than raise.
+
+def test_start_side_codes_are_the_diagnosis_on_their_own():
+    # 203 START_OUTSIDE_MAP and 205 START_OCCUPIED name the robot's own pose.
+    # No probe can add anything — the planner already said which end failed.
+    for code in (203, 205):
+        assert code in START_SIDE_CODES
+        assert start_verdict(code, []) == START_BLOCKED
+
+
+def test_a_failed_probe_blocks_the_start():
+    # Reached only after the caller established the original code was ambiguous
+    # and then could not plan to a deliberately benign nearby target either. The
+    # common factor across both failures is the start.
+    for code in (204, 206, 208):
+        assert start_verdict(code, []) == START_BLOCKED
+
+
+def test_a_path_out_of_the_pose_clears_the_start():
+    assert start_verdict(0, PATH_TO_GOAL) == START_OK
+
+
+def test_a_path_stopping_short_still_clears_the_start():
+    # THE divergence from triage, and the reason start_verdict exists as its own
+    # function. Identical reply, two questions, two right answers: the planner
+    # did not arrive where it was asked (triage: no evidence about that point),
+    # but it propagated a path out of the current pose, which is the ONLY thing
+    # being asked here. Applying triage's endpoint rule would discard exactly
+    # the evidence sought.
+    path = [(0.0, 0.0), (1.0, 1.5), (2.0, 2.6)]     # ends 0.4 m short of GOAL
+    assert start_verdict(0, path) == START_OK
+    assert triage(0, path, GOAL) == INCONCLUSIVE
+
+
+def test_a_success_with_no_path_says_nothing_about_the_start():
+    # A zero-pose success is degenerate: there is no path, so nothing propagated
+    # and nothing is proven either way.
+    assert start_verdict(0, []) == INCONCLUSIVE
+    assert start_verdict(0, None) == INCONCLUSIVE
+
+
+def test_infrastructure_codes_say_nothing_about_the_start():
+    # 200 UNKNOWN, 201 INVALID_PLANNER, 202 TF_ERROR, 207 TIMEOUT — the stack
+    # failed. Reading those as a blocked start would ground a healthy robot.
+    for code in (200, 201, 202, 207):
+        assert start_verdict(code, []) == INCONCLUSIVE
+
+
+def test_no_answer_says_nothing_about_the_start():
+    assert start_verdict(None, None) == INCONCLUSIVE
+
+
+def test_only_no_valid_path_is_ambiguous_about_which_end_failed():
+    # The set that gates the probe. 204/206 name the goal, 203/205 name the
+    # start; only 208 names neither, and the sets must not overlap or a code
+    # would get two contradictory readings.
+    assert AMBIGUOUS_CODES == frozenset({208})
+    assert not (START_SIDE_CODES & UNREACHABLE_CODES)
+    for code in (203, 204, 205, 206):
+        assert code not in AMBIGUOUS_CODES
+
+
+def test_start_verdict_names_cannot_collide_with_the_log_assertions():
+    # test_frontier_explorer_precheck.py:435 and :444 match verdict names as
+    # SUBSTRINGS of logged text ('REACHABLE' already matches 'UNREACHABLE'), so
+    # a start-side name containing either would make those assertions pass on
+    # the wrong log line. Pinned here because the collision is invisible at the
+    # point where such a name would be chosen.
+    for name in (START_OK, START_BLOCKED):
+        assert 'REACHABLE' not in name
+        assert 'INCONCLUSIVE' not in name
 
 
 # ── retirement ledger ───────────────────────────────────────────────────────
