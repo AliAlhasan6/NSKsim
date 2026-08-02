@@ -950,12 +950,22 @@ class FrontierExplorer(BasicNavigator):
         unreachable on that path.
         """
         candidates = self._ordered_candidates(rx, ry, map_seq)
+        # The two labels describe THIS cycle, so they start from the identity
+        # values of the folds explore() runs them through (`and` / `or`). Setting
+        # them here rather than on each return path is what makes that true
+        # structurally: both folds are monotone, so a label inherited from the
+        # previous cycle can never recover, and the streak it lands in reports
+        # that cycle's fault as its own. The parked path below used to write only
+        # one of them and leak the other; any return added later is now correct
+        # without having to remember either.
+        self._last_defer_definitive = True
+        self._last_defer_truncated = False
         if not candidates:
             # Retirements are the only thing that can hide a live frontier here;
             # while any are outstanding the map is not finished, it is pending.
-            # Definitive: every survivor is parked by a verdict already in hand.
+            # Definitive (per the reset above): every survivor is parked by a
+            # verdict already in hand, and no probe loop ran to be truncated.
             if self._retirements.active(map_seq):
-                self._last_defer_definitive = True
                 return DEFER
             return None
         if not self._precheck:

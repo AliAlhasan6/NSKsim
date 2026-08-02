@@ -490,6 +490,42 @@ def test_parked_candidates_defer_definitively():
     assert stub._last_defer_definitive is True
 
 
+def test_a_parked_cycle_does_not_inherit_the_last_cycles_truncation():
+    # The labels belong to the cycle that produced them. The parked path runs no
+    # probe loop, so it cannot have been stopped by a bound — but it used to
+    # write only _last_defer_definitive, leaving _last_defer_truncated at
+    # whatever the previous cycle left. explore() OR-folds that, so one stale
+    # True makes a later streak report "raise PRECHECK_MAX_PROBES" for a cycle
+    # in which the budget never bound. Same defect class as 1ea37bc, one level
+    # down: state outliving the episode it described.
+    planner = FakePlanner({(0.0, 1.0): condemns(208), (0.0, 2.0): condemns(208),
+                           (0.0, 3.0): condemns(208)})
+    stub = make_explorer_stub(THREE, planner)
+    stub._select_goal(0.0, 0.0, 0)          # retires all three
+    # Stand in for the cycle IMMEDIATELY before this one having hit the probe
+    # cap. Planted here, not earlier: a probe-loop cycle in between would write
+    # the flag itself and the parked path would never be the one under test —
+    # which is the realistic shape too (a cap-truncated cycle, then a cycle
+    # whose remaining candidates are all parked).
+    stub._last_defer_truncated = True
+
+    assert stub._select_goal(0.0, 0.0, 1) is DEFER
+    assert stub._last_defer_truncated is False
+    assert stub._last_defer_definitive is True
+
+
+def test_a_dispatching_cycle_does_not_leave_a_stale_truncation_behind():
+    # The same reset covers every exit from _select_goal, not just the parked
+    # one — including the pre-check-OFF path, which returns before any label
+    # could otherwise be written.
+    stub = make_explorer_stub(THREE, FakePlanner(), precheck=False)
+    stub._last_defer_truncated = True
+
+    goal_xy, _f, _n = stub._select_goal(0.0, 0.0, 0)
+    assert goal_xy == (0.0, 1.0)
+    assert stub._last_defer_truncated is False
+
+
 def test_defer_is_definitive_when_the_whole_list_was_examined():
     # The honest halt, and the behaviour escalation must not cost us. Five
     # candidates — fewer than PRECHECK_MAX_PROBES, so the LIST runs out before
@@ -851,10 +887,12 @@ def make_loop_stub(selections, monkeypatch):
             sel, definitive, truncated = (entry + (False,))[:3]
         else:
             sel, definitive, truncated = entry, True, False
-        # A START_BLOCKED cycle makes no claim about the candidates, so the real
-        # _select_goal leaves both flags exactly as it found them. The harness
-        # must too, or a test could pass on state the production path never
-        # writes.
+        # A START_BLOCKED cycle makes no claim about the candidates: the real
+        # _select_goal resets both flags to their identity values on entry and
+        # its start-blocked returns never write them again, so explore() must not
+        # read them on this path at all. The harness leaves whatever was there,
+        # which is the stricter check — a test that passed only because the
+        # harness happened to write a convenient value would be testing itself.
         if sel is not START_BLOCKED_SEL:
             stub._last_defer_definitive = definitive
             stub._last_defer_truncated = truncated
