@@ -172,6 +172,46 @@ PLAN_CALL_WAIT = 2.0      # s wall; per-candidate budget for one ComputePathToPo
                           # park the loop, and a planner that never answers is exactly
                           # the case where sim time is not a safe measuring stick.
 
+# ── start-side probe (fires only on an AMBIGUOUS planner code) ──────────────
+# A planner code condemns an ENDPOINT, and 208 NO_VALID_PATH does not say which
+# one. plan_to sends `use_start: False`, so every query plans from the robot's
+# live costmap pose: when THAT pose is unusable the planner returns 208 for
+# every goal it is asked about, reachable ones included, and a 208 taken at face
+# value retires frontiers that were never at fault. Measured in
+# rung2f_on_explore.log: 42 consecutive attempts from one pose, all 208 with
+# poses=0, two of them to goals 0.70 m away; 21 frontiers retired and the run
+# stopped with 1036 frontier cells outstanding.
+#
+# The discriminator is one query from the current pose to a nearby free cell.
+# If even that fails, the start is the fault and NOTHING may be retired.
+START_PROBE_DIST = 0.5    # m; nominal range of a probe target — far enough to be a
+                          # real query, near enough that failure implicates the start
+START_PROBE_RING = 0.15   # m; a free cell counts as a target when its range is
+                          # START_PROBE_DIST +/- this. Targets are chosen FROM THE MAP
+                          # within that ring, never from a fixed offset table: a fixed
+                          # offset lands in a wall often enough that every target
+                          # failing would say more about the wall than the start.
+START_PROBE_MAX = 3       # targets probed before the start is declared blocked. Spread
+                          # around the robot (see _free_targets_near), because three
+                          # targets sharing one goal-side reason to fail prove nothing.
+START_PROBE_CLEAR = 0.25  # m; required free neighbourhood around a probe target.
+                          # MUST match inflation_radius in EXP_NAV/nav2_robot<id>.yaml
+                          # (EXP_NAV is defined in explore.launch.py:62; the value is
+                          # currently 0.25 for both costmaps) — the explorer does not
+                          # subscribe to any costmap, so this will drift silently if
+                          # that YAML is edited.
+
+# Consecutive START-BLOCKED cycles before the run stops. Its own counter and its
+# own cap, deliberately NOT folded into MAX_CONSEC_DEFERS below: a defer streak
+# is a claim about the frontiers ("the planner condemned every candidate"), and
+# a stuck robot is a claim about the robot. Folding them would both corrupt that
+# verdict and end the run naming the wrong fault. Larger than the defer cap
+# because waiting can genuinely help here — SLAM refreshing the map can clear
+# the cell the robot is standing in — but bounded all the same: recovery
+# (back-up-and-clear) is not implemented, so past this point the loop is only
+# waiting for something it cannot cause.
+MAX_CONSEC_START_BLOCKED = 30
+
 # Consecutive DEFER cycles (see _Defer) before the run STOPS instead of waiting
 # again. Each cycle is individually bounded — _wait_for_fresh_map is timeout-
 # capped and MIN_GOAL_PERIOD floors the interval — so a DEFER loop cannot spin;
@@ -214,6 +254,31 @@ class _Defer:
 
 DEFER = _Defer()
 
+
+class _StartBlocked:
+    """Sentinel: the ROBOT's own pose is unplannable, so this cycle proved nothing.
+
+    Distinct from both of the others, because it is a different kind of claim.
+    ``None`` says the frontiers are exhausted; ``DEFER`` says the planner
+    condemned the candidates it was asked about. This one says the query never
+    reached the question — every candidate fails identically while the start is
+    bad, so no candidate was tested and nothing may be retired.
+
+    Named ``START_BLOCKED_SEL`` rather than ``START_BLOCKED`` because
+    ``reachability.START_BLOCKED`` already exists and is a different thing: that
+    is a verdict STRING about one planner reply, this is a selection outcome.
+    Colliding the names would make ``verdict == START_BLOCKED`` and
+    ``sel is START_BLOCKED`` read alike while meaning different things.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return 'START_BLOCKED'
+
+
+START_BLOCKED_SEL = _StartBlocked()
+
 # ── sim-time wait bounds (RTF-invariant; measured against /clock) ────────────
 # Goal supervision itself lives in GoalSupervisor (progress + sim-timeout, both
 # in sim seconds). The remaining sim-time budget here bounds the map-refresh wait
@@ -237,6 +302,18 @@ GOAL_WALL_GUARD = 900.0    # s wall; a goal running this long is an infra failur
                            # progress — log at ERROR and cancel (never hang on a wedged stack)
 CLOCK_STALL_WARN = 30.0    # s wall with no sim-time advance -> warn once per stall episode
 HEARTBEAT_PERIOD = 2.0     # s wall; min interval between "still waiting on X" heartbeat logs
+
+
+def _sector_gap(sector, taken, n_sectors=8):
+    """Smallest circular distance from `sector` to any sector in `taken`.
+
+    The spread metric behind _free_targets_near's farthest-first walk: sectors
+    are a ring, so 0 and 7 are neighbours, not opposites.
+    """
+    if not taken:
+        return n_sectors
+    return min(min((sector - t) % n_sectors, (t - sector) % n_sectors)
+               for t in taken)
 
 
 class _SensorNode(Node):
@@ -599,6 +676,94 @@ class FrontierExplorer(BasicNavigator):
         return [(wx, wy, n) for wx, wy, n in self._frontier_clusters()
                 if n >= MIN_CLUSTER]
 
+    @staticmethod
+    def _cell_has_clearance(data, w, cx, cy, pad):
+        """True when every cell within `pad` cells of (cx, cy) is free.
+
+        Callers must clamp (cx, cy) to [pad, dim-pad) so the box stays in range.
+        """
+        for ny in range(cy - pad, cy + pad + 1):
+            base = ny * w
+            for nx in range(cx - pad, cx + pad + 1):
+                if not (0 <= data[base + nx] < OCC_THRESH):
+                    return False
+        return True
+
+    def _free_targets_near(self, rx, ry):
+        """Free cells ~START_PROBE_DIST from (rx, ry), spread around the robot.
+
+        Returns up to START_PROBE_MAX world points ``[(x, y), ...]``: free cells
+        whose range from the robot lies within START_PROBE_RING of
+        START_PROBE_DIST and which carry START_PROBE_CLEAR of free neighbourhood.
+        ``[]`` when no map has arrived or nothing qualifies — which is not
+        evidence about anything, and the caller reads it as INCONCLUSIVE.
+
+        Why spread rather than simply the nearest N: these targets exist to test
+        the START, so they must not all fail for one shared goal-side reason.
+        Three cells clustered against the same wall would do exactly that and
+        report a wall as a stuck robot. One candidate per 45-degree sector, then
+        a farthest-first walk over the sector ring, keeps them pointing at
+        genuinely different places.
+
+        Why the SLAM map rather than a costmap: it is the only grid this node
+        subscribes to (see START_PROBE_CLEAR), and its lack of an inflation layer
+        is precisely what makes a failed probe informative. plan_to plans from
+        the robot's live COSTMAP pose either way, so if the start is unusable
+        every target fails regardless of how benign it looks in this grid.
+
+        Grid arithmetic is _frontier_clusters': row-major ``y * w + x``, free is
+        ``0 <= v < OCC_THRESH``, cell centre is ``origin + (i + 0.5) * res``.
+        """
+        g, _ = self.sensor.get_map()
+        if g is None:
+            return []
+        w, h = g.info.width, g.info.height
+        if w < 3 or h < 3:
+            return []
+        res = g.info.resolution
+        ox = g.info.origin.position.x
+        oy = g.info.origin.position.y
+        data = g.data
+
+        lo = START_PROBE_DIST - START_PROBE_RING
+        hi = START_PROBE_DIST + START_PROBE_RING
+        pad = max(1, int(round(START_PROBE_CLEAR / res)))   # clearance, in cells
+        reach = int(hi / res) + 1                           # window half-width, cells
+        rcx = int((rx - ox) / res)
+        rcy = int((ry - oy) / res)
+
+        best = {}      # sector -> (|range - nominal|, wx, wy)
+        for cy in range(max(pad, rcy - reach), min(h - pad, rcy + reach + 1)):
+            row = cy * w
+            wy = oy + (cy + 0.5) * res
+            for cx in range(max(pad, rcx - reach), min(w - pad, rcx + reach + 1)):
+                if not (0 <= data[row + cx] < OCC_THRESH):
+                    continue
+                wx = ox + (cx + 0.5) * res
+                d = math.hypot(wx - rx, wy - ry)
+                if not lo <= d <= hi:
+                    continue
+                sector = int((math.atan2(wy - ry, wx - rx) + math.pi) /
+                             (math.pi / 4)) % 8
+                score = abs(d - START_PROBE_DIST)
+                # Cheapest tests first: the clearance box is only paid for a cell
+                # that would actually win its sector.
+                if sector in best and best[sector][0] <= score:
+                    continue
+                if not self._cell_has_clearance(data, w, cx, cy, pad):
+                    continue
+                best[sector] = (score, wx, wy)
+
+        # Nearest-to-nominal first, then each next target as far around the ring
+        # from the ones already taken as the surviving sectors allow.
+        pool = sorted(best.items(), key=lambda kv: kv[1][0])
+        chosen = [pool.pop(0)] if pool else []
+        while pool and len(chosen) < START_PROBE_MAX:
+            taken = [s for s, _v in chosen]
+            pool.sort(key=lambda kv: (-_sector_gap(kv[0], taken), kv[1][0]))
+            chosen.append(pool.pop(0))
+        return [(v[1], v[2]) for _s, v in chosen]
+
     def _blacklisted(self, x, y):
         return any(math.hypot(x - bx, y - by) < BLACKLIST_RADIUS
                    for bx, by in self._blacklist)
@@ -648,14 +813,21 @@ class FrontierExplorer(BasicNavigator):
                  (cx, cy), n)]
 
     def _probe(self, goal_xy, idx):
-        """Pre-check one candidate goal against the planner. Returns a verdict.
+        """Pre-check one candidate goal against the planner.
 
-        One ComputePathToPose round trip, triaged into REACHABLE / UNREACHABLE /
-        INCONCLUSIVE (see nsk_swarm.reachability). Logs the planner's own
-        planning_time, error_code and error_msg for every call — that is the run
-        data the probe budget gets tuned from (PRECHECK_MAX_PROBES and
-        PRECHECK_CYCLE_BUDGET), and without it a pre-check that quietly times
-        out every cycle is indistinguishable from one that is working.
+        Returns ``(verdict, error_code)``: the triage of one ComputePathToPose
+        round trip into REACHABLE / UNREACHABLE / INCONCLUSIVE (see
+        nsk_swarm.reachability), plus the planner's raw code — ``None`` when
+        there was no answer. The CODE is returned alongside the verdict because
+        the verdict alone cannot say which endpoint the planner condemned: 208
+        NO_VALID_PATH triages as UNREACHABLE but names neither end, so selection
+        has to see the number to know whether a start probe is warranted.
+
+        Logs the planner's own planning_time, error_code and error_msg for every
+        call — that is the run data the probe budget gets tuned from
+        (PRECHECK_MAX_PROBES and PRECHECK_CYCLE_BUDGET), and without it a
+        pre-check that quietly times out every cycle is indistinguishable from
+        one that is working.
         """
         gx, gy = goal_xy
         reply = self.sensor.plan_to(gx, gy, self.map_frame)
@@ -663,7 +835,7 @@ class FrontierExplorer(BasicNavigator):
             self.info(f'[robot_{self.robot_id}] precheck cand#{idx} '
                       f'({gx:.2f}, {gy:.2f}) -> no answer within '
                       f'{PLAN_CALL_WAIT:.1f}s wall — INCONCLUSIVE')
-            return reachability.INCONCLUSIVE
+            return reachability.INCONCLUSIVE, None
 
         code, path_xy, ptime, msg = reply
         verdict = triage(code, path_xy, goal_xy)
@@ -671,7 +843,73 @@ class FrontierExplorer(BasicNavigator):
         self.info(f'[robot_{self.robot_id}] precheck cand#{idx} '
                   f'({gx:.2f}, {gy:.2f}) -> {verdict} error_code={code} '
                   f'planning_time={ptime:.3f}s poses={len(path_xy)}{msg_note}')
-        return verdict
+        return verdict, code
+
+    def _start_probe(self, rx, ry, deadline=None):
+        """Ask whether the planner can plan OUT of the robot's current pose.
+
+        The discriminator for an ambiguous planner code (AMBIGUOUS_CODES — 208
+        NO_VALID_PATH, which reports that the search failed without naming the
+        end that failed it). Targets come from _free_targets_near, so they are
+        real free cells about START_PROBE_DIST away rather than a fixed offset.
+
+        Returns one of:
+          * ``START_OK`` — the first target that answers with a path. Short
+            circuits: the remaining targets are not probed. No endpoint check is
+            applied, deliberately — any path proves the pose can be planned out
+            of, which is the entire question (reachability.start_verdict).
+          * ``START_BLOCKED`` — every target came back condemned. The only
+            verdict that may stop a cycle from retiring anything.
+          * ``INCONCLUSIVE`` — no target could be chosen, a target went
+            unanswered, one answered with an infrastructure code, or the cycle
+            deadline arrived. Nothing was established, so nothing may be retired
+            on it either way.
+
+        Bounded by construction: at most START_PROBE_MAX round trips of
+        PLAN_CALL_WAIT each, and `deadline` (the caller's PRECHECK_CYCLE_BUDGET)
+        is checked BEFORE each one, the same discipline the candidate loop uses.
+        """
+        targets = self._free_targets_near(rx, ry)
+        if not targets:
+            self.info(f'[robot_{self.robot_id}] start probe: no free cell '
+                      f'{START_PROBE_DIST - START_PROBE_RING:.2f}-'
+                      f'{START_PROBE_DIST + START_PROBE_RING:.2f} m from '
+                      f'({rx:.2f}, {ry:.2f}) with {START_PROBE_CLEAR:.2f} m '
+                      f'clearance — INCONCLUSIVE')
+            return reachability.INCONCLUSIVE
+
+        total = len(targets)
+        for n, (tx, ty) in enumerate(targets, start=1):
+            if deadline is not None and time.monotonic() >= deadline:
+                self.info(f'[robot_{self.robot_id}] start probe {n}/{total} '
+                          f'skipped: cycle budget spent — INCONCLUSIVE')
+                return reachability.INCONCLUSIVE
+
+            reply = self.sensor.plan_to(tx, ty, self.map_frame)
+            if reply is None:
+                self.info(f'[robot_{self.robot_id}] start probe {n}/{total} '
+                          f'({tx:.2f}, {ty:.2f}) -> no answer within '
+                          f'{PLAN_CALL_WAIT:.1f}s wall — INCONCLUSIVE')
+                return reachability.INCONCLUSIVE
+
+            code, path_xy, ptime, msg = reply
+            verdict = reachability.start_verdict(code, path_xy)
+            msg_note = f' error_msg="{msg}"' if msg else ''
+            self.info(f'[robot_{self.robot_id}] start probe {n}/{total} '
+                      f'({tx:.2f}, {ty:.2f}) -> {verdict} error_code={code} '
+                      f'planning_time={ptime:.3f}s poses={len(path_xy)}'
+                      f'{msg_note}')
+            if verdict == reachability.START_OK:
+                return reachability.START_OK
+            if verdict != reachability.START_BLOCKED:
+                # An infrastructure answer about one target leaves the start
+                # unestablished; claiming BLOCKED on it would be the same
+                # over-reading this whole path exists to prevent.
+                return reachability.INCONCLUSIVE
+
+        # The loop can only end here with every target condemned — the other two
+        # outcomes return early.
+        return reachability.START_BLOCKED
 
     def _select_goal(self, rx, ry, map_seq=0):
         """Choose where to drive next given the robot at (rx, ry).
@@ -687,6 +925,13 @@ class FrontierExplorer(BasicNavigator):
             cycle the pre-check could not resolve is not evidence the maze is
             mapped, and collapsing the two would end the run early with work
             outstanding.
+          * ``START_BLOCKED_SEL`` — the ROBOT's pose is unplannable, so no
+            candidate was really judged and NOTHING is retired. Returned the
+            moment that is established, abandoning the rest of the cycle: while
+            the start is bad every candidate fails identically, so continuing to
+            probe would only manufacture more false evidence. Distinct from
+            ``DEFER`` because it is a claim about the robot rather than about the
+            frontiers, and it must not feed the defer streak's verdict.
 
         Every DEFER also sets ``_last_defer_definitive``: True only when the
         cycle asked about EVERY candidate and got a definitive planner verdict
@@ -730,6 +975,8 @@ class FrontierExplorer(BasicNavigator):
         probed = 0
         deadline = time.monotonic() + PRECHECK_CYCLE_BUDGET
         truncated = None            # None => the list itself ran out
+        start_state = None          # this cycle's start verdict; probed at most ONCE,
+                                    # however many candidates report an ambiguous code
         for idx, (goal_xy, frontier_xy, ncells) in enumerate(candidates):
             if probed >= PRECHECK_MAX_PROBES:
                 truncated = f'probe cap {PRECHECK_MAX_PROBES}'
@@ -740,15 +987,58 @@ class FrontierExplorer(BasicNavigator):
                 truncated = f'{PRECHECK_CYCLE_BUDGET:.0f}s wall budget'
                 break
             probed += 1
-            verdict = self._probe(goal_xy, idx)
+            verdict, code = self._probe(goal_xy, idx)
             if verdict == reachability.REACHABLE:
                 return goal_xy, frontier_xy, ncells
+
+            # The planner named the START itself (203 START_OUTSIDE_MAP, 205
+            # START_OCCUPIED). No probe can add anything — the code IS the
+            # diagnosis — and the goal was never judged, so nothing retires.
+            if code in reachability.START_SIDE_CODES:
+                self.warn(f'[robot_{self.robot_id}] start pose '
+                          f'({rx:.2f}, {ry:.2f}) unplannable — planner returned '
+                          f'error_code={code} for cand#{idx}, which condemns the '
+                          f'START, not the goal. The START is at fault: retiring '
+                          f'NOTHING and leaving all {len(candidates)} candidates '
+                          f'eligible.')
+                return START_BLOCKED_SEL
+
             if verdict == reachability.UNREACHABLE:
+                # 208 NO_VALID_PATH triages as UNREACHABLE but names no endpoint,
+                # so before condemning the frontier, ask whether the robot can
+                # plan out of where it is standing at all. Once per cycle: the
+                # answer is a property of the pose, not of the candidate, and
+                # every candidate would otherwise re-ask it identically.
+                if code in reachability.AMBIGUOUS_CODES:
+                    if start_state is None:
+                        start_state = self._start_probe(rx, ry, deadline)
+                    if start_state == reachability.START_BLOCKED:
+                        self.warn(
+                            f'[robot_{self.robot_id}] start pose '
+                            f'({rx:.2f}, {ry:.2f}) unplannable — every probe to a '
+                            f'free cell ~{START_PROBE_DIST:.1f} m out failed too, '
+                            f'so error_code={code} on cand#{idx} condemns the '
+                            f'START, not the goal. The START is at fault: '
+                            f'retiring NOTHING and leaving all {len(candidates)} '
+                            f'candidates eligible.')
+                        return START_BLOCKED_SEL
+                    if start_state != reachability.START_OK:
+                        # Start unestablished, so the 208 is unattributed. It is
+                        # not evidence against this frontier and must not retire
+                        # it — the same doctrine INCONCLUSIVE follows everywhere.
+                        inconclusive += 1
+                        continue
+
                 until = self._retirements.retire(frontier_xy, map_seq)
+                if start_state == reachability.START_OK:
+                    why = ('start probe cleared the robot pose, so the GOAL is '
+                           'at fault')
+                else:
+                    why = f'error_code={code} names the GOAL'
                 self.warn(f'[robot_{self.robot_id}] frontier '
                           f'({frontier_xy[0]:.2f}, {frontier_xy[1]:.2f}) '
                           f'unplannable — retiring until map #{until} '
-                          f'(now #{map_seq}, TTL {RETIRE_TTL_MAPS} maps)')
+                          f'(now #{map_seq}, TTL {RETIRE_TTL_MAPS} maps); {why}')
             else:
                 inconclusive += 1
 
@@ -1121,6 +1411,12 @@ class FrontierExplorer(BasicNavigator):
         consec_defers = 0
         defer_definitive = True
         defer_truncated = False
+        # Start-blocked cycles are counted SEPARATELY and on purpose: they make no
+        # claim about the frontiers, so folding them into the defer streak would
+        # both dilute that streak's verdict and end the run naming the wrong
+        # fault. They neither advance nor reset the defer state — a defer streak
+        # interrupted by a stuck-robot cycle is still the same streak.
+        consec_start_blocked = 0
         while rclpy.ok():
             pose = self.sensor.robot_xy()
             if pose is None:
@@ -1151,6 +1447,19 @@ class FrontierExplorer(BasicNavigator):
                 # prevent. So the streak is capped, and which of the two ways it
                 # ends is decided by what the deferrals were made of — the same
                 # WORLD-vs-STACK distinction OutcomeClassifier draws for goals.
+                #
+                # The two labels are bound to the COUNTER, not to the loop: a
+                # streak begins wherever consec_defers is 0, so they are re-armed
+                # here rather than only where a streak ends. Both folds are
+                # monotone — `and` can only lose True, `or` can only gain True —
+                # so a label carried in from a previous streak can never recover,
+                # and the run would report that streak's fault as this one's.
+                # Re-arming to the folds' identity values keeps the fold below
+                # unchanged and makes any future reset of consec_defers correct
+                # by construction.
+                if consec_defers == 0:
+                    defer_definitive = True
+                    defer_truncated = False
                 consec_defers += 1
                 defer_definitive = defer_definitive and self._last_defer_definitive
                 defer_truncated = defer_truncated or self._last_defer_truncated
@@ -1203,6 +1512,47 @@ class FrontierExplorer(BasicNavigator):
                 self._wait_for_fresh_map(seq_at_select)
                 self._sleep(MIN_GOAL_PERIOD)
                 continue
+            if sel is START_BLOCKED_SEL:
+                # The robot's own pose is unplannable, so this cycle collected no
+                # evidence about any frontier and retired nothing. Waiting is the
+                # right move — SLAM refreshing the map can clear the cell the
+                # robot is standing in, which is more than a DEFER can hope for,
+                # since the robot does not move during either.
+                #
+                # This ENDS any defer streak in progress. A defer streak is a
+                # claim about selection productivity — "the planner condemned
+                # every candidate, N cycles running" — and a stuck robot is a
+                # different fault interrupting it, not another instance of it.
+                # Leaving the count standing would let 9 defers, any number of
+                # start-blocked cycles, and 1 more defer trip the defer cap and
+                # report a selection fault for cycles that were never contiguous.
+                # The two LABELS are not reset here: they are re-armed where the
+                # next streak begins (see the DEFER branch above), so they cannot
+                # describe a streak they did not belong to.
+                #
+                # Not an escape hatch for the caps: consec_start_blocked is reset
+                # only by a dispatch, never by a defer, so alternating
+                # defer/start-blocked still terminates — on
+                # MAX_CONSEC_START_BLOCKED with the stuck-robot ERROR, which is
+                # the correct diagnosis for exactly that pattern.
+                consec_defers = 0
+                consec_start_blocked += 1
+                if consec_start_blocked >= MAX_CONSEC_START_BLOCKED:
+                    self.error(
+                        f'[robot_{self.robot_id}] {consec_start_blocked} '
+                        f'consecutive selection cycles ended with an unplannable '
+                        f'START pose — the robot is stuck at ({rx:.2f}, {ry:.2f}) '
+                        f'and no frontier evidence was collected in any of them; '
+                        f'nothing was retired. This is a STUCK ROBOT, not a '
+                        f'completed map: the frontiers were never judged. '
+                        f'Recovery (back-up-and-clear) is not implemented, so the '
+                        f'run cannot free itself; check the costmap around the '
+                        f'pose above (inflation_radius vs robot_radius).')
+                    self._log_termination_audit(goal_num)
+                    return False
+                self._wait_for_fresh_map(seq_at_select)
+                self._sleep(MIN_GOAL_PERIOD)
+                continue
             (gx, gy), (fx, fy), ncells = sel
 
             # Fix: don't re-dispatch a goal essentially identical to the last one.
@@ -1241,6 +1591,8 @@ class FrontierExplorer(BasicNavigator):
             consec_defers = 0
             defer_definitive = True
             defer_truncated = False
+            # A dispatch also proves the robot could plan out of where it was.
+            consec_start_blocked = 0
             dist = math.hypot(gx - rx, gy - ry)
             self.info(f'[robot_{self.robot_id}] goal #{goal_num} -> ({gx:.2f}, {gy:.2f}) '
                       f'[{ncells} cells, frontier ({fx:.2f}, {fy:.2f}), {dist:.2f} m away]')

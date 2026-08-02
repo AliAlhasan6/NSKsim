@@ -20,6 +20,7 @@ BasicNavigator. The planner is a scripted fake, so no Nav2 runs and every
 verdict is exact rather than timing-dependent.
 """
 
+import math
 import os
 from types import SimpleNamespace
 
@@ -31,11 +32,13 @@ import pytest
 # installs Nav2 deliberately, so a miss there is fatal rather than skipped.
 try:
     from nsk_swarm import frontier_explorer as fx
-    from nsk_swarm.frontier_explorer import DEFER, FrontierExplorer
+    from nsk_swarm import reachability
+    from nsk_swarm.frontier_explorer import (DEFER, START_BLOCKED_SEL,
+                                             FrontierExplorer)
 except ImportError:
     if os.environ.get('NSK_REQUIRE_NAV2', '') not in ('', '0', 'false'):
         raise
-    fx = FrontierExplorer = DEFER = None
+    fx = FrontierExplorer = DEFER = START_BLOCKED_SEL = reachability = None
 
 pytestmark = pytest.mark.skipif(
     fx is None,
@@ -82,10 +85,21 @@ def short_of(x, y, gap=0.4):
     return (0, [(0.0, 0.0), (x, y - gap)], 0.02, '')
 
 
-def make_explorer_stub(centroids, planner, precheck=True, blacklist=None):
+def make_explorer_stub(centroids, planner, precheck=True, blacklist=None,
+                       start_probe=None):
     """Bind the real selection methods to a stub with a scripted frontier set.
 
     `centroids` is what _frontier_centroids() would return: [(x, y, ncells)].
+
+    `start_probe` is the verdict the start probe returns, defaulting to START_OK
+    — "the robot's pose is fine", which is what every pre-existing test was
+    written against. The probe is STUBBED rather than bound for real on purpose:
+    a real one issues its own plan_to calls, and several tests assert
+    `planner.asked` exactly or count calls against the wall budget, so a probe
+    silently inserting round trips would break assertions that are load-bearing
+    regression pins for rung2c. Each call is recorded in `stub.start_probes`, so
+    "asked at most once per cycle" is still assertable. Tests that exercise the
+    real _start_probe bind it explicitly.
     """
     stub = SimpleNamespace(
         robot_id=0,
@@ -96,11 +110,16 @@ def make_explorer_stub(centroids, planner, precheck=True, blacklist=None):
         _retirements=fx.RetirementLedger(fx.BLACKLIST_RADIUS,
                                          fx.RETIRE_TTL_MAPS),
         _hb_last={},
+        start_probes=[],
         logged=[])
     stub.info = lambda msg: stub.logged.append(('INFO', msg))
     stub.warn = lambda msg: stub.logged.append(('WARN', msg))
     stub.error = lambda msg: stub.logged.append(('ERROR', msg))
     stub._frontier_centroids = lambda: list(centroids)
+    verdict = reachability.START_OK if start_probe is None else start_probe
+    stub._start_probe = lambda rx, ry, deadline=None: (
+        stub.start_probes.append((rx, ry)) or verdict)
+    stub._free_targets_near = lambda rx, ry: [(0.5, 0.0)]
     for name in ('_select_goal', '_ordered_candidates', '_probe',
                  '_blacklisted', '_hb'):
         setattr(stub, name, getattr(FrontierExplorer, name).__get__(stub))
@@ -508,6 +527,263 @@ def test_an_escalated_cycle_with_unanswered_probes_is_not_definitive():
     assert stub._retirements.active(0) == 4
 
 
+# ── the start-side probe ────────────────────────────────────────────────────
+#
+# rung2f_on_explore.log: 42 consecutive plan attempts from ONE pose, every one
+# error_code=208 with poses=0, two of them to goals 0.70 m away. The START was
+# unplannable — the robot was inside its own costmap inflation — so every
+# candidate failed identically, and selection charged each failure to the
+# frontier. 21 frontiers were retired, the candidate pool starved, and the run
+# halted with 1036 frontier cells outstanding. A 208 may not condemn a frontier
+# until the start has been cleared.
+
+def condemn_all_with(centroids, code):
+    """A planner condemning every centroid with a specific error code."""
+    return FakePlanner({(x, y): condemns(code) for x, y, _n in centroids})
+
+
+def test_a_blocked_start_returns_the_sentinel_and_retires_nothing():
+    many = line_of(4)
+    stub = make_explorer_stub(many, condemn_all(many),
+                              start_probe=reachability.START_BLOCKED)
+
+    assert stub._select_goal(0.0, 0.0, 0) is START_BLOCKED_SEL
+    # THE fix: not one frontier retired, where the old code retired every
+    # candidate it probed.
+    assert stub._retirements.active(0) == 0
+    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+    assert any('START is at fault' in m for m in warns), warns
+    # The goal-side grep key must NOT appear — prior log analysis counts it.
+    assert not any('unplannable — retiring until map #' in m for m in warns)
+
+
+def test_a_blocked_start_abandons_the_rest_of_the_cycle():
+    # While the start is bad every candidate fails identically, so continuing to
+    # probe only manufactures more false evidence (and, in rung2f, more
+    # retirements). One candidate, one start probe, done.
+    many = line_of(8)
+    planner = condemn_all(many)
+    stub = make_explorer_stub(many, planner,
+                              start_probe=reachability.START_BLOCKED)
+
+    assert stub._select_goal(0.0, 0.0, 0) is START_BLOCKED_SEL
+    assert planner.asked == [(0.0, 1.0)]
+    assert len(stub.start_probes) == 1
+
+
+def test_a_cleared_start_retires_exactly_as_before():
+    # Regression pin on the goal-side path: when the probe says the pose is
+    # fine, a 208 is real evidence about the goal and behaves as it always has.
+    many = line_of(3)
+    stub = make_explorer_stub(many, condemn_all(many))     # start_probe=START_OK
+
+    assert stub._select_goal(0.0, 0.0, 0) is DEFER
+    assert stub._retirements.active(0) == 3
+    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+    assert all('unplannable — retiring until map #' in m for m in warns), warns
+    # ...and it now SAYS why it blamed the goal rather than assuming it.
+    assert any('start probe cleared the robot pose' in m for m in warns), warns
+
+
+def test_the_start_is_probed_at_most_once_per_cycle():
+    # The start verdict is a property of the pose, not of the candidate. Asking
+    # per candidate would cost a round trip each and could report two different
+    # answers within one cycle.
+    many = line_of(6)
+    stub = make_explorer_stub(many, condemn_all(many))
+
+    assert stub._select_goal(0.0, 0.0, 0) is DEFER
+    assert stub._retirements.active(0) == 6
+    assert stub.start_probes == [(0.0, 0.0)]
+
+
+def test_goal_side_codes_never_probe_the_start():
+    # 204 GOAL_OUTSIDE_MAP and 206 GOAL_OCCUPIED name the goal, so the start is
+    # not implicated and a probe would be a wasted round trip every cycle.
+    for code in (204, 206):
+        many = line_of(3)
+        stub = make_explorer_stub(many, condemn_all_with(many, code))
+
+        assert stub._select_goal(0.0, 0.0, 0) is DEFER
+        assert stub.start_probes == []
+        assert stub._retirements.active(0) == 3
+
+
+def test_start_side_codes_never_probe_and_never_retire():
+    # 203 START_OUTSIDE_MAP / 205 START_OCCUPIED: the code IS the diagnosis, so
+    # there is nothing to probe — and the goal was never judged, so there is
+    # nothing to retire either.
+    for code in (203, 205):
+        many = line_of(3)
+        planner = condemn_all_with(many, code)
+        stub = make_explorer_stub(many, planner)
+
+        assert stub._select_goal(0.0, 0.0, 0) is START_BLOCKED_SEL
+        assert stub.start_probes == []
+        assert stub._retirements.active(0) == 0
+        assert planner.asked == [(0.0, 1.0)]
+        warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+        assert any('START is at fault' in m for m in warns), warns
+
+
+def test_an_unattributed_208_retires_nothing_and_taints_the_cycle():
+    # The probe could not establish the start either way, so the 208 belongs to
+    # neither endpoint. Retiring on it would be exactly the over-reading this
+    # path exists to prevent, and the cycle cannot claim to be definitive.
+    many = line_of(3)
+    stub = make_explorer_stub(many, condemn_all(many),
+                              start_probe=reachability.INCONCLUSIVE)
+
+    assert stub._select_goal(0.0, 0.0, 0) is DEFER
+    assert stub._retirements.active(0) == 0
+    assert stub._last_defer_definitive is False
+    # Still only one probe: an unestablished start is unestablished for every
+    # candidate in the cycle.
+    assert len(stub.start_probes) == 1
+
+
+# ── _start_probe itself ─────────────────────────────────────────────────────
+
+def make_probe_stub(planner, targets):
+    """Bind the REAL _start_probe over a scripted target list and planner."""
+    stub = SimpleNamespace(robot_id=0, map_frame='robot_0/map',
+                           sensor=SimpleNamespace(plan_to=planner.plan_to),
+                           logged=[])
+    stub.info = lambda msg: stub.logged.append(('INFO', msg))
+    stub.warn = lambda msg: stub.logged.append(('WARN', msg))
+    stub._free_targets_near = lambda rx, ry: list(targets)
+    stub._start_probe = FrontierExplorer._start_probe.__get__(stub)
+    return stub
+
+
+TARGETS = [(0.5, 0.0), (0.0, 0.5), (-0.5, 0.0)]
+
+
+def test_the_first_reachable_target_clears_the_start_and_stops_probing():
+    planner = FakePlanner({(0.5, 0.0): condemns(208),
+                           (0.0, 0.5): reaches(0.0, 0.5)})
+    stub = make_probe_stub(planner, TARGETS)
+
+    assert stub._start_probe(0.0, 0.0) == reachability.START_OK
+    assert planner.asked == [(0.5, 0.0), (0.0, 0.5)]
+
+
+def test_a_short_path_still_clears_the_start():
+    # The divergence from candidate probing: the target is not where we are
+    # going, it is a question about the pose. Any path answers it.
+    planner = FakePlanner({(0.5, 0.0): short_of(0.5, 0.0)})
+    stub = make_probe_stub(planner, TARGETS)
+
+    assert stub._start_probe(0.0, 0.0) == reachability.START_OK
+
+
+def test_every_target_condemned_blocks_the_start():
+    planner = FakePlanner({t: condemns(208) for t in TARGETS})
+    stub = make_probe_stub(planner, TARGETS)
+
+    assert stub._start_probe(0.0, 0.0) == reachability.START_BLOCKED
+    assert planner.asked == TARGETS
+
+
+def test_an_unanswered_target_is_inconclusive_not_blocked():
+    # A silent planner is evidence about the stack. Reading it as a stuck robot
+    # would halt a healthy run on the start-blocked cap.
+    planner = FakePlanner({(0.5, 0.0): condemns(208), (0.0, 0.5): None})
+    stub = make_probe_stub(planner, TARGETS)
+
+    assert stub._start_probe(0.0, 0.0) == reachability.INCONCLUSIVE
+    assert planner.asked == [(0.5, 0.0), (0.0, 0.5)]
+
+
+def test_an_infrastructure_reply_is_inconclusive_not_blocked():
+    planner = FakePlanner({(0.5, 0.0): (202, [], 0.01, 'tf')})    # TF_ERROR
+    stub = make_probe_stub(planner, TARGETS)
+
+    assert stub._start_probe(0.0, 0.0) == reachability.INCONCLUSIVE
+
+
+def test_no_usable_target_is_inconclusive():
+    # An all-unknown or wall-bound neighbourhood yields no target. That is not
+    # evidence the robot is stuck.
+    planner = FakePlanner()
+    stub = make_probe_stub(planner, [])
+
+    assert stub._start_probe(0.0, 0.0) == reachability.INCONCLUSIVE
+    assert planner.asked == []
+
+
+def test_the_cycle_deadline_stops_the_probe():
+    planner = FakePlanner({t: condemns(208) for t in TARGETS})
+    stub = make_probe_stub(planner, TARGETS)
+    clock = FakeClock()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fx, 'time', clock)
+        # Deadline already past: not one round trip may be issued.
+        assert stub._start_probe(0.0, 0.0, deadline=-1.0) == \
+            reachability.INCONCLUSIVE
+    assert planner.asked == []
+
+
+# ── _free_targets_near ──────────────────────────────────────────────────────
+
+def fake_grid(w, h, res=0.05, ox=-1.0, oy=-1.0, fill=0):
+    """A minimal OccupancyGrid stand-in filled with one value."""
+    return SimpleNamespace(
+        info=SimpleNamespace(
+            width=w, height=h, resolution=res,
+            origin=SimpleNamespace(position=SimpleNamespace(x=ox, y=oy))),
+        data=[fill] * (w * h))
+
+
+def make_grid_stub(grid):
+    stub = SimpleNamespace(robot_id=0,
+                           sensor=SimpleNamespace(get_map=lambda: (grid, 0)))
+    stub._cell_has_clearance = FrontierExplorer._cell_has_clearance
+    stub._free_targets_near = FrontierExplorer._free_targets_near.__get__(stub)
+    return stub
+
+
+def test_targets_come_from_the_map_and_sit_in_the_ring():
+    stub = make_grid_stub(fake_grid(41, 41))            # 2.05 m of free space
+    targets = stub._free_targets_near(0.0, 0.0)
+
+    assert len(targets) == fx.START_PROBE_MAX
+    lo = fx.START_PROBE_DIST - fx.START_PROBE_RING
+    hi = fx.START_PROBE_DIST + fx.START_PROBE_RING
+    for tx, ty in targets:
+        assert lo <= math.hypot(tx, ty) <= hi, (tx, ty)
+
+
+def test_targets_are_spread_around_the_robot():
+    # Three targets bunched on one side would all fail for one goal-side reason
+    # and report a wall as a stuck robot.
+    stub = make_grid_stub(fake_grid(41, 41))
+    angles = [math.atan2(ty, tx) for tx, ty in stub._free_targets_near(0.0, 0.0)]
+
+    for i, a in enumerate(angles):
+        for b in angles[i + 1:]:
+            sep = abs(math.atan2(math.sin(a - b), math.cos(a - b)))
+            assert sep >= math.pi / 4, angles
+
+
+def test_no_map_yields_no_targets():
+    stub = SimpleNamespace(sensor=SimpleNamespace(get_map=lambda: (None, 0)))
+    stub._free_targets_near = FrontierExplorer._free_targets_near.__get__(stub)
+    assert stub._free_targets_near(0.0, 0.0) == []
+
+
+def test_an_occupied_or_unknown_neighbourhood_yields_no_targets():
+    for fill in (100, -1):          # walled in / never mapped
+        stub = make_grid_stub(fake_grid(41, 41, fill=fill))
+        assert stub._free_targets_near(0.0, 0.0) == []
+
+
+def test_a_grid_too_small_to_hold_the_ring_yields_no_targets():
+    stub = make_grid_stub(fake_grid(5, 5))
+    assert stub._free_targets_near(0.0, 0.0) == []
+
+
 # ── the defer cap: the run must always end ──────────────────────────────────
 #
 # Binds the REAL explore() with everything around it stubbed out. Without a cap
@@ -575,8 +851,13 @@ def make_loop_stub(selections, monkeypatch):
             sel, definitive, truncated = (entry + (False,))[:3]
         else:
             sel, definitive, truncated = entry, True, False
-        stub._last_defer_definitive = definitive
-        stub._last_defer_truncated = truncated
+        # A START_BLOCKED cycle makes no claim about the candidates, so the real
+        # _select_goal leaves both flags exactly as it found them. The harness
+        # must too, or a test could pass on state the production path never
+        # writes.
+        if sel is not START_BLOCKED_SEL:
+            stub._last_defer_definitive = definitive
+            stub._last_defer_truncated = truncated
         return sel
 
     stub._select_goal = select
@@ -699,3 +980,102 @@ def test_a_dispatched_goal_also_resets_the_truncation_flag(monkeypatch):
     # The probe budget was not the fault in THIS streak and must not be named.
     assert not any('ran out of probe budget' in m for m in errors), errors
     assert stub.audits == [1]
+
+
+# ── the start-blocked cap: a stuck robot is not a defer ─────────────────────
+
+def test_an_endless_start_blocked_streak_stops_on_its_own_cap(monkeypatch):
+    # A stuck robot must end the run too — recovery is not implemented, so past
+    # some point the loop is only waiting for something it cannot cause. But it
+    # must end on ITS cap with ITS message: the defer messages would send the
+    # operator to raise PRECHECK_MAX_PROBES or suspect planner_server, when the
+    # planner was answering correctly the whole time.
+    stub = make_loop_stub([START_BLOCKED_SEL], monkeypatch)
+    assert stub.explore() is False
+
+    errors = [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert any(f'{fx.MAX_CONSEC_START_BLOCKED} consecutive' in m
+               and 'STUCK ROBOT' in m for m in errors), errors
+    # None of the defer vocabulary: this streak said nothing about candidates.
+    assert not any('produced no dispatchable goal' in m for m in errors), errors
+    assert not any('ran out of probe budget' in m for m in errors), errors
+    assert stub.audits == [0]
+
+
+def test_start_blocked_cycles_do_not_count_toward_the_defer_cap(monkeypatch):
+    # The two counters are separate. MAX_CONSEC_DEFERS-1 defers followed by a
+    # run of start-blocked cycles must reach neither cap — if start-blocked
+    # cycles counted as defers, the very first one would trip the defer cap and
+    # the run would report "the planner condemned every candidate" about cycles
+    # in which the planner was never usefully asked.
+    script = ([(DEFER, True)] * (fx.MAX_CONSEC_DEFERS - 1)
+              + [START_BLOCKED_SEL] * 5
+              + [(None, True)])
+    stub = make_loop_stub(script, monkeypatch)
+
+    assert stub.explore() is True
+    assert not [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert not [m for _l, m in stub.logged if 'consecutive' in m]
+    assert stub.audits == [0]
+
+
+def test_a_start_blocked_cycle_breaks_the_defer_streak(monkeypatch):
+    # A defer streak claims selection productivity failed N cycles RUNNING. A
+    # stuck robot interrupting it is a different fault, not another instance of
+    # the same one, so the next defer starts a new streak. Without the reset,
+    # MAX_CONSEC_DEFERS-1 defers + any number of start-blocked cycles + one more
+    # defer trips the defer cap on cycles that were never contiguous.
+    script = ([(DEFER, True)] * (fx.MAX_CONSEC_DEFERS - 1)
+              + [START_BLOCKED_SEL]
+              + [(DEFER, True)]
+              + [(None, True)])
+    stub = make_loop_stub(script, monkeypatch)
+
+    assert stub.explore() is True
+    assert not [m for lvl, m in stub.logged if lvl == 'ERROR']
+    # The cap message is the tell: reaching it at all means the streak survived
+    # the interruption. (The WORLD arm also returns True, so the return value
+    # alone would not catch this.)
+    assert not [m for _l, m in stub.logged if 'consecutive' in m]
+    assert stub.audits == [0]
+
+
+def test_a_new_defer_streak_does_not_inherit_the_old_streaks_labels(monkeypatch):
+    # The counter is not the only per-streak state. defer_definitive is
+    # AND-folded and defer_truncated OR-folded, so both are monotone: a label
+    # carried across an interruption can never recover, and the run reports the
+    # OLD streak's fault as the new one's. Here the first streak truncated and
+    # went unanswered; the second is definitive throughout and must end on the
+    # WORLD arm — no ERROR, and specifically not the probe-budget one.
+    script = ([(DEFER, False, True)] * (fx.MAX_CONSEC_DEFERS - 1)
+              + [START_BLOCKED_SEL]
+              + [(DEFER, True)])
+    stub = make_loop_stub(script, monkeypatch)
+
+    assert stub.explore() is True
+    errors = [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert not errors, errors
+    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+    assert any('condemned every candidate' in m for m in warns), warns
+    assert stub.audits == [0]
+
+
+def test_a_dispatched_goal_resets_the_start_blocked_streak(monkeypatch):
+    # Same reset discipline as the defer streak: a dispatch proves the robot
+    # could plan out of where it was standing, so the streak is broken.
+    near_miss = [START_BLOCKED_SEL] * (fx.MAX_CONSEC_START_BLOCKED - 1)
+    goal_a = (((0.0, 1.0), (0.0, 1.0), 10), True)
+    goal_b = (((0.0, 5.0), (0.0, 5.0), 50), True)
+    script = (near_miss + [goal_a] + near_miss + [goal_b]
+              + near_miss + [(None, True)])
+    stub = make_loop_stub(script, monkeypatch)
+
+    stub._make_goal = lambda x, y: object()
+    stub.goToPose = lambda goal_msg: None
+    stub._supervise_goal = lambda n, xy: ('SUCCEEDED', (1.0, 1.0), 0.0,
+                                          (0, '', None))
+    stub._classifier = fx.OutcomeClassifier(fx.BLACKLIST_RADIUS)
+
+    assert stub.explore() is True
+    assert not [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert stub.audits == [2]
