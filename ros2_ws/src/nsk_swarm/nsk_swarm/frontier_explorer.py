@@ -1113,9 +1113,11 @@ class FrontierExplorer(BasicNavigator):
 
         goal_num = 0
         # Defer-streak state. `defer_definitive` stays True only while every
-        # cycle in the CURRENT streak got definitive planner verdicts; both
-        # reset the moment a goal is actually dispatched, so an occasional
-        # deferral in an otherwise healthy run never accumulates toward the cap.
+        # cycle in the CURRENT streak got definitive planner verdicts, and
+        # `defer_truncated` records whether any cycle in it stopped on a probe
+        # bound; all three reset the moment a goal is actually dispatched, so an
+        # occasional deferral in an otherwise healthy run never accumulates
+        # toward the cap.
         consec_defers = 0
         defer_definitive = True
         defer_truncated = False
@@ -1231,9 +1233,14 @@ class FrontierExplorer(BasicNavigator):
 
             goal_num += 1
             # A dispatched goal proves selection is still productive: the streak
-            # is broken, not merely paused.
+            # is broken, not merely paused. Both verdict flags are streak-scoped
+            # and reset with it: a cycle that ran out of probe budget BEFORE this
+            # goal says nothing about a streak that begins after it, and a flag
+            # left set makes every later cap-hit blame the budget and tell the
+            # operator to raise PRECHECK_MAX_PROBES when the budget never bound.
             consec_defers = 0
             defer_definitive = True
+            defer_truncated = False
             dist = math.hypot(gx - rx, gy - ry)
             self.info(f'[robot_{self.robot_id}] goal #{goal_num} -> ({gx:.2f}, {gy:.2f}) '
                       f'[{ncells} cells, frontier ({fx:.2f}, {fy:.2f}), {dist:.2f} m away]')

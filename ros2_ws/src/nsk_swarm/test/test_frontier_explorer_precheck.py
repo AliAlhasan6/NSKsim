@@ -670,3 +670,32 @@ def test_a_dispatched_goal_resets_the_defer_streak(monkeypatch):
     assert not [m for lvl, m in stub.logged if lvl == 'ERROR']
     # Two goals dispatched, and the run ended via the normal completion path.
     assert stub.audits == [2]
+
+
+def test_a_dispatched_goal_also_resets_the_truncation_flag(monkeypatch):
+    # Truncation is streak-scoped, exactly like definitiveness. A cycle that ran
+    # out of probe budget EARLY in a run says nothing about a later streak, and
+    # the two faults prescribe opposite fixes: raise PRECHECK_MAX_PROBES for a
+    # budget that bound, suspect planner_server for probes that went unanswered.
+    # Measured in rung2f_on_explore.log, which exited telling the operator to
+    # raise the probe cap while its final cycles were logging "probed 1 of 1
+    # candidates (0 inconclusive, whole list examined)" — the budget was not
+    # binding, and the message sent the next session the wrong way.
+    goal = (((0.0, 1.0), (0.0, 1.0), 10), True)
+    script = ([(DEFER, False, True)]      # one truncated cycle...
+              + [goal]                    # ...ended by a real dispatch
+              + [(DEFER, False, False)])  # a fresh UNANSWERED streak hits the cap
+    stub = make_loop_stub(script, monkeypatch)
+
+    stub._make_goal = lambda x, y: object()
+    stub.goToPose = lambda goal_msg: None
+    stub._supervise_goal = lambda n, xy: ('SUCCEEDED', (1.0, 1.0), 0.0,
+                                          (0, '', None))
+    stub._classifier = fx.OutcomeClassifier(fx.BLACKLIST_RADIUS)
+
+    assert stub.explore() is False
+    errors = [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert any('never got a usable answer' in m for m in errors), errors
+    # The probe budget was not the fault in THIS streak and must not be named.
+    assert not any('ran out of probe budget' in m for m in errors), errors
+    assert stub.audits == [1]
