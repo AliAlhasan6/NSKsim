@@ -768,7 +768,11 @@ def fake_grid(w, h, res=0.05, ox=-1.0, oy=-1.0, fill=0):
     return SimpleNamespace(
         info=SimpleNamespace(
             width=w, height=h, resolution=res,
-            origin=SimpleNamespace(position=SimpleNamespace(x=ox, y=oy))),
+            origin=SimpleNamespace(
+                position=SimpleNamespace(x=ox, y=oy),
+                # The saver reads the yaw out of the origin quaternion, as
+                # nav2's map_saver does; a real OccupancyGrid always carries one.
+                orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0))),
         data=[fill] * (w * h))
 
 
@@ -880,6 +884,16 @@ def make_loop_stub(selections, monkeypatch):
     stub._wait_for_fresh_map = lambda seq: True
     stub._sleep = lambda s: None
     stub._log_termination_audit = lambda goal_num: stub.audits.append(goal_num)
+    # The real diagnostic, deliberately not stubbed: bound here, EVERY loop test
+    # that reaches a terminal arm also proves it cannot crash the loop or move
+    # the exit path — and after the dump was extended to all six arms, that is
+    # every loop test in this file. This harness's get_map() hands back a bare
+    # object(), which the dump must survive as a WARN — and does, before
+    # touching the filesystem.
+    stub._pose_occupancy_readout = \
+        FrontierExplorer._pose_occupancy_readout.__get__(stub)
+    stub._dump_termination_diagnostics = \
+        FrontierExplorer._dump_termination_diagnostics.__get__(stub)
 
     def select(rx, ry, map_seq=0):
         entry = script.pop(0) if len(script) > 1 else script[0]
@@ -1117,6 +1131,184 @@ def test_a_dispatched_goal_resets_the_start_blocked_streak(monkeypatch):
     assert stub.explore() is True
     assert not [m for lvl, m in stub.logged if lvl == 'ERROR']
     assert stub.audits == [2]
+
+
+# ── the termination dump: making the next wedge decidable ──────────────────
+#
+# rung2f ended wedged at (-1.09, 4.07), the planner refusing a 0.70 m path with
+# poses=0, and saved no map. Two explanations survived it — a real pocket, or a
+# believed pose sitting inside a mapped wall — and they prescribe opposite
+# fixes, one of which (backing up) is dangerous under the other.
+#
+# It ended on the DEFER cap, and start-pose probing did not exist yet, so
+# hanging the dump on the start-blocked cap alone would not have caught the run
+# that motivated it. Every arm that ends the run takes one, and each names its
+# own arm: a file labelled for the wrong cap is worse than no file, because the
+# exit reason is itself evidence about what the planner was doing.
+#
+# It stays diagnostic throughout: it may never crash the node, never move an
+# exit path, and never RAISE the severity of the arm it hangs on — two of those
+# arms end a run in which nothing went wrong.
+
+def dump_stub(monkeypatch, grid, script=None, seq=7, pose=(-1.09, 4.07)):
+    """A loop stub that runs to a terminal arm over a real grid."""
+    stub = make_loop_stub(script if script is not None else [START_BLOCKED_SEL],
+                          monkeypatch)
+    stub.sensor = SimpleNamespace(robot_xy=lambda: pose,
+                                  get_map=lambda: (grid, seq),
+                                  sim_time=lambda: 0.0)
+    return stub
+
+
+# (script, slug, level the arm itself reports at, explore()'s return value)
+TERMINAL_ARMS = [
+    ([(None, True)], 'no-frontiers', 'INFO', True),
+    ([(DEFER, True)], 'defer-world', 'WARN', True),
+    ([(DEFER, False, True)], 'defer-truncated', 'ERROR', False),
+    ([(DEFER, False, False)], 'defer-unanswered', 'ERROR', False),
+    ([START_BLOCKED_SEL], 'startblocked', 'ERROR', False),
+]
+
+
+@pytest.mark.parametrize('script,slug,level,returns', TERMINAL_ARMS,
+                         ids=[a[1] for a in TERMINAL_ARMS])
+def test_every_terminal_arm_saves_a_map_named_for_that_arm(
+        script, slug, level, returns, tmp_path, monkeypatch):
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = dump_stub(monkeypatch, fake_grid(40, 40, ox=-2.0, oy=3.0),
+                     script=script)
+
+    assert stub.explore() is returns
+
+    pgms = list(tmp_path.glob(f'*_{slug}.pgm'))
+    yamls = list(tmp_path.glob(f'*_{slug}.yaml'))
+    assert len(pgms) == 1 and len(yamls) == 1, (slug, list(tmp_path.iterdir()))
+
+    readout = [m for lvl, m in stub.logged
+               if lvl == level and f'termination diagnostic ({slug})' in m]
+    assert len(readout) == 1, stub.logged
+    assert '(-1.090, 4.070)' in readout[0]      # the pose it ended on
+    assert 'map seq 7' in readout[0]            # which map version said so
+    assert pgms[0].name in readout[0]           # and where to find it
+    # The exit path is untouched: same audit, and no arm's diagnostic is louder
+    # than the arm itself — a clean completion must still log no ERROR.
+    assert stub.audits == [0]
+    if level != 'ERROR':
+        assert not [m for lvl, m in stub.logged if lvl == 'ERROR'], stub.logged
+
+
+def test_the_stack_health_stop_saves_a_map_too(tmp_path, monkeypatch):
+    # The one terminal exit that never reaches _log_termination_audit, and so
+    # the one this could most easily have missed. A stack failing across
+    # distinct frontiers is exactly the state a wedged pose hides inside.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    goal = (((0.0, 1.0), (0.0, 1.0), 10), True)
+    stub = dump_stub(monkeypatch, fake_grid(40, 40, ox=-2.0, oy=3.0),
+                     script=[goal])
+    stub._make_goal = lambda x, y: object()
+    stub.goToPose = lambda goal_msg: None
+    stub._supervise_goal = lambda n, xy: ('FAILED', (1.0, 1.0), 0.0,
+                                          (0, '', None))
+    stub._classifier = SimpleNamespace(
+        classify=lambda outcome, xy, moved: SimpleNamespace(
+            blacklist=False, stop_unhealthy=True, category='STACK',
+            reason='5 stack failures across distinct frontiers'),
+        is_retry_pending=lambda xy: False)
+
+    assert stub.explore() is False
+
+    pgms = list(tmp_path.glob('*_stack-unhealthy.pgm'))
+    assert len(pgms) == 1, list(tmp_path.iterdir())
+    errors = [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert any('termination diagnostic (stack-unhealthy)' in m
+               for m in errors), errors
+    # No audit on this path, before or after — the dump did not add one.
+    assert stub.audits == []
+
+
+def test_the_readout_names_the_value_of_the_cell_under_the_robot(tmp_path,
+                                                                 monkeypatch):
+    # The load-bearing claim. If the robot's own cell is occupied in the grid
+    # the run just saved, the believed pose is inside a mapped wall and a
+    # standoff or back-up recovery is the WRONG fix — so the value has to be in
+    # the log, not left to be inferred from the image months later.
+    grid = fake_grid(40, 40, ox=-2.0, oy=3.0)   # free everywhere, res 0.05
+    grid.data[21 * 40 + 18] = 100               # (-1.09, 4.07) -> cell (18, 21)
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = dump_stub(monkeypatch, grid)
+
+    assert stub.explore() is False
+
+    readout = [m for lvl, m in stub.logged
+               if lvl == 'ERROR' and 'termination diagnostic' in m][0]
+    assert 'cell (18, 21) value=100' in readout
+    assert '3x3 north-row-first [0,0,0] [0,100,0] [0,0,0]' in readout
+    assert 'nearest occupied 0.016 m away' in readout
+
+
+def test_the_saved_map_matches_the_map_saver_format(tmp_path, monkeypatch):
+    # The dump is only useful if it opens next to the other runs in
+    # experiments/maps/, all of which experiments/slam/save_map.py wrote.
+    grid = fake_grid(4, 3, ox=-2.0, oy=3.0, fill=-1)   # unknown everywhere
+    grid.data[0] = 0        # bottom-left free
+    grid.data[11] = 100     # top-right occupied
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = dump_stub(monkeypatch, grid)
+
+    assert stub.explore() is False
+
+    raw = list(tmp_path.glob('*.pgm'))[0].read_bytes()
+    magic, dims, maxval, body = raw.split(b'\n', 3)
+    assert (magic, dims, maxval) == (b'P5', b'4 3', b'255')
+    assert len(body) == 12
+    # Rows are flipped: the TOP row (max y) is written first.
+    assert body[3] == 0          # data[11], occupied -> black, first row
+    assert body[8] == 254        # data[0], free -> white, last row
+    assert set(body) == {0, 205, 254}
+
+    text = list(tmp_path.glob('*.yaml'))[0].read_text()
+    assert text.splitlines()[0].endswith('_startblocked.pgm')
+    assert 'mode: trinary' in text
+    assert 'origin: [-2.0, 3.0, 0.0]' in text
+    assert 'occupied_thresh: 0.65' in text and 'free_thresh: 0.25' in text
+    assert 'negate: 0' in text
+    # A pose the grid does not even cover is a finding, not a crash.
+    assert any('value=off-grid' in m for lvl, m in stub.logged if lvl == 'ERROR')
+
+
+def test_a_missing_map_warns_and_leaves_the_exit_path_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = dump_stub(monkeypatch, None)
+
+    assert stub.explore() is False
+
+    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+    assert any('no map has ever been received' in m for m in warns), warns
+    assert not list(tmp_path.iterdir())
+    errors = [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert any('STUCK ROBOT' in m for m in errors), errors
+    assert not any('pose (' in m for m in errors), errors   # no readout to give
+    assert stub.audits == [0]
+
+
+def test_an_unwritable_directory_warns_and_still_logs_the_readout(tmp_path,
+                                                                 monkeypatch):
+    # A FILE where the dump wants a directory: fails for uid 0 too, unlike a
+    # chmod, so the test means the same thing in a container as on the laptop.
+    blocked = tmp_path / 'not-a-directory'
+    blocked.write_text('')
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(blocked / 'maps'))
+    stub = dump_stub(monkeypatch, fake_grid(40, 40, ox=-2.0, oy=3.0))
+
+    assert stub.explore() is False
+
+    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+    assert any('could not write the map' in m for m in warns), warns
+    errors = [m for lvl, m in stub.logged if lvl == 'ERROR']
+    # The file is expendable; the readout is not.
+    assert any('map NOT saved' in m and 'value=' in m for m in errors), errors
+    assert any('STUCK ROBOT' in m for m in errors), errors
+    assert stub.audits == [0]
 
 
 # ── the post-goal re-query: the same misattribution, worse consequence ──────

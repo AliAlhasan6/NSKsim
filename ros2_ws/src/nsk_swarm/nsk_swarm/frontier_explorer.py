@@ -66,10 +66,12 @@ supervision. Every such measurement stays on time.monotonic.
 """
 
 import math
+import os
 import sys
 import threading
 import time
 from collections import deque
+from datetime import datetime
 
 import rclpy
 from rclpy.action import ActionClient
@@ -212,6 +214,44 @@ START_PROBE_CLEAR = 0.25  # m; required free neighbourhood around a probe target
 # waiting for something it cannot cause.
 MAX_CONSEC_START_BLOCKED = 30
 
+# ── start-blocked diagnostic dump ───────────────────────────────────────────
+# Trinary PGM thresholds, as FRACTIONS of the 0-100 occupancy scale. NOT a
+# second opinion on OCC_THRESH: that one decides what the EXPLORER treats as an
+# obstacle, these two decide what a PIXEL looks like in the saved file. They are
+# nav2 map_saver's defaults, which is what every other file in experiments/maps/
+# was written with (experiments/slam/save_map.py) — change them and the dump
+# stops being comparable to the maps it exists to be compared against.
+MAP_SAVE_OCC_TH = 0.65
+MAP_SAVE_FREE_TH = 0.25
+MAP_DUMP_DIRNAME = os.path.join('experiments', 'maps')
+
+# Why a run ended, as it appears in the dump's filename and its log line. The
+# exit reason is part of the evidence: the same wedged pose reached through a
+# defer cap and through the start-blocked cap says different things about what
+# the planner was doing, and a file named for the wrong cap is worse than none.
+EXIT_NO_FRONTIERS = 'no-frontiers'
+EXIT_DEFER_WORLD = 'defer-world'
+EXIT_DEFER_TRUNCATED = 'defer-truncated'
+EXIT_DEFER_UNANSWERED = 'defer-unanswered'
+EXIT_START_BLOCKED = 'startblocked'
+EXIT_STACK_UNHEALTHY = 'stack-unhealthy'
+
+# Slug -> the severity its arm already reports at. The diagnostic never RAISES
+# the severity of the exit it hangs on: two arms here end a run that is fine
+# (frontiers exhausted; the planner answered and the answer was "no"), and
+# "this run logged no ERROR" is read as "this run was healthy" both by the tests
+# and by the operator scanning explore_*.log. An ERROR-level readout on a clean
+# completion would break that reading for a run in which nothing went wrong.
+# Unknown slug -> 'error', so a typo is loud rather than silent.
+EXIT_LEVELS = {
+    EXIT_NO_FRONTIERS: 'info',
+    EXIT_DEFER_WORLD: 'warn',
+    EXIT_DEFER_TRUNCATED: 'error',
+    EXIT_DEFER_UNANSWERED: 'error',
+    EXIT_START_BLOCKED: 'error',
+    EXIT_STACK_UNHEALTHY: 'error',
+}
+
 # Consecutive DEFER cycles (see _Defer) before the run STOPS instead of waiting
 # again. Each cycle is individually bounded — _wait_for_fresh_map is timeout-
 # capped and MIN_GOAL_PERIOD floors the interval — so a DEFER loop cannot spin;
@@ -314,6 +354,73 @@ def _sector_gap(sector, taken, n_sectors=8):
         return n_sectors
     return min(min((sector - t) % n_sectors, (t - sector) % n_sectors)
                for t in taken)
+
+
+def _map_dump_dir():
+    """Absolute path of experiments/maps/, or the best guess at it.
+
+    The node has no notion of the repo, so the directory is found by walking up
+    from this module — colcon --symlink-install leaves __file__ inside
+    ros2_ws/src, so that hits — and falls back to the launch cwd, which is the
+    repo root in every run procedure used so far.
+    """
+    d = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        cand = os.path.join(d, MAP_DUMP_DIRNAME)
+        if os.path.isdir(cand):
+            return cand
+        parent = os.path.dirname(d)
+        if parent == d:
+            return os.path.join(os.getcwd(), MAP_DUMP_DIRNAME)
+        d = parent
+
+
+def _write_trinary_map(g, out):
+    """Write `g` to <out>.pgm + <out>.yaml in nav2 map_saver's trinary format.
+
+    Same P5 header, same vertical flip, same 254/205/0 pixels and the same yaml
+    keys as experiments/slam/save_map.py, which produced every other file in
+    experiments/maps/ — so this dump opens in the same tooling and can be diffed
+    against them directly. Reimplemented rather than imported because that saver
+    is a standalone script outside the installed package.
+
+    The pixel buffer is built BEFORE anything touches the filesystem, so a grid
+    that turns out to be unreadable leaves no directory and no half-written file
+    behind. Returns the .pgm path.
+    """
+    w, h = g.info.width, g.info.height
+    res = g.info.resolution
+    ox = g.info.origin.position.x
+    oy = g.info.origin.position.y
+    q = g.info.origin.orientation
+    yaw = math.atan2(2 * (q.w * q.z + q.x * q.y),
+                     1 - 2 * (q.y * q.y + q.z * q.z))
+    d = g.data
+    pix = bytearray(w * h)
+    k = 0
+    for y in range(h):
+        base = (h - y - 1) * w          # flip vertically, nav2 convention
+        for x in range(w):
+            v = d[base + x]
+            if 0 <= v <= MAP_SAVE_FREE_TH * 100:
+                pix[k] = 254
+            elif v >= MAP_SAVE_OCC_TH * 100:
+                pix[k] = 0
+            else:
+                pix[k] = 205
+            k += 1
+
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out + '.pgm', 'wb') as f:
+        f.write(f'P5\n{w} {h}\n255\n'.encode())
+        f.write(bytes(pix))
+    with open(out + '.yaml', 'w') as f:
+        f.write(f'image: {os.path.basename(out)}.pgm\nmode: trinary\n'
+                f'resolution: {res}\n')
+        f.write(f'origin: [{ox}, {oy}, {yaw}]\n')
+        f.write(f'negate: 0\noccupied_thresh: {MAP_SAVE_OCC_TH}\n'
+                f'free_thresh: {MAP_SAVE_FREE_TH}\n')
+    return out + '.pgm'
 
 
 class _SensorNode(Node):
@@ -1417,6 +1524,126 @@ class FrontierExplorer(BasicNavigator):
             time.sleep(0.05)
         return 'CANCELED', last_xy, sup.window_move(), (None, '', None)
 
+    # ── termination evidence ─────────────────────────────────────────────────
+    def _pose_occupancy_readout(self, g, seq, px, py):
+        """Occupancy evidence around (px, py) in `g`, formatted for the log.
+
+        Two explanations survive a pose the planner will not plan from, and they
+        need opposite fixes: (a) the robot really is in a pocket and the map is
+        right, or (b) the believed pose is wrong and sits inside a mapped wall —
+        the feature-poor northern region can stall SLAM's pose graph while
+        transform_publish_period keeps map->odom looking fresh. An OCCUPIED
+        value at the robot's own cell, in the grid this run saved, is (b); the
+        3x3 and the nearest-obstacle range say how close to (b) the pose is when
+        that cell is free. Under (b) a back-up-and-clear recovery drives against
+        geometry that is not where the robot thinks it is, so this readout is
+        what decides whether such a recovery is safe to build.
+
+        Grid arithmetic is _frontier_clusters': row-major ``y * w + x``, cell
+        centre at ``origin + (i + 0.5) * res``, occupied is ``v >= OCC_THRESH``.
+        """
+        w, h = g.info.width, g.info.height
+        res = g.info.resolution
+        ox = g.info.origin.position.x
+        oy = g.info.origin.position.y
+        data = g.data
+        cx = int((px - ox) / res)
+        cy = int((py - oy) / res)
+
+        def val(x, y):
+            # None = outside the grid, which is itself a finding: a pose the
+            # map does not even cover is not a pocket either.
+            if 0 <= x < w and 0 <= y < h:
+                return data[y * w + x]
+            return None
+
+        here = val(cx, cy)
+        # North (+y) row first, so the rows read like the map rather than like
+        # the array.
+        rows = ' '.join(
+            '[' + ','.join('off' if v is None else str(v)
+                           for v in (val(cx - 1, y), val(cx, y), val(cx + 1, y)))
+            + ']'
+            for y in (cy + 1, cy, cy - 1))
+
+        near_d = near_xy = None
+        for y in range(h):
+            row = y * w
+            wy = oy + (y + 0.5) * res
+            for x in range(w):
+                if data[row + x] >= OCC_THRESH:
+                    wx = ox + (x + 0.5) * res
+                    dist = math.hypot(wx - px, wy - py)
+                    if near_d is None or dist < near_d:
+                        near_d, near_xy = dist, (wx, wy)
+        nearest = ('none in the grid' if near_d is None else
+                   f'{near_d:.3f} m away at ({near_xy[0]:.2f}, {near_xy[1]:.2f})')
+
+        return (f'pose ({px:.3f}, {py:.3f}) -> cell ({cx}, {cy}) '
+                f'value={"off-grid" if here is None else here} '
+                f'(OCC_THRESH={OCC_THRESH}, unknown={UNKNOWN}); '
+                f'3x3 north-row-first {rows}; nearest occupied {nearest}; '
+                f'map seq {seq}, grid {w}x{h} res={res:.3f} '
+                f'origin=({ox:.3f}, {oy:.3f})')
+
+    def _dump_termination_diagnostics(self, reason, fallback_xy):
+        """Save the grid and log what it says about the pose the run ended on.
+
+        Runs once, on every arm that ends the run, right after that arm's own
+        message. rung2f ended wedged at (-1.09, 4.07) with the planner refusing
+        a 0.70 m path, saved no map, and left physical entrapment and pose error
+        indistinguishable afterwards — and it ended on the DEFER cap, not the
+        start-blocked one, which is why this cannot hang on a single arm. A run
+        that is ending has nothing left to lose by writing a map.
+
+        `reason` is one of the EXIT_* slugs; it names the file and leads the log
+        line, because WHICH exit the run took is itself evidence about what the
+        planner was doing at the time, and a file named for the wrong cap would
+        be worse than no file. It also picks the severity (EXIT_LEVELS), which
+        is the one the arm already reported at — never higher.
+
+        Purely diagnostic: every failure is a WARN, nothing here can raise into
+        the loop, and no exit path changes. The map write is attempted first but
+        its failure is contained, because the readout — not the file — is the
+        load-bearing part: a full disk must not also cost us the one line that
+        tells (a) from (b).
+        """
+        try:
+            g, seq = self.sensor.get_map()
+            log = {'info': self.info, 'warn': self.warn, 'error': self.error}[
+                EXIT_LEVELS.get(reason, 'error')]
+            if g is None:
+                self.warn(
+                    f'[robot_{self.robot_id}] termination diagnostic ({reason}): '
+                    f'no map has ever been received, so nothing could be saved or '
+                    f'read — the occupancy evidence for this stop is lost.')
+                return
+            pose = self.sensor.robot_xy() or fallback_xy
+            tag = (f'robot{self.robot_id}_'
+                   f'{datetime.now().strftime("%Y%m%d_%H%M%S")}_{reason}')
+            try:
+                saved = _write_trinary_map(g, os.path.join(_map_dump_dir(), tag))
+            except Exception as exc:
+                saved = None
+                self.warn(
+                    f'[robot_{self.robot_id}] termination diagnostic ({reason}): '
+                    f'could not write the map: {exc!r} — the readout below still '
+                    f'describes the grid that would have been saved.')
+            # The pose is only under suspicion where the run ended badly; on a
+            # clean completion the same sentence would read as an accusation.
+            advisory = ('' if reason == EXIT_NO_FRONTIERS else
+                        ' An occupied value at the robot\'s own cell means the '
+                        'believed pose is inside a mapped wall (SLAM pose error), '
+                        'NOT that the robot is in a pocket — do not add a standoff '
+                        'or back up on it.')
+            log(f'[robot_{self.robot_id}] termination diagnostic ({reason}): '
+                f'{self._pose_occupancy_readout(g, seq, pose[0], pose[1])}; '
+                f'map {"saved to " + saved if saved else "NOT saved"}.{advisory}')
+        except Exception as exc:
+            self.warn(f'[robot_{self.robot_id}] termination diagnostic ({reason}) '
+                      f'failed: {exc!r} — the run still ends exactly as it would '
+                      f'have.')
+
     # ── auditable termination ────────────────────────────────────────────────
     def _log_termination_audit(self, goal_num):
         """Log a verifiable account of WHY selection returned no goal.
@@ -1482,6 +1709,11 @@ class FrontierExplorer(BasicNavigator):
         # bt_navigator being active is NOT the whole stack being ready: the
         # servers that execute a goal are gated separately, right here, before
         # goal #1 can be thrown away on an inactive controller_server.
+        #
+        # These two boot failures are the only run-ending returns WITHOUT a
+        # termination dump, deliberately: the second has no map by definition,
+        # and neither has planned anything, so there is no pose-vs-grid question
+        # to record. Every exit past this point takes one.
         if not self._wait_for_nav2_servers_active():
             return False
 
@@ -1525,6 +1757,10 @@ class FrontierExplorer(BasicNavigator):
 
             sel = self._select_goal(rx, ry, seq_at_select)
             if sel is None:
+                # A clean completion still gets a dump: this is the run's final
+                # map, and the readout costs nothing to record. Its severity is
+                # the arm's own (INFO) — see EXIT_LEVELS.
+                self._dump_termination_diagnostics(EXIT_NO_FRONTIERS, (rx, ry))
                 self._log_termination_audit(goal_num)
                 break
             if sel is DEFER:
@@ -1568,6 +1804,8 @@ class FrontierExplorer(BasicNavigator):
                             f'the planner condemned every candidate it was asked '
                             f'about — no reachable frontier remains within the '
                             f'pre-check budget; stopping.')
+                        self._dump_termination_diagnostics(
+                            EXIT_DEFER_WORLD, (rx, ry))
                         self._log_termination_audit(goal_num)
                         break
                     # STACK: "nothing is reachable" was never established, so a
@@ -1588,6 +1826,10 @@ class FrontierExplorer(BasicNavigator):
                             f'or PRECHECK_CYCLE_BUDGET (now '
                             f'{PRECHECK_CYCLE_BUDGET:.0f}s wall); '
                             f'do not read this as a completed map.')
+                        # Inside each branch, not after the pair: the two arms
+                        # are different faults and the file has to say which.
+                        self._dump_termination_diagnostics(
+                            EXIT_DEFER_TRUNCATED, (rx, ry))
                     else:
                         # At least one candidate per cycle went unanswered — a
                         # wedged or merely slow planner_server.
@@ -1599,6 +1841,8 @@ class FrontierExplorer(BasicNavigator):
                             f'{PLAN_CALL_WAIT:.1f}s wall, not "nothing is reachable". '
                             f'Raise PLAN_CALL_WAIT or set reachability_precheck:=false; '
                             f'do not read this as a completed map.')
+                        self._dump_termination_diagnostics(
+                            EXIT_DEFER_UNANSWERED, (rx, ry))
                     self._log_termination_audit(goal_num)
                     return False
                 self._wait_for_fresh_map(seq_at_select)
@@ -1640,6 +1884,12 @@ class FrontierExplorer(BasicNavigator):
                         f'Recovery (back-up-and-clear) is not implemented, so the '
                         f'run cannot free itself; check the costmap around the '
                         f'pose above (inflation_radius vs robot_radius).')
+                    # Which of the two explanations for that pose is true is not
+                    # decidable from this message alone, and the run is about to
+                    # end — so record the grid and read the robot's own cell out
+                    # of it. See _dump_termination_diagnostics.
+                    self._dump_termination_diagnostics(
+                        EXIT_START_BLOCKED, (rx, ry))
                     self._log_termination_audit(goal_num)
                     return False
                 self._wait_for_fresh_map(seq_at_select)
@@ -1755,6 +2005,12 @@ class FrontierExplorer(BasicNavigator):
                       f'{window_note}{err_note} blacklisted={decision.blacklist}')
 
             if decision.stop_unhealthy:
+                # The one terminal exit that never reaches _log_termination_audit
+                # — but it still ENDS the run, and a stack that failed across
+                # distinct frontiers is exactly the state a wedged pose hides
+                # inside, so the grid is worth as much here as at the caps.
+                self._dump_termination_diagnostics(
+                    EXIT_STACK_UNHEALTHY, (rx, ry))
                 return False
 
             # Let SLAM publish a FRESH map (new frontiers) before the next
