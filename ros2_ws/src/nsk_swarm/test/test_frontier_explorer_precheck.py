@@ -103,8 +103,13 @@ def make_explorer_stub(centroids, planner, precheck=True, blacklist=None,
     """
     stub = SimpleNamespace(
         robot_id=0,
-        sensor=SimpleNamespace(plan_to=planner.plan_to),
+        # No costmap ever received: the pre-check must reach exactly the same
+        # verdicts without one (it is a diagnostic, not an input), and the
+        # degradation is warned about once rather than crashing or going quiet.
+        sensor=SimpleNamespace(plan_to=planner.plan_to,
+                               get_costmaps=lambda: (None, None)),
         map_frame='robot_0/map',
+        _costmap_missing_warned=False,
         _precheck=precheck,
         _blacklist=list(blacklist or []),
         _retirements=fx.RetirementLedger(fx.BLACKLIST_RADIUS,
@@ -120,8 +125,9 @@ def make_explorer_stub(centroids, planner, precheck=True, blacklist=None,
     stub._start_probe = lambda rx, ry, deadline=None: (
         stub.start_probes.append((rx, ry)) or verdict)
     stub._free_targets_near = lambda rx, ry: [(0.5, 0.0)]
+    stub._cost_reading_note = FrontierExplorer._cost_reading_note  # staticmethod
     for name in ('_select_goal', '_ordered_candidates', '_probe',
-                 '_blacklisted', '_hb'):
+                 '_blacklisted', '_hb', '_costmaps_or_warn', '_cost_note'):
         setattr(stub, name, getattr(FrontierExplorer, name).__get__(stub))
     return stub
 
@@ -615,8 +621,13 @@ def test_a_cleared_start_retires_exactly_as_before():
 
     assert stub._select_goal(0.0, 0.0, 0) is DEFER
     assert stub._retirements.active(0) == 3
-    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
-    assert all('unplannable — retiring until map #' in m for m in warns), warns
+    # The costmap-degradation notice is the one WARN this cycle that is not a
+    # retirement (this harness has no costmap); it is raised once and excluded
+    # here so the pin stays on what selection itself says.
+    warns = [m for lvl, m in stub.logged
+             if lvl == 'WARN' and 'costmap diagnostic' not in m]
+    assert warns and all('unplannable — retiring until map #' in m
+                         for m in warns), warns
     # ...and it now SAYS why it blamed the goal rather than assuming it.
     assert any('start probe cleared the robot pose' in m for m in warns), warns
 
@@ -683,12 +694,17 @@ def test_an_unattributed_208_retires_nothing_and_taints_the_cycle():
 def make_probe_stub(planner, targets):
     """Bind the REAL _start_probe over a scripted target list and planner."""
     stub = SimpleNamespace(robot_id=0, map_frame='robot_0/map',
-                           sensor=SimpleNamespace(plan_to=planner.plan_to),
+                           sensor=SimpleNamespace(
+                               plan_to=planner.plan_to,
+                               get_costmaps=lambda: (None, None)),
+                           _costmap_missing_warned=False,
                            logged=[])
     stub.info = lambda msg: stub.logged.append(('INFO', msg))
     stub.warn = lambda msg: stub.logged.append(('WARN', msg))
     stub._free_targets_near = lambda rx, ry: list(targets)
-    stub._start_probe = FrontierExplorer._start_probe.__get__(stub)
+    stub._cost_reading_note = FrontierExplorer._cost_reading_note
+    for name in ('_start_probe', '_costmaps_or_warn', '_cost_note'):
+        setattr(stub, name, getattr(FrontierExplorer, name).__get__(stub))
     return stub
 
 
@@ -864,7 +880,9 @@ def make_loop_stub(selections, monkeypatch):
         sensor=SimpleNamespace(
             robot_xy=lambda: (0.0, 0.0),
             get_map=lambda: (object(), 0),
+            get_costmaps=lambda: (None, None),
             sim_time=lambda: 0.0),
+        _costmap_missing_warned=False,
         _precheck=True,
         _last_defer_definitive=True,
         _last_defer_truncated=False,
@@ -890,10 +908,10 @@ def make_loop_stub(selections, monkeypatch):
     # every loop test in this file. This harness's get_map() hands back a bare
     # object(), which the dump must survive as a WARN — and does, before
     # touching the filesystem.
-    stub._pose_occupancy_readout = \
-        FrontierExplorer._pose_occupancy_readout.__get__(stub)
-    stub._dump_termination_diagnostics = \
-        FrontierExplorer._dump_termination_diagnostics.__get__(stub)
+    stub._cost_reading_note = FrontierExplorer._cost_reading_note
+    for name in ('_pose_occupancy_readout', '_dump_termination_diagnostics',
+                 '_costmap_pose_readout', '_costmaps_or_warn', '_cost_note'):
+        setattr(stub, name, getattr(FrontierExplorer, name).__get__(stub))
 
     def select(rx, ry, map_seq=0):
         entry = script.pop(0) if len(script) > 1 else script[0]
@@ -1156,6 +1174,7 @@ def dump_stub(monkeypatch, grid, script=None, seq=7, pose=(-1.09, 4.07)):
                           monkeypatch)
     stub.sensor = SimpleNamespace(robot_xy=lambda: pose,
                                   get_map=lambda: (grid, seq),
+                                  get_costmaps=lambda: (None, None),
                                   sim_time=lambda: 0.0)
     return stub
 

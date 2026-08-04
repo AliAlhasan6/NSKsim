@@ -70,7 +70,7 @@ import os
 import sys
 import threading
 import time
-from collections import deque
+from collections import deque, namedtuple
 from datetime import datetime
 
 import rclpy
@@ -84,7 +84,9 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
 
 from geometry_msgs.msg import PoseStamped
 from lifecycle_msgs.srv import GetState
+from map_msgs.msg import OccupancyGridUpdate
 from nav2_msgs.action import ComputePathToPose
+from nav2_msgs.msg import Costmap, CostmapUpdate
 from nav_msgs.msg import OccupancyGrid
 from tf2_ros import Buffer, TransformListener
 
@@ -251,6 +253,190 @@ EXIT_LEVELS = {
     EXIT_START_BLOCKED: 'error',
     EXIT_STACK_UNHEALTHY: 'error',
 }
+
+# ── costmap diagnostics (READ-ONLY; nothing here reaches selection) ─────────
+# The explorer plans against a grid it cannot see. Every planner verdict it
+# logs comes from navfn reading the GLOBAL COSTMAP, while every occupancy
+# number it prints comes from the SLAM map — two different grids, with
+# different geometry and an inflation layer in only one of them. rung2g halted
+# with all 12 candidates unplannable while a 0.5 m start probe planned fine
+# from the same pose, and reconstructing the costmap offline from the saved PGM
+# could not reproduce what the planner saw. So the costmap is subscribed
+# directly and printed BESIDE the SLAM readout at every diagnostic point: the
+# pair is the evidence, and divergence between them is the finding.
+#
+# TWO costmap topics, because one of them is not what its name suggests.
+# nav2's Costmap2DPublisher publishes the OccupancyGrid on `costmap` for
+# VISUALISATION, translated through cost_translation_table_ onto the -1..100
+# OccupancyGrid scale (0->0, 253->99, 254->100, 255->-1, 1-252->1..98). The
+# costs navfn actually reads are the 0-255 ones on `costmap_raw`
+# (nav2_msgs/Costmap, whose data is uint8). Both are logged, named from the ONE
+# raw table below, so a translated 100 always appears next to the raw 254 that
+# produced it and neither number can be misread on its own.
+#
+# All four topics are latched (transient-local) by nav2. A volatile
+# subscription to a latched publisher that has already sent its last message
+# receives NOTHING, silently — the same shape as the wrong-file/empty-grep
+# failure this whole change exists to prevent.
+COSTMAP_TOPIC = 'global_costmap/costmap'          # nav_msgs/OccupancyGrid, -1..100
+COSTMAP_UPDATE_TOPIC = 'global_costmap/costmap_updates'      # map_msgs/OccupancyGridUpdate
+COSTMAP_RAW_TOPIC = 'global_costmap/costmap_raw'  # nav2_msgs/Costmap, 0..255
+COSTMAP_RAW_UPDATE_TOPIC = 'global_costmap/costmap_raw_updates'  # nav2_msgs/CostmapUpdate
+
+# nav2's cost semantics (nav2_costmap_2d/cost_values.hpp). Only these four
+# values carry a name; 1-252 is the inflation gradient, which nav2 does not
+# name and which no decision here reads.
+COST_FREE = 0
+COST_INSCRIBED = 253       # inside the inscribed radius: navfn will not path here
+COST_LETHAL = 254
+COST_NO_INFORMATION = 255  # arrives as -1 on the OccupancyGrid scale
+COST_NAMES = {
+    COST_FREE: 'FREE',
+    COST_INSCRIBED: 'INSCRIBED_INFLATED',
+    COST_LETHAL: 'LETHAL',
+    COST_NO_INFORMATION: 'NO_INFORMATION',
+}
+
+
+class _OffCostmap:
+    """Sentinel: the queried point lies outside the costmap entirely.
+
+    A distinct value rather than a raise or a clamp, for the same reason
+    _pose_occupancy_readout reports 'off' instead of guessing: a pose the
+    planner's own grid does not even COVER is a finding in itself, and an edge
+    cell substituted for it would read as an ordinary cost and hide it.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return 'off-costmap'
+
+
+OFF_COSTMAP = _OffCostmap()
+
+# One costmap cell, as read. `cost` is the unsigned 0-255 value, `raw` the
+# number exactly as it sat in the message array (negative for 253/254/255 on a
+# signed int8 grid), `name` the nav2 semantic name of `cost`. Both numbers are
+# kept because they answer different questions: `cost` is what nav2 means, and
+# `raw` is what was actually on the wire — which is the one to look at when the
+# two grids disagree about a cell.
+CostReading = namedtuple('CostReading', ('cost', 'name', 'raw'))
+
+
+def cost_name(cost):
+    """nav2's semantic name for an unsigned 0-255 cost."""
+    return COST_NAMES.get(cost, 'COST')
+
+
+class _CostGrid:
+    """An immutable-geometry snapshot of one costmap, with its own arithmetic.
+
+    Deliberately NOT sharing a transform helper with the SLAM map or with the
+    other costmap. The three grids are published by different nodes with
+    independent origins, resolutions and sizes; a shared helper would make
+    "same cell" look meaningful across them, and the whole point of this
+    readout is that they can disagree. Each grid converts its own world
+    coordinates and reports its own cell indices.
+
+    `data` is a plain list copied off the message, so a partial update can be
+    spliced into it without mutating a message rclpy still owns. Pure Python —
+    no rclpy, no node — so the cost lookup is unit-testable directly.
+    """
+
+    __slots__ = ('data', 'width', 'height', 'resolution', 'origin_x',
+                 'origin_y', 'scale', 'topic', 'stamp', 'seq', 'updates',
+                 'rejected')
+
+    def __init__(self, data, width, height, resolution, origin_x, origin_y,
+                 scale, topic, stamp, seq):
+        self.data = data
+        self.width = width
+        self.height = height
+        self.resolution = resolution
+        self.origin_x = origin_x
+        self.origin_y = origin_y
+        self.scale = scale        # 'translated' (-1..100) or 'raw' (0..255)
+        self.topic = topic
+        self.stamp = stamp        # time.monotonic() at receipt
+        self.seq = seq            # full grids received on this topic so far
+        self.updates = 0          # partial updates APPLIED to this snapshot
+        self.rejected = 0         # partial updates that did not fit and were dropped
+
+    @classmethod
+    def from_occupancy_grid(cls, msg, topic, stamp, seq):
+        """Snapshot a nav_msgs/OccupancyGrid (the translated -1..100 scale)."""
+        info = msg.info
+        return cls(list(msg.data), info.width, info.height, info.resolution,
+                   info.origin.position.x, info.origin.position.y,
+                   'translated', topic, stamp, seq)
+
+    @classmethod
+    def from_costmap(cls, msg, topic, stamp, seq):
+        """Snapshot a nav2_msgs/Costmap (the raw 0-255 costs navfn reads).
+
+        Different message, different field names — size_x/size_y under
+        `metadata` rather than width/height under `info` — which is exactly why
+        there are two constructors instead of one duck-typed one.
+        """
+        md = msg.metadata
+        return cls(list(msg.data), md.size_x, md.size_y, md.resolution,
+                   md.origin.position.x, md.origin.position.y,
+                   'raw', topic, stamp, seq)
+
+    def cell_of(self, x, y):
+        """Cell indices for world (x, y). May be outside the grid."""
+        # floor, not int(): int() truncates toward zero, so a point LEFT of the
+        # origin maps to cell 0 and reads as an ordinary in-bounds cost instead
+        # of as off-grid. (_pose_occupancy_readout still truncates; it is not
+        # touched here, and this comment is the record of the divergence.)
+        return (int(math.floor((x - self.origin_x) / self.resolution)),
+                int(math.floor((y - self.origin_y) / self.resolution)))
+
+    def cost_of_cell(self, cx, cy):
+        """Read one cell, or the OFF_COSTMAP sentinel when it is out of bounds."""
+        if not (0 <= cx < self.width and 0 <= cy < self.height):
+            return CostReading(OFF_COSTMAP, 'off-costmap', OFF_COSTMAP)
+        raw = self.data[cy * self.width + cx]
+        # The int8 wrap: on a SIGNED array nav2's 253/254/255 arrive as
+        # -3/-2/-1, so an unguarded read reports LETHAL as a small negative and
+        # NO_INFORMATION as -1 with no way to tell it from a cost. A uint8
+        # source (costmap_raw) never goes negative and passes through unchanged.
+        cost = raw + 256 if raw < 0 else raw
+        return CostReading(cost, cost_name(cost), raw)
+
+    def cost_at(self, x, y):
+        """Read the cell holding world (x, y). Never raises, never clamps."""
+        return self.cost_of_cell(*self.cell_of(x, y))
+
+    def apply_update(self, x0, y0, width, height, data, stamp):
+        """Splice a partial update into this snapshot. True when applied.
+
+        Returns False — and counts the miss in `rejected` — for a window that
+        runs off the grid or a payload too short to fill it, which is what
+        arrives when the costmap has been RESIZED and this snapshot is now the
+        wrong shape. Dropping it leaves a region stale, so it is counted rather
+        than silently absorbed; the readout prints the count.
+        """
+        if width <= 0 or height <= 0:
+            return False
+        if (x0 < 0 or y0 < 0 or x0 + width > self.width or
+                y0 + height > self.height or len(data) < width * height):
+            self.rejected += 1
+            return False
+        for row in range(height):
+            src = row * width
+            dst = (y0 + row) * self.width + x0
+            self.data[dst:dst + width] = list(data[src:src + width])
+        self.stamp = stamp
+        self.updates += 1
+        return True
+
+    def geometry(self):
+        """Format this grid's own shape and placement, for a readout header."""
+        return (f'{self.width}x{self.height} res={self.resolution:.3f} '
+                f'origin=({self.origin_x:.3f}, {self.origin_y:.3f})')
+
 
 # Consecutive DEFER cycles (see _Defer) before the run STOPS instead of waiting
 # again. Each cycle is individually bounded — _wait_for_fresh_map is timeout-
@@ -464,6 +650,37 @@ class _SensorNode(Node):
         self.create_subscription(
             OccupancyGrid, f'/{ns}/map', self._on_map, map_qos, callback_group=cbg)
 
+        # ── the planner's own grids (DIAGNOSTIC ONLY) ───────────────────────
+        # Nothing read from these reaches selection, dispatch or retirement;
+        # they exist so a log line can say what navfn saw instead of leaving it
+        # to be reconstructed from a PGM afterwards. Same latched QoS as the
+        # SLAM map, and for the same reason — nav2 publishes all four
+        # transient-local, and a volatile subscriber to a latched topic gets
+        # nothing at all rather than something stale.
+        self.costmap_topic = f'/{ns}/{COSTMAP_TOPIC}'
+        self.costmap_raw_topic = f'/{ns}/{COSTMAP_RAW_TOPIC}'
+        # Its own lock, NOT self._lock: a partial update mutates a snapshot in
+        # place, and the map path must not have to wait behind that.
+        self._cm_lock = threading.Lock()
+        self._costmap = None               # translated -1..100 (visualisation scale)
+        self._costmap_raw = None           # raw 0..255 (what navfn reads)
+        self._costmap_seq = 0
+        self._costmap_raw_seq = 0
+        self._costmap_orphans = 0          # updates that arrived before any full grid
+        self._orphan_logged = False
+        self.create_subscription(
+            OccupancyGrid, self.costmap_topic, self._on_costmap,
+            map_qos, callback_group=cbg)
+        self.create_subscription(
+            OccupancyGridUpdate, f'/{ns}/{COSTMAP_UPDATE_TOPIC}',
+            self._on_costmap_update, map_qos, callback_group=cbg)
+        self.create_subscription(
+            Costmap, self.costmap_raw_topic, self._on_costmap_raw,
+            map_qos, callback_group=cbg)
+        self.create_subscription(
+            CostmapUpdate, f'/{ns}/{COSTMAP_RAW_UPDATE_TOPIC}',
+            self._on_costmap_raw_update, map_qos, callback_group=cbg)
+
         # Robot pose comes from TF (SLAM's map->odom + bridged odom->base). The
         # listener rides this node's executor, so the buffer stays current.
         self.tf_buffer = Buffer()
@@ -478,6 +695,66 @@ class _SensorNode(Node):
         """Return ``(latest_map_or_None, sequence_number)`` atomically."""
         with self._lock:
             return self._map, self._map_seq
+
+    # ── costmap intake (diagnostic; never raises into a callback) ───────────
+    def _on_costmap(self, msg: OccupancyGrid):
+        with self._cm_lock:
+            self._costmap_seq += 1
+            self._costmap = _CostGrid.from_occupancy_grid(
+                msg, self.costmap_topic, time.monotonic(), self._costmap_seq)
+
+    def _on_costmap_raw(self, msg: Costmap):
+        with self._cm_lock:
+            self._costmap_raw_seq += 1
+            self._costmap_raw = _CostGrid.from_costmap(
+                msg, self.costmap_raw_topic, time.monotonic(),
+                self._costmap_raw_seq)
+
+    def _on_costmap_update(self, msg: OccupancyGridUpdate):
+        # map_msgs names the window width/height; nav2_msgs names it
+        # size_x/size_y. Both are unpacked at their own call site rather than
+        # duck-typed, so a renamed field is an import error, not a silent miss.
+        self._apply_update('_costmap', msg.x, msg.y, msg.width, msg.height,
+                           msg.data)
+
+    def _on_costmap_raw_update(self, msg: CostmapUpdate):
+        self._apply_update('_costmap_raw', msg.x, msg.y, msg.size_x,
+                           msg.size_y, msg.data)
+
+    def _apply_update(self, attr, x, y, width, height, data):
+        """Fold a partial update into the named snapshot.
+
+        With ``always_send_full_costmap: True`` (both costmaps in
+        experiments/nav/nav2_robot<id>.yaml today) nav2 republishes the whole
+        grid every cycle and these topics stay silent — but that is a YAML
+        setting, and a diagnostic that goes quiet when the YAML is edited is
+        the exact drift this change exists to end. So updates are applied, and
+        an update that arrives with no full grid to fold into says so once.
+        """
+        with self._cm_lock:
+            grid = getattr(self, attr)
+            if grid is None:
+                self._costmap_orphans += 1
+                if not self._orphan_logged:
+                    self._orphan_logged = True
+                    self.get_logger().warn(
+                        f'costmap update on {attr} arrived before any full '
+                        f'costmap — nothing to fold it into, so the costmap '
+                        f'readout stays empty until a full grid is published.')
+                return
+            grid.apply_update(int(x), int(y), int(width), int(height), data,
+                              time.monotonic())
+
+    def get_costmaps(self):
+        """Return ``(translated_or_None, raw_or_None)`` atomically.
+
+        The snapshots are handed out live rather than copied: a partial update
+        can mutate one while a caller reads it, which for a diagnostic costs at
+        worst one cell read one cycle old and is far cheaper than copying the
+        whole grid on every log line.
+        """
+        with self._cm_lock:
+            return self._costmap, self._costmap_raw
 
     def robot_xy(self):
         """Current robot (x, y) in the map frame, or None if TF isn't ready."""
@@ -680,6 +957,13 @@ class FrontierExplorer(BasicNavigator):
         self._last_defer_definitive = True
         self._last_defer_truncated = False
 
+        # Costmap diagnostics: warn ONCE, ever, if the planner's own grids
+        # never arrived. Once — because the readout is attached to per-candidate
+        # log lines and a per-call warning would flood the log it exists to make
+        # readable — but never zero, because a silent costmap readout is
+        # indistinguishable from a costmap that says everything is free.
+        self._costmap_missing_warned = False
+
         # Clock-stall detector state (wall clock; infra-failure warning only).
         self._stall_sim_last = None    # last sim time we saw advance
         self._stall_since = None       # monotonic time sim last advanced
@@ -708,6 +992,117 @@ class FrontierExplorer(BasicNavigator):
             if remaining <= 0:
                 break
             time.sleep(min(0.1, remaining))
+
+    # ── costmap diagnostics (READ-ONLY) ──────────────────────────────────────
+    def _costmaps_or_warn(self, where):
+        """Return ``(translated, raw)`` costmap snapshots, either possibly None.
+
+        The single gate every costmap readout goes through, so the "never
+        received" case is announced exactly once per run no matter how many
+        diagnostic points ask. `where` names the first point that asked, which
+        is what says whether the costmap was missing from the start or only
+        went missing later.
+
+        Never raises: this is a diagnostic, and a run must not end differently
+        because a log line could not be built. A failure to READ the snapshots
+        is still reported at WARN rather than swallowed — silence here would
+        reproduce the wrong-file/empty-grep failure this change exists to
+        prevent.
+        """
+        try:
+            cm, raw = self.sensor.get_costmaps()
+        except Exception as exc:
+            cm = raw = None
+            if not self._costmap_missing_warned:
+                self._costmap_missing_warned = True
+                self.warn(f'[robot_{self.robot_id}] costmap diagnostic '
+                          f'({where}): could not read the costmap snapshots: '
+                          f'{exc!r} — every costmap readout in this run will '
+                          f'be empty.')
+            return None, None
+
+        if (cm is None or raw is None) and not self._costmap_missing_warned:
+            self._costmap_missing_warned = True
+            missing = ' and '.join(
+                t for t, g in ((COSTMAP_TOPIC, cm),
+                               (COSTMAP_RAW_TOPIC, raw)) if g is None)
+            self.warn(f'[robot_{self.robot_id}] costmap diagnostic ({where}): '
+                      f'nothing has ever been received on {missing} — the grid '
+                      f'the planner reads cannot be reported, so every costmap '
+                      f'readout from here is degraded. Check that '
+                      f'global_costmap is active and that this subscription '
+                      f'is transient-local.')
+        return cm, raw
+
+    @staticmethod
+    def _cost_reading_note(label, grid, x, y):
+        """``<label>=<cost> <NAME>`` for (x, y), or why there is no value."""
+        if grid is None:
+            return f'{label}=none-received'
+        r = grid.cost_at(x, y)
+        if r.cost is OFF_COSTMAP:
+            return f'{label}=off-costmap'
+        # The wire value is only worth printing where it differs from the cost
+        # it decodes to — i.e. exactly on the 253/254/255 cells that motivated
+        # the unwrap, where seeing '-2' in the log is what confirms it fired.
+        wire = f' int8={r.raw}' if r.raw != r.cost else ''
+        return f'{label}={r.cost} {r.name}{wire}'
+
+    def _cost_note(self, cm, raw, x, y):
+        """Both grids' cost at one world point, as one greppable clause.
+
+        ``costmap=100 COST raw=254 LETHAL`` — the translated number next to the
+        raw one that produced it (nav2 maps 253->99, 254->100, 255->-1), so
+        neither can be misread alone. One `costmap=` token per line, so
+        ``grep -a 'costmap='`` finds every costmap readout in a run.
+        """
+        return (f'{self._cost_reading_note("costmap", cm, x, y)} '
+                f'{self._cost_reading_note("raw", raw, x, y)}')
+
+    def _costmap_pose_readout(self, grid, label, px, py, near_xy):
+        """One grid's account of the pose the run ended on.
+
+        Mirrors _pose_occupancy_readout's three claims — the robot's own cell,
+        its 3x3 neighbourhood, and the nearest occupied cell — against the grid
+        navfn actually planned over. It reports THIS grid's cell indices, not
+        the SLAM map's: the two have independent origins and resolutions, and
+        the whole reason for printing both is that they can disagree.
+
+        `near_xy` is the nearest SLAM-occupied point, or None. Its cost here is
+        the load-bearing comparison: a cell the SLAM map calls occupied and the
+        costmap calls FREE (or the reverse) is the divergence being hunted.
+
+        `label` names the clause only when there is no grid to ask; a grid that
+        arrived is labelled with the scale IT says it is on, so a clause can
+        never be headed with a scale its numbers are not on.
+        """
+        if grid is None:
+            return f'costmap[{label}] none received'
+        cx, cy = grid.cell_of(px, py)
+
+        def val(x, y):
+            r = grid.cost_of_cell(x, y)
+            return 'off' if r.cost is OFF_COSTMAP else str(r.cost)
+
+        # North (+y) row first, so the rows read like the map rather than like
+        # the array — the same convention as the SLAM readout beside it.
+        rows = ' '.join(
+            '[' + ','.join(val(x, y) for x in (cx - 1, cx, cx + 1)) + ']'
+            for y in (cy + 1, cy, cy - 1))
+        here = grid.cost_of_cell(cx, cy)
+        cell = ('off-costmap' if here.cost is OFF_COSTMAP else
+                f'{here.cost} {here.name}')
+        if near_xy is None:
+            nearest = 'no occupied cell in the SLAM grid to compare'
+        else:
+            nearest = self._cost_reading_note('cost', grid,
+                                              near_xy[0], near_xy[1])
+        return (f'costmap[{grid.scale}] {grid.topic} seq {grid.seq}, '
+                f'{grid.updates} updates applied ({grid.rejected} rejected), '
+                f'{max(0.0, time.monotonic() - grid.stamp):.1f}s old, '
+                f'{grid.geometry()}: cell ({cx}, {cy}) cost={cell}; '
+                f'3x3 north-row-first {rows}; at nearest SLAM-occupied '
+                f'{nearest}')
 
     # ── frontier detection ───────────────────────────────────────────────────
     def _frontier_clusters(self):
@@ -937,11 +1332,17 @@ class FrontierExplorer(BasicNavigator):
         one that is working.
         """
         gx, gy = goal_xy
+        # Read the planner's own grids at the candidate BEFORE asking about it,
+        # so the verdict and the cost that produced it land on the same line
+        # and neither has to be matched up with a readout logged elsewhere.
+        cm, raw = self._costmaps_or_warn(f'precheck cand#{idx}')
+        cost_note = self._cost_note(cm, raw, gx, gy)
         reply = self.sensor.plan_to(gx, gy, self.map_frame)
         if reply is None:
             self.info(f'[robot_{self.robot_id}] precheck cand#{idx} '
                       f'({gx:.2f}, {gy:.2f}) -> no answer within '
-                      f'{PLAN_CALL_WAIT:.1f}s wall — INCONCLUSIVE')
+                      f'{PLAN_CALL_WAIT:.1f}s wall — INCONCLUSIVE '
+                      f'{cost_note}')
             return reachability.INCONCLUSIVE, None
 
         code, path_xy, ptime, msg = reply
@@ -949,7 +1350,8 @@ class FrontierExplorer(BasicNavigator):
         msg_note = f' error_msg="{msg}"' if msg else ''
         self.info(f'[robot_{self.robot_id}] precheck cand#{idx} '
                   f'({gx:.2f}, {gy:.2f}) -> {verdict} error_code={code} '
-                  f'planning_time={ptime:.3f}s poses={len(path_xy)}{msg_note}')
+                  f'planning_time={ptime:.3f}s poses={len(path_xy)} '
+                  f'{cost_note}{msg_note}')
         return verdict, code
 
     def _start_probe(self, rx, ry, deadline=None):
@@ -992,11 +1394,18 @@ class FrontierExplorer(BasicNavigator):
                           f'skipped: cycle budget spent — INCONCLUSIVE')
                 return reachability.INCONCLUSIVE
 
+            # Targets are chosen from the SLAM map (see _free_targets_near),
+            # which has no inflation layer — so the costmap's own cost at a
+            # target is precisely what says whether "free cell" meant the same
+            # thing to the planner that refused to reach it.
+            cm, raw = self._costmaps_or_warn(f'start probe {n}/{total}')
+            cost_note = self._cost_note(cm, raw, tx, ty)
             reply = self.sensor.plan_to(tx, ty, self.map_frame)
             if reply is None:
                 self.info(f'[robot_{self.robot_id}] start probe {n}/{total} '
                           f'({tx:.2f}, {ty:.2f}) -> no answer within '
-                          f'{PLAN_CALL_WAIT:.1f}s wall — INCONCLUSIVE')
+                          f'{PLAN_CALL_WAIT:.1f}s wall — INCONCLUSIVE '
+                          f'{cost_note}')
                 return reachability.INCONCLUSIVE
 
             code, path_xy, ptime, msg = reply
@@ -1004,8 +1413,8 @@ class FrontierExplorer(BasicNavigator):
             msg_note = f' error_msg="{msg}"' if msg else ''
             self.info(f'[robot_{self.robot_id}] start probe {n}/{total} '
                       f'({tx:.2f}, {ty:.2f}) -> {verdict} error_code={code} '
-                      f'planning_time={ptime:.3f}s poses={len(path_xy)}'
-                      f'{msg_note}')
+                      f'planning_time={ptime:.3f}s poses={len(path_xy)} '
+                      f'{cost_note}{msg_note}')
             if verdict == reachability.START_OK:
                 return reachability.START_OK
             if verdict != reachability.START_BLOCKED:
@@ -1541,6 +1950,13 @@ class FrontierExplorer(BasicNavigator):
 
         Grid arithmetic is _frontier_clusters': row-major ``y * w + x``, cell
         centre at ``origin + (i + 0.5) * res``, occupied is ``v >= OCC_THRESH``.
+
+        The same three claims are then repeated against BOTH costmaps, because
+        the SLAM grid is not the grid the planner refused to plan over. (a) and
+        (b) both assume the two agree; a third explanation — they don't — is
+        invisible from this readout alone, and was the one left standing after
+        rung2g. The costmap clauses carry their own cell indices and their own
+        geometry: nothing about them is derived from the SLAM map.
         """
         w, h = g.info.width, g.info.height
         res = g.info.resolution
@@ -1579,12 +1995,22 @@ class FrontierExplorer(BasicNavigator):
         nearest = ('none in the grid' if near_d is None else
                    f'{near_d:.3f} m away at ({near_xy[0]:.2f}, {near_xy[1]:.2f})')
 
+        # The costmap beside the SLAM grid, one self-contained clause each.
+        # Same three claims, read off the grid navfn planned over — and where
+        # the two disagree, THAT is the finding: rung2g's 12 unplannable
+        # candidates were reconstructed from a PGM and the reconstruction could
+        # not reproduce what the planner saw.
+        cm, raw = self._costmaps_or_warn('termination readout')
+        costmaps = '; '.join(
+            self._costmap_pose_readout(grid, label, px, py, near_xy)
+            for label, grid in (('translated', cm), ('raw', raw)))
+
         return (f'pose ({px:.3f}, {py:.3f}) -> cell ({cx}, {cy}) '
                 f'value={"off-grid" if here is None else here} '
                 f'(OCC_THRESH={OCC_THRESH}, unknown={UNKNOWN}); '
                 f'3x3 north-row-first {rows}; nearest occupied {nearest}; '
                 f'map seq {seq}, grid {w}x{h} res={res:.3f} '
-                f'origin=({ox:.3f}, {oy:.3f})')
+                f'origin=({ox:.3f}, {oy:.3f}); {costmaps}')
 
     def _dump_termination_diagnostics(self, reason, fallback_xy):
         """Save the grid and log what it says about the pose the run ended on.
@@ -1613,10 +2039,23 @@ class FrontierExplorer(BasicNavigator):
             log = {'info': self.info, 'warn': self.warn, 'error': self.error}[
                 EXIT_LEVELS.get(reason, 'error')]
             if g is None:
+                # No SLAM map, but the costmap is a separate publisher and may
+                # well have arrived — reporting it here is the difference
+                # between "SLAM died" and "everything died".
+                cm, raw = self._costmaps_or_warn('termination readout')
+                pose = self.sensor.robot_xy() or fallback_xy
+                if pose is None:
+                    where = 'no pose to read them at either'
+                else:
+                    where = f'at ({pose[0]:.3f}, {pose[1]:.3f}): ' + '; '.join(
+                        self._costmap_pose_readout(grid, label, pose[0],
+                                                   pose[1], None)
+                        for label, grid in (('translated', cm), ('raw', raw)))
                 self.warn(
                     f'[robot_{self.robot_id}] termination diagnostic ({reason}): '
                     f'no map has ever been received, so nothing could be saved or '
-                    f'read — the occupancy evidence for this stop is lost.')
+                    f'read — the occupancy evidence for this stop is lost. '
+                    f'The grids the planner reads, {where}')
                 return
             pose = self.sensor.robot_xy() or fallback_xy
             tag = (f'robot{self.robot_id}_'
