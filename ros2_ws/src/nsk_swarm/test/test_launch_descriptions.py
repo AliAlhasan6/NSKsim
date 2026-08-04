@@ -46,11 +46,12 @@ REQUIRE_NAV2 = os.environ.get('NSK_REQUIRE_NAV2', '') not in ('', '0', 'false')
 # test_frontier_explorer_gate.py). Only one test below needs this constant, so
 # guard the import rather than skipping the whole module.
 try:
-    from nsk_swarm.frontier_explorer import NAV2_REQUIRED_SERVERS
+    from nsk_swarm.frontier_explorer import (ESCAPE_DISTANCE,
+                                             NAV2_REQUIRED_SERVERS)
 except ImportError:
     if REQUIRE_NAV2:
         raise
-    NAV2_REQUIRED_SERVERS = None
+    ESCAPE_DISTANCE = NAV2_REQUIRED_SERVERS = None
 
 
 LAUNCH_DIR = os.path.join(
@@ -223,6 +224,21 @@ def test_explore_launches_slam_nav2_and_the_explorer():
     assert slam[0].node_executable == 'async_slam_toolbox_node'
 
     assert present.count(('nsk_swarm', 'frontier_explorer')) == 1
+
+
+@pytest.mark.skipif(ESCAPE_DISTANCE is None, reason='needs nav2_simple_commander')
+def test_the_escape_distance_default_matches_the_module_constant():
+    # explore.launch.py declares this default as a LITERAL, on purpose: it
+    # imports nothing from nsk_swarm, so that a launch description never drags
+    # rclpy and nav2_simple_commander in. This is the price of that choice —
+    # the two spellings of one number, held equal here rather than by hope.
+    ld = build('explore.launch.py')
+    declared = [e for e in _walk(ld)
+                if isinstance(e, DeclareLaunchArgument)
+                and e.name == 'escape_distance']
+
+    assert len(declared) == 1, 'escape_distance must be a launch argument'
+    assert float(declared[0].default_value[0].text) == ESCAPE_DISTANCE
 
 
 def test_explore_nav2_group_pushes_the_namespace_and_keeps_the_global_tf():

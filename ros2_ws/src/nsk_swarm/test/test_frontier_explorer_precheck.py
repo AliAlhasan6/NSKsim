@@ -859,7 +859,8 @@ class FakeClock:
         self.now += max(seconds, 1e-9)
 
 
-def make_loop_stub(selections, monkeypatch):
+def make_loop_stub(selections, monkeypatch, costmaps=(None, None), grid=None,
+                   escape_distance=fx.ESCAPE_DISTANCE if fx else 0.6):
     """Bind the real explore() over a scripted sequence of _select_goal results.
 
     `selections` is consumed one per loop iteration; the last entry repeats, so
@@ -868,6 +869,12 @@ def make_loop_stub(selections, monkeypatch):
     third field distinguishing the two ways a non-definitive cycle can arise
     (an unanswered probe vs. a probe budget that ran out), which explore() has
     to report differently.
+
+    `costmaps` and `grid` default to the degraded pair every pre-existing test
+    in this file runs on: no costmap at all, and a bare object() for the SLAM
+    map. That combination classifies as VERDICT_NONE, so the inflation-pocket
+    escape is inert and the defer arms below are tested exactly as before.
+    The escape tests supply real ones.
     """
     monkeypatch.setattr(fx, 'time', FakeClock())
     monkeypatch.setattr(fx, 'rclpy', SimpleNamespace(ok=lambda: True))
@@ -879,9 +886,10 @@ def make_loop_stub(selections, monkeypatch):
         base_frame='robot_0/base_footprint',
         sensor=SimpleNamespace(
             robot_xy=lambda: (0.0, 0.0),
-            get_map=lambda: (object(), 0),
-            get_costmaps=lambda: (None, None),
+            get_map=lambda: (grid if grid is not None else object(), 0),
+            get_costmaps=lambda: costmaps,
             sim_time=lambda: 0.0),
+        _escape_distance=escape_distance,
         _costmap_missing_warned=False,
         _precheck=True,
         _last_defer_definitive=True,
@@ -911,7 +919,7 @@ def make_loop_stub(selections, monkeypatch):
     stub._cost_reading_note = FrontierExplorer._cost_reading_note
     for name in ('_pose_occupancy_readout', '_dump_termination_diagnostics',
                  '_costmap_pose_readout', '_costmaps_or_warn', '_cost_note',
-                 '_halt_verdict_note'):
+                 '_halt_verdict_note', '_pocket_escape_target', '_run_escape'):
         setattr(stub, name, getattr(FrontierExplorer, name).__get__(stub))
 
     def select(rx, ry, map_seq=0):
@@ -1515,3 +1523,298 @@ def test_an_inconclusive_start_probe_leaves_the_planners_verdict_standing():
 
     assert outcome == fx.OutcomeClassifier.UNREACHABLE_NO_PATH
     assert blacklists(outcome) is True
+
+
+# ── the inflation-pocket escape ─────────────────────────────────────────────
+#
+# rung2h halted at 14 goals inside an inflation pocket: SLAM cell unknown, raw
+# costmap 253 across the whole 3x3, a 254 at 0.072 m, and five robots visibly
+# well separated on open floor. Waiting cannot clear that — SLAM will not free
+# a cell that was never occupied, and the residue inflating it belongs to a
+# peer — so every deferral the run spent there was spent on nothing.
+#
+# The escape dispatches a short displacement through Nav2 instead, because Nav2
+# owns the wheels: robot_node mutes its own reverse-rotate recovery whenever an
+# external controller drives (robot_node.py:126), so under nav_robots:=[0] that
+# recovery is inert for robot_0 and is not on this path at all.
+#
+# These tests pin the two things that make it safe rather than merely useful:
+# it fires on ONE verdict out of four, and it is bounded so a pocket it cannot
+# escape ends the run with its own name on the exit instead of livelocking.
+
+class Tripwire:
+    """Any attribute access is a test failure, with the name in the message."""
+
+    def __init__(self, what):
+        object.__setattr__(self, '_what', what)
+
+    def __getattr__(self, name):
+        raise AssertionError(
+            f'the escape path reached {object.__getattribute__(self, "_what")}'
+            f'.{name} — an escape is displacement, not evidence about any '
+            f'frontier, and must not be recorded as a goal outcome')
+
+
+def raw_costmap(fill=253, w=120, h=120, res=0.05, ox=-3.0, oy=-3.0):
+    """A raw-scale costmap snapshot, uniformly `fill`."""
+    msg = SimpleNamespace(
+        metadata=SimpleNamespace(
+            size_x=w, size_y=h, resolution=res,
+            origin=SimpleNamespace(position=SimpleNamespace(x=ox, y=oy))),
+        data=[fill] * (w * h))
+    return fx._CostGrid.from_costmap(
+        msg, f'/robot_0/{fx.COSTMAP_RAW_TOPIC}', 0.0, 1)
+
+
+# A normal dispatchable selection. Wrapped in the (sel, definitive) form the
+# script reader expects — a bare 3-tuple would be read as its three FIELDS.
+GOAL_SEL = (((1.0, 1.0), (1.2, 1.2), 30), True)
+
+
+def escape_stub(monkeypatch, script, raw_fill=253, slam_fill=-1,
+                costmaps=None, goal_outcome='SUCCEEDED', **kw):
+    """A loop stub whose pose reads as an inflation pocket by default.
+
+    SLAM says unknown, the raw costmap says INSCRIBED_INFLATED everywhere —
+    rung2h's readings. Vary `slam_fill` / `raw_fill` to move the verdict onto
+    another branch and the escape must go quiet.
+    """
+    grid = fake_grid(120, 120, ox=-3.0, oy=-3.0, fill=slam_fill)
+    raw = raw_costmap(fill=raw_fill)
+    stub = make_loop_stub(script, monkeypatch,
+                          costmaps=costmaps if costmaps is not None
+                          else (None, raw),
+                          grid=grid, **kw)
+    stub.dispatched = []          # every goal handed to Nav2, escape or not
+    stub.supervised = []          # (goal_num, goal_xy, label) per supervision
+    stub._make_goal = lambda x, y: ('goal', round(x, 3), round(y, 3))
+    stub.goToPose = lambda goal: stub.dispatched.append(goal)
+    stub._retirements = Tripwire('_retirements')
+    stub._classifier = Tripwire('_classifier')
+
+    def supervise(goal_num, goal_xy=None, label=None):
+        stub.supervised.append((goal_num, goal_xy, label))
+        end = stub.dispatched[-1][1:] if stub.dispatched else (0.0, 0.0)
+        return goal_outcome, end, 0.0, (None, '', None)
+
+    stub._supervise_goal = supervise
+    return stub
+
+
+def escapes(stub):
+    return [m for lvl, m in stub.logged if 'escape #' in m and 'END' not in m]
+
+
+def escape_ends(stub):
+    return [m for lvl, m in stub.logged if 'escape #' in m and 'END' in m]
+
+
+# (name, slam fill, raw fill, costmaps override, escapes expected)
+VERDICT_CASES = [
+    ('inflation-pocket', -1, 253, None, True),
+    ('pose-error', 100, 253, None, False),
+    ('neither', -1, 0, None, False),
+    ('no-verdict', -1, 253, (None, None), False),
+]
+
+
+@pytest.mark.parametrize('name,slam,raw_fill,costmaps,fires', VERDICT_CASES,
+                         ids=[c[0] for c in VERDICT_CASES])
+def test_the_escape_fires_on_the_pocket_verdict_and_no_other(
+        name, slam, raw_fill, costmaps, fires, tmp_path, monkeypatch):
+    # One verdict out of four may act. A pose error means the robot is not where
+    # it believes it is, so driving anywhere is driving against geometry that is
+    # not there; 'neither' means the halt was never about the costmap; and
+    # no-verdict means nobody measured, which is the one state where acting is
+    # worse than waiting.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = escape_stub(monkeypatch, [(DEFER, True)],
+                       slam_fill=slam, raw_fill=raw_fill, costmaps=costmaps)
+
+    stub.explore()
+
+    assert bool(escapes(stub)) is fires, stub.logged
+    assert bool(stub.dispatched) is fires
+
+
+def test_the_escape_drives_the_target_the_chooser_picked(tmp_path, monkeypatch):
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = escape_stub(monkeypatch, [(DEFER, True)])
+
+    stub.explore()
+
+    # Uniform inflation: every direction ties, so the documented tie-break sends
+    # it due +x at exactly the configured range, through the ORDINARY dispatch.
+    assert stub.dispatched[0] == ('goal', fx.ESCAPE_DISTANCE, 0.0)
+    assert stub.supervised[0][2] == 'escape #1'     # supervised, not as a goal
+    assert stub.supervised[0][1] is None            # and with no goal to attribute
+
+
+def test_the_escape_range_is_configurable(tmp_path, monkeypatch):
+    # ESCAPE_DISTANCE is one run's observation, so a run has to be able to
+    # re-measure it without a code change.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = escape_stub(monkeypatch, [(DEFER, True)], escape_distance=1.25)
+
+    stub.explore()
+
+    assert stub.dispatched[0] == ('goal', 1.25, 0.0)
+
+
+def test_the_escape_is_capped_and_exits_under_its_own_name(tmp_path,
+                                                            monkeypatch):
+    # A pocket the robot cannot displace out of must END the run, not keep
+    # trying: a halt writes a diagnostic and stops, a livelock writes log until
+    # somebody notices.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = escape_stub(monkeypatch, [(DEFER, True)])
+
+    assert stub.explore() is False
+
+    assert len(escapes(stub)) == fx.MAX_CONSEC_ESCAPES
+    errors = [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert any(f'{fx.MAX_CONSEC_ESCAPES} consecutive inflation-pocket escapes'
+               in m for m in errors), errors
+    # Its own exit reason, so the dump is named for THIS fault...
+    assert len(list(tmp_path.glob(f'*_{fx.EXIT_ESCAPE_EXHAUSTED}.pgm'))) == 1
+    assert any(f'termination diagnostic ({fx.EXIT_ESCAPE_EXHAUSTED})' in m
+               for m in errors), errors
+    # ...and it is not mistaken for the defer caps, either of which would claim
+    # something about the frontiers that no escape established.
+    assert not any('consecutive selection cycles' in m for m in errors), errors
+    assert 'NOT "nothing is reachable"' in errors[0]
+    assert stub.audits == [0]
+
+
+def test_the_escape_cap_is_reached_before_the_defer_cap(tmp_path, monkeypatch):
+    # The ordering that matters: a pocket which ran the DEFER streak out would
+    # exit defer-world, which returns True and reads as "no reachable frontier
+    # remains" — a completion claim from a robot standing in its own inflation.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    assert fx.MAX_CONSEC_ESCAPES < fx.MAX_CONSEC_DEFERS
+    stub = escape_stub(monkeypatch, [(DEFER, True)])
+
+    assert stub.explore() is False
+
+    assert not list(tmp_path.glob(f'*_{fx.EXIT_DEFER_WORLD}.pgm'))
+    assert list(tmp_path.glob(f'*_{fx.EXIT_ESCAPE_EXHAUSTED}.pgm'))
+
+
+def test_a_successful_goal_rearms_the_escape_budget(tmp_path, monkeypatch):
+    # Without the reset the run would stop on the fourth pocket cycle of its
+    # life, however much productive work happened in between.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    script = ([(DEFER, True)] * fx.MAX_CONSEC_ESCAPES + [GOAL_SEL]
+              + [(DEFER, True)] * fx.MAX_CONSEC_ESCAPES + [(None, True)])
+    stub = escape_stub(monkeypatch, script)
+    stub._classifier = SimpleNamespace(
+        classify=lambda outcome, xy, moved: SimpleNamespace(
+            blacklist=False, stop_unhealthy=False, category='SUCCESS',
+            reason='SUCCEEDED — productive'),
+        is_retry_pending=lambda xy: False)
+
+    assert stub.explore() is True
+
+    assert len(escapes(stub)) == 2 * fx.MAX_CONSEC_ESCAPES
+    assert not list(tmp_path.glob(f'*_{fx.EXIT_ESCAPE_EXHAUSTED}.pgm'))
+
+
+def test_a_failed_goal_does_not_rearm_the_escape_budget(tmp_path, monkeypatch):
+    # A goal can dispatch from a pocket and still fail — that is precisely the
+    # state rung2h was in — so a dispatch is not evidence the pocket was left.
+    # Only a productive goal is.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    script = ([(DEFER, True)] * fx.MAX_CONSEC_ESCAPES + [GOAL_SEL]
+              + [(DEFER, True)])
+    stub = escape_stub(monkeypatch, script, goal_outcome='FAILED')
+    stub._classifier = SimpleNamespace(
+        classify=lambda outcome, xy, moved: SimpleNamespace(
+            blacklist=True, stop_unhealthy=False, category='WORLD',
+            reason='FAILED — unproductive'),
+        is_retry_pending=lambda xy: False)
+
+    assert stub.explore() is False
+
+    assert len(escapes(stub)) == fx.MAX_CONSEC_ESCAPES
+    assert list(tmp_path.glob(f'*_{fx.EXIT_ESCAPE_EXHAUSTED}.pgm'))
+
+
+def test_an_escape_is_not_recorded_as_a_goal(tmp_path, monkeypatch):
+    # Run statistics have to stay interpretable. An escape that counted as a
+    # goal would inflate the goal count with displacements nobody selected, and
+    # one that counted as a SUCCESS would report progress for a robot that only
+    # shuffled sideways inside its own inflation.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = escape_stub(monkeypatch, [(DEFER, True)])
+
+    stub.explore()
+
+    end = escape_ends(stub)[0]
+    assert f'outcome={fx.ESCAPE_OUTCOME}' in end
+    assert 'nav2=SUCCEEDED' in end            # the Nav2 result, under its own key
+    assert 'outcome=SUCCEEDED' not in end     # never the goal spelling
+    assert 'Not counted as a goal.' in end
+    # No goal number was spent, so the audit still reports zero goals...
+    assert stub.audits == [0]
+    assert not any('goal #' in m for lvl, m in stub.logged), stub.logged
+    # ...and the re-send guard was not armed with a target nobody selected,
+    # which would blacklist the next frontier chosen near it.
+    assert stub._last_goal is None
+
+
+def test_an_escape_judges_no_frontier(tmp_path, monkeypatch):
+    # The classifier and the retirement ledger are tripwires in this stub: an
+    # escape that consulted either would raise here rather than quietly record
+    # displacement as evidence about a frontier.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = escape_stub(monkeypatch, [(DEFER, True)])
+
+    assert stub.explore() is False            # ran to the escape cap, untouched
+
+    assert len(escapes(stub)) == fx.MAX_CONSEC_ESCAPES
+    assert stub._blacklist == []
+
+
+def test_the_escape_logs_the_before_and_after_evidence(tmp_path, monkeypatch):
+    # The pair IS the finding. One line alone cannot show whether the escape
+    # moved the robot to a better cell or merely moved it.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = escape_stub(monkeypatch, [(DEFER, True)])
+
+    stub.explore()
+
+    out = escapes(stub)[0]
+    assert f'escape #1/{fx.MAX_CONSEC_ESCAPES}' in out
+    assert 'heading 0.0 deg' in out
+    assert f'{fx.ESCAPE_DISTANCE:.2f} m' in out
+    assert 'raw=253 INSCRIBED_INFLATED' in out          # cost at the pose...
+    assert out.count('raw=253 INSCRIBED_INFLATED') == 2  # ...and at the target
+    assert f'{fx.ESCAPE_HEADINGS} drivable directions' in out
+    assert 'no frontier is judged by this' in out
+    # The samples along the chosen ray, robot-outward: the only thing in the
+    # line that says whether the escape LEAVES the inflation or just crosses it
+    # more cheaply. Uniformly 253 here, so it crosses — which is the finding.
+    assert 'samples ' + ','.join(['253'] * 12) in out
+
+    end = escape_ends(stub)[0]
+    assert f'pose=({fx.ESCAPE_DISTANCE:.2f}, 0.00)' in end   # where it ended...
+    assert 'now raw=253 INSCRIBED_INFLATED' in end           # ...and the cost there
+    assert f'moved={fx.ESCAPE_DISTANCE:.2f}m' in end
+
+
+def test_an_unreadable_pose_defers_instead_of_dispatching(tmp_path, monkeypatch):
+    # An escape is an ACTION, so a reading that cannot be taken must fall
+    # through to the deferral the loop would have taken anyway. The bare
+    # object() this stub hands back for the SLAM map is the one reading that
+    # separates a pocket from a pose error.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = escape_stub(monkeypatch, [(DEFER, True)])
+    stub.sensor.get_map = lambda: (object(), 0)
+
+    assert stub.explore() is True             # the ordinary defer-world exit
+
+    assert escapes(stub) == []
+    assert stub.dispatched == []
+    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+    assert any('could not read the pose' in m and 'not dispatching' in m
+               for m in warns), warns

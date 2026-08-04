@@ -106,6 +106,24 @@ def generate_launch_description():
                     'PRECHECK_CYCLE_BUDGET wall seconds per selection cycle, '
                     'whichever binds first (see also PLAN_CALL_WAIT).')
 
+    declare_escape_distance = DeclareLaunchArgument(
+        # Literal, not an import of ESCAPE_DISTANCE: this file imports nothing
+        # from nsk_swarm, and pulling frontier_explorer in would drag rclpy and
+        # nav2_simple_commander into every launch-description evaluation. The
+        # two are held equal by a test instead (test_launch_descriptions.py).
+        'escape_distance', default_value='0.6',
+        description='How far one inflation-pocket escape displaces the robot, '
+                    'in metres. When the pre-check would defer and the halt '
+                    'verdict reads INSCRIBED_INFLATED under a SLAM cell that is '
+                    'free or unknown, the explorer dispatches a short goal in '
+                    'the cheapest drivable direction instead of waiting for a '
+                    'map refresh that cannot clear an inflation layer. The '
+                    'default is the LOW END of the success band measured in ONE '
+                    'run (rung2h: plans succeeded 0.43-1.81 m, failed 0.66-6.34 '
+                    'm, n=1, overlapping) — an observation to be re-measured, '
+                    'not a calibrated value, which is why it is a launch '
+                    'argument. 0 disables the escape.')
+
     declare_rviz = DeclareLaunchArgument(
         'rviz', default_value='false',
         description='Launch an RViz preconfigured for robot_<id> (Fixed Frame '
@@ -250,6 +268,11 @@ def generate_launch_description():
             # cast maps 0/1 onto False/True and makes every spelling work.
             'reachability_precheck': ParameterValue(
                 LaunchConfiguration('reachability_precheck'), value_type=bool),
+            # Same cast, same reason: main() declares this one with a float
+            # default, and 'escape_distance:=1' would otherwise infer as the INT
+            # 1 and be refused at startup on a perfectly reasonable spelling.
+            'escape_distance': ParameterValue(
+                LaunchConfiguration('escape_distance'), value_type=float),
             'use_sim_time': True,
         }],
         output='screen',
@@ -291,6 +314,7 @@ def generate_launch_description():
         declare_slam_params,
         declare_nav2_params,
         declare_precheck,
+        declare_escape_distance,
         declare_rviz,
         slam_node,
         slam_configure,

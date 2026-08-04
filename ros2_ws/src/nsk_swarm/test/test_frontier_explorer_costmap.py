@@ -837,6 +837,141 @@ def test_a_verdict_that_cannot_be_formed_costs_only_the_verdict(tmp_path,
     assert list(tmp_path.glob('*.pgm'))             # and the map still saved
 
 
+# ── choosing where to escape to ─────────────────────────────────────────────
+#
+# _escape_target reads the RAW COSTMAP and nothing else. That is the point: the
+# SLAM grid is what says the robot is standing in free space, and if the
+# direction were chosen from it, it would be chosen blind to the inflation
+# being escaped. rung2h's pose read value=-1 on the SLAM grid and 253 across
+# the whole raw 3x3 — a chooser looking at the map would have seen open floor
+# in every direction and had nothing to prefer.
+
+def carve_ray(grid, px, py, theta, value, distance=fx.ESCAPE_DISTANCE if fx
+              else 0.6):
+    """Write `value` into every cell _escape_target samples along one heading."""
+    steps = max(1, int(round(distance / grid.resolution)))
+    for s in range(1, steps + 1):
+        r = distance * s / steps
+        at(grid, px + r * math.cos(theta), py + r * math.sin(theta), value)
+    return grid
+
+
+def inflated(fill=253, w=120, h=120, ox=-3.0, oy=-3.0):
+    """A costmap that is one big inflation pocket, as rung2h's was."""
+    return grid_of(costmap_msg(w, h, ox=ox, oy=oy, fill=fill))
+
+
+def heading_of(index):
+    return 2.0 * math.pi * index / fx.ESCAPE_HEADINGS
+
+
+def test_the_cheapest_direction_out_of_the_pocket_is_the_one_chosen():
+    raw = carve_ray(inflated(), 0.0, 0.0, heading_of(4), 0)      # due north, free
+    t = fx._escape_target(raw, 0.0, 0.0, fx.ESCAPE_DISTANCE)
+
+    assert t.heading == pytest.approx(heading_of(4))
+    assert t.x == pytest.approx(0.0, abs=1e-9)
+    assert t.y == pytest.approx(fx.ESCAPE_DISTANCE)
+    assert t.score == 0                       # every sample on that ray is FREE
+    assert t.considered == fx.ESCAPE_HEADINGS
+
+
+def test_the_target_sits_at_the_configured_distance():
+    for distance in (0.4, 0.6, 1.2):
+        t = fx._escape_target(inflated(), 0.1, -0.2, distance)
+        assert math.hypot(t.x - 0.1, t.y - (-0.2)) == pytest.approx(distance)
+
+
+def test_unknown_space_rates_worse_than_the_inflation_it_would_escape():
+    # 255 NO_INFORMATION is not a cheaper way out than 253 INSCRIBED_INFLATED:
+    # it is the costmap saying it has no evidence at all. Summing the raw costs
+    # orders them correctly for free, so this needs no special case — but it
+    # does need a test, because getting it backwards would send the robot into
+    # unsensed space every time.
+    raw = carve_ray(inflated(), 0.0, 0.0, heading_of(4), 255)
+    t = fx._escape_target(raw, 0.0, 0.0, fx.ESCAPE_DISTANCE)
+
+    assert t.heading != pytest.approx(heading_of(4))
+    assert t.score < 255 * 12
+
+
+def test_a_lethal_cell_disqualifies_its_whole_ray():
+    # Cheap for eleven samples and impassable on the twelfth is not cheap. No
+    # displacement may drive through a LETHAL cell, whatever the rest costs.
+    raw = carve_ray(inflated(), 0.0, 0.0, heading_of(4), 0)
+    at(raw, 0.0, fx.ESCAPE_DISTANCE, 254)                        # the far end
+    t = fx._escape_target(raw, 0.0, 0.0, fx.ESCAPE_DISTANCE)
+
+    assert t.heading != pytest.approx(heading_of(4))
+    assert t.considered == fx.ESCAPE_HEADINGS - 1
+
+
+def test_a_ray_that_leaves_the_costmap_is_not_considered():
+    # Off the grid is not "free", and an edge cell substituted for it would
+    # read as an ordinary cost — the same failure OFF_COSTMAP exists to stop.
+    raw = grid_of(costmap_msg(40, 40, ox=-1.0, oy=-1.0, fill=253))
+    t = fx._escape_target(raw, 0.9, 0.0, fx.ESCAPE_DISTANCE)     # near the east edge
+
+    assert t is not None
+    assert t.considered < fx.ESCAPE_HEADINGS
+    assert t.x <= 1.0                        # it did not pick a way off the map
+
+
+def test_no_drivable_direction_yields_no_target():
+    # Every way out is lethal: there is nothing to dispatch, and inventing one
+    # would drive the robot into an obstacle to escape an inflation layer.
+    assert fx._escape_target(inflated(fill=254), 0.0, 0.0,
+                             fx.ESCAPE_DISTANCE) is None
+    # Likewise a pose the costmap does not cover at all.
+    away = grid_of(costmap_msg(20, 20, ox=50.0, oy=50.0, fill=0))
+    assert fx._escape_target(away, 0.0, 0.0, fx.ESCAPE_DISTANCE) is None
+
+
+def test_equally_cheap_directions_break_to_a_fixed_heading():
+    # THE case a pocket actually produces: uniform inflation, every direction
+    # exactly as expensive as every other. The choice is arbitrary, but it must
+    # be REPRODUCIBLE — a rerun of one scenario has to make the same move as the
+    # run it is being compared against, or the comparison is between two
+    # different experiments.
+    raw = inflated()
+    first = fx._escape_target(raw, 0.0, 0.0, fx.ESCAPE_DISTANCE)
+
+    assert first.heading == 0.0                          # +x, the lowest index
+    assert first.considered == fx.ESCAPE_HEADINGS
+    for _ in range(5):
+        again = fx._escape_target(inflated(), 0.0, 0.0, fx.ESCAPE_DISTANCE)
+        assert (again.heading, again.x, again.y) == (first.heading, first.x,
+                                                     first.y)
+
+
+def test_the_first_of_several_equally_cheap_rays_wins_over_a_later_one():
+    # Two carved escape routes of identical cost: the lower heading index takes
+    # it, so the tie-break is decided by the documented rule and not by whichever
+    # happened to be written into the grid last.
+    raw = inflated()
+    carve_ray(raw, 0.0, 0.0, heading_of(2), 0)
+    carve_ray(raw, 0.0, 0.0, heading_of(11), 0)
+    t = fx._escape_target(raw, 0.0, 0.0, fx.ESCAPE_DISTANCE)
+
+    assert t.heading == pytest.approx(heading_of(2))
+
+
+def test_no_costmap_and_no_range_yield_no_target():
+    # The escape can never fire on a costmap that never arrived — that is
+    # VERDICT_NONE's whole job — and this is the second lock on it.
+    assert fx._escape_target(None, 0.0, 0.0, fx.ESCAPE_DISTANCE) is None
+    assert fx._escape_target(inflated(), 0.0, 0.0, 0.0) is None
+    assert fx._escape_target(inflated(), 0.0, 0.0, -1.0) is None
+
+
+def test_the_default_distance_is_inside_the_observed_success_band():
+    # rung2h planned successfully at 0.43-1.81 m from a pocket pose and failed
+    # at 0.66-6.34 m. The default belongs in the low end of the success band and
+    # must not BE either extreme — it is one run's observation, not a constant.
+    assert 0.43 <= fx.ESCAPE_DISTANCE <= 1.0
+    assert fx.ESCAPE_DISTANCE not in (0.43, 1.81, 6.34)
+
+
 # ── the probe log lines ─────────────────────────────────────────────────────
 
 class FakePlanner:

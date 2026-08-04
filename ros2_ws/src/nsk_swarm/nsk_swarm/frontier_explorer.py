@@ -237,6 +237,11 @@ EXIT_DEFER_TRUNCATED = 'defer-truncated'
 EXIT_DEFER_UNANSWERED = 'defer-unanswered'
 EXIT_START_BLOCKED = 'startblocked'
 EXIT_STACK_UNHEALTHY = 'stack-unhealthy'
+# Its own reason, not folded into the defer ones: a run that stops here spent
+# MAX_CONSEC_ESCAPES displacements and was STILL in an inflation pocket, which
+# is a different finding from "the planner condemned every candidate" and wants
+# a different fix (the residue, or the inflation radius, not the probe budget).
+EXIT_ESCAPE_EXHAUSTED = 'escape-exhausted'
 
 # Slug -> the severity its arm already reports at. The diagnostic never RAISES
 # the severity of the exit it hangs on: two arms here end a run that is fine
@@ -252,6 +257,7 @@ EXIT_LEVELS = {
     EXIT_DEFER_UNANSWERED: 'error',
     EXIT_START_BLOCKED: 'error',
     EXIT_STACK_UNHEALTHY: 'error',
+    EXIT_ESCAPE_EXHAUSTED: 'error',
 }
 
 # ── costmap diagnostics (READ-ONLY; nothing here reaches selection) ─────────
@@ -511,8 +517,25 @@ def _slam_state(value):
     return 'occupied' if value >= OCC_THRESH else 'free'
 
 
-def _halt_verdict(slam_value, raw, px, py):
-    """One sentence on what the readings at (px, py) support, with the numbers.
+# The four things the readings can support. Named constants rather than a
+# substring match on the sentence, because the escape below TRIGGERS on one of
+# them: a trigger that re-derived the classification, or scraped the prose,
+# could act on a case the log says is something else. One classification, one
+# sentence built from it, one trigger reading it.
+VERDICT_POSE_ERROR = 'pose-error'
+VERDICT_POCKET = 'inflation-pocket'
+VERDICT_NEITHER = 'neither'
+VERDICT_NONE = 'no-verdict'      # no costmap, or a pose it does not cover
+
+# What the readings said, and what they were. `here` is the raw CostReading
+# under the robot and `ring` the count of pocket costs in its 3x3 — both None
+# on VERDICT_NONE, where there was nothing to read. `why` carries the absence's
+# reason and is empty otherwise.
+HaltReading = namedtuple('HaltReading', ('verdict', 'here', 'ring', 'why'))
+
+
+def _halt_classify(slam_value, raw, px, py):
+    """Which explanation the readings at (px, py) support, as a HaltReading.
 
     `raw` is the raw-scale costmap snapshot (0-255, the costs navfn reads) or
     None. The translated grid is deliberately not consulted: it cannot tell
@@ -520,34 +543,45 @@ def _halt_verdict(slam_value, raw, px, py):
     the whole reason the raw topic is subscribed.
 
     Never a verdict without the costmap behind it. A missing or uncovering
-    costmap yields a stated absence, because the SLAM grid alone is exactly
-    what the removed sentence reasoned from.
+    costmap classifies as VERDICT_NONE, because the SLAM grid alone is exactly
+    what the removed sentence reasoned from — and because VERDICT_NONE is what
+    keeps the escape from acting on a pocket nobody measured.
     """
-    shown = 'off-grid' if slam_value is None else slam_value
-    slam_note = f'SLAM value={shown} ({_slam_state(slam_value)})'
-
     if raw is None:
-        return (f'No verdict: nothing has ever been received on the raw '
-                f'costmap, so the cost navfn read under the robot is unknown '
-                f'and the SLAM grid alone cannot tell a pose error from an '
-                f'inflation pocket ({slam_note}).')
+        return HaltReading(VERDICT_NONE, None, None,
+                           'nothing has ever been received on the raw costmap')
     here = raw.cost_at(px, py)
     if here.cost is OFF_COSTMAP:
-        return (f'No verdict: this pose lies outside the raw costmap, so the '
-                f'cost navfn read under the robot is unknown and the SLAM grid '
-                f'alone cannot tell a pose error from an inflation pocket '
-                f'({slam_note}).')
+        return HaltReading(VERDICT_NONE, None, None,
+                           'this pose lies outside the raw costmap')
 
     cx, cy = raw.cell_of(px, py)
     ring = sum(1 for y in (cy - 1, cy, cy + 1) for x in (cx - 1, cx, cx + 1)
                if _pocket_cost(raw.cost_of_cell(x, y).cost))
-    evidence = (f'{slam_note}, raw cost={here.cost} {here.name}, '
-                f'{ring}/9 of the 3x3 at {COST_INSCRIBED}-{COST_LETHAL}')
-
     if _slam_state(slam_value) == 'occupied':
+        return HaltReading(VERDICT_POSE_ERROR, here, ring, '')
+    if _pocket_cost(here.cost):
+        return HaltReading(VERDICT_POCKET, here, ring, '')
+    return HaltReading(VERDICT_NEITHER, here, ring, '')
+
+
+def _halt_verdict(slam_value, raw, px, py):
+    """One sentence on what the readings at (px, py) support, with the numbers."""
+    shown = 'off-grid' if slam_value is None else slam_value
+    slam_note = f'SLAM value={shown} ({_slam_state(slam_value)})'
+    r = _halt_classify(slam_value, raw, px, py)
+
+    if r.verdict is VERDICT_NONE:
+        return (f'No verdict: {r.why}, so the cost navfn read under the robot '
+                f'is unknown and the SLAM grid alone cannot tell a pose error '
+                f'from an inflation pocket ({slam_note}).')
+
+    evidence = (f'{slam_note}, raw cost={r.here.cost} {r.here.name}, '
+                f'{r.ring}/9 of the 3x3 at {COST_INSCRIBED}-{COST_LETHAL}')
+    if r.verdict is VERDICT_POSE_ERROR:
         return (f'Verdict: pose error is plausible — the believed pose is '
                 f'inside mapped structure ({evidence}).')
-    if _pocket_cost(here.cost):
+    if r.verdict is VERDICT_POCKET:
         return (f'Verdict: inflation pocket — the pose is in free or unknown '
                 f'space but inside another obstacle\'s inflation radius '
                 f'({evidence}). Short-range plans may still succeed where '
@@ -555,6 +589,99 @@ def _halt_verdict(slam_value, raw, px, py):
                 f'region is the indicated recovery.')
     return (f'Verdict: neither pose error nor inflation pocket — the halt has '
             f'some other cause ({evidence}).')
+
+
+# ── inflation-pocket escape ─────────────────────────────────────────────────
+# One thing a VERDICT_POCKET halt can DO about itself. The robot is standing in
+# free or unknown space that another obstacle's inflation has covered, so no
+# amount of waiting helps: SLAM will not clear a cell that is not occupied in
+# the first place, and the residue that inflated it belongs to a peer robot.
+# Displacement does help, and displacement is dispatchable.
+#
+# It has to go through Nav2. robot_node's own reverse-rotate recovery is muted
+# whenever an external controller drives (robot_node.py:126, tied to the launch
+# file's nav_robots), so with nav_robots:=[0] it is inert for robot_0 — Nav2
+# owns the wheels, and a recovery that does not go through Nav2 reaches nothing.
+#
+# rung2h's 44 precheck readings from a pocket pose: plans SUCCEEDED at 0.43-1.81
+# m from the robot and FAILED at 0.66-6.34 m, with 2 of 30 failures inside the
+# success range. Short-range planning still works from an inscribed cell;
+# long-range does not. That is the whole basis for a short goal being
+# dispatchable where the frontier goals were not.
+#
+# ONE RUN. n=1, the bands overlap, and nothing here is calibrated — the default
+# below is an observation from the low end of a single run's success band, not a
+# measured optimum, and 1.81 (or any other extreme) is deliberately not the
+# number. Treat it as a starting value to be re-measured, and override it with
+# the `escape_distance` parameter rather than editing it in place.
+ESCAPE_DISTANCE = 0.6       # m; default displacement, low end of rung2h's success band
+ESCAPE_HEADINGS = 16        # directions sampled around the robot (22.5 deg apart)
+MAX_CONSEC_ESCAPES = 3      # consecutive escapes before the run stops instead
+ESCAPE_OUTCOME = 'ESCAPE'   # never a TaskResult name: see _run_escape
+
+# Where an escape wants to go, and what it cost to look. `score` is the summed
+# raw cost along the chosen ray and `costs` the samples that produced it, in
+# order from the robot outward. Both are logged: the sum says which direction
+# won, and the samples say whether it actually LEAVES the inflated region or
+# merely crosses it more cheaply — which is the question the next run asks.
+EscapeTarget = namedtuple('EscapeTarget',
+                          ('heading', 'x', 'y', 'score', 'costs', 'considered'))
+
+
+def _escape_target(raw, px, py, distance, headings=ESCAPE_HEADINGS):
+    """Cheapest drivable direction out of (px, py), or None if there is none.
+
+    Read off the RAW COSTMAP and nothing else. The SLAM grid is what says the
+    robot is standing in free space; the costmap is what says it is inside an
+    inflation envelope, and the disagreement between them IS the pocket. A
+    direction chosen from the grid that cannot see the obstacle would be chosen
+    blind to the thing being escaped.
+
+    Rays are sampled at the costmap's own resolution out to `distance`. A ray is
+    disqualified outright by a LETHAL sample or one off the grid — those are
+    cells no displacement may drive through, and no amount of cheapness
+    elsewhere on the ray redeems them. Everything else is scored by the SUM of
+    its samples, so 255 NO_INFORMATION rates worse than 253 INSCRIBED_INFLATED,
+    which rates worse than the inflation gradient, which rates worse than free.
+    Summing (not just the endpoint) is what makes a ray that leaves the envelope
+    early beat one that only just clears it at the end.
+
+    Ties break to the lowest heading index — +x first, then counter-clockwise.
+    Arbitrary, but FIXED: an equally-cheap ring is exactly the case where a
+    rerun must make the same choice as the run being compared against, and a
+    tie-break by anything unstable would make two runs of one scenario diverge
+    for no reason anybody could reconstruct afterwards.
+
+    Not a frontier and never scored as one: this is displacement, not
+    exploration. Nothing here reads the frontier list, the blacklist or the
+    retirement ledger, and nothing here writes them.
+    """
+    if raw is None or distance <= 0 or headings <= 0 or raw.resolution <= 0:
+        return None
+    steps = max(1, int(round(distance / raw.resolution)))
+    best = None
+    considered = 0
+    for i in range(headings):
+        theta = 2.0 * math.pi * i / headings
+        dx, dy = math.cos(theta), math.sin(theta)
+        costs = []
+        for s in range(1, steps + 1):
+            r = distance * s / steps
+            c = raw.cost_at(px + r * dx, py + r * dy).cost
+            if c is OFF_COSTMAP or c == COST_LETHAL:
+                costs = None
+                break
+            costs.append(c)
+        if costs is None:
+            continue
+        considered += 1
+        score = sum(costs)
+        # Strictly-less: the first of several equal scores wins, which is the
+        # documented tie-break.
+        if best is None or score < best.score:
+            best = EscapeTarget(theta, px + distance * dx, py + distance * dy,
+                                score, costs, 0)
+    return None if best is None else best._replace(considered=considered)
 
 
 # Consecutive DEFER cycles (see _Defer) before the run STOPS instead of waiting
@@ -1029,7 +1156,8 @@ class FrontierExplorer(BasicNavigator):
     """A BasicNavigator that also detects frontiers and self-assigns goals."""
 
     def __init__(self, robot_id: int, sensor: _SensorNode,
-                 reachability_precheck: bool = False):
+                 reachability_precheck: bool = False,
+                 escape_distance: float = ESCAPE_DISTANCE):
         # BasicNavigator uses relative action/topic names, so passing the
         # namespace here yields /robot_N/navigate_to_pose etc.
         super().__init__(node_name='frontier_explorer',
@@ -1075,6 +1203,13 @@ class FrontierExplorer(BasicNavigator):
         # of the two stack faults to report.
         self._last_defer_definitive = True
         self._last_defer_truncated = False
+
+        # How far one inflation-pocket escape displaces the robot. Overridable
+        # per run (the `escape_distance` parameter) precisely because the
+        # default is an n=1 observation and not a calibrated value — see
+        # ESCAPE_DISTANCE. Non-positive disables the escape entirely, since
+        # _escape_target refuses to pick a target at zero range.
+        self._escape_distance = float(escape_distance)
 
         # Costmap diagnostics: warn ONCE, ever, if the planner's own grids
         # never arrived. Once — because the readout is attached to per-candidate
@@ -1990,7 +2125,7 @@ class FrontierExplorer(BasicNavigator):
 
         return name, code, msg, None
 
-    def _supervise_goal(self, goal_num, goal_xy=None):
+    def _supervise_goal(self, goal_num, goal_xy=None, label=None):
         """Drive the active Nav2 goal to a terminal outcome under RTF-invariant
         progress supervision.
 
@@ -2014,8 +2149,14 @@ class FrontierExplorer(BasicNavigator):
             which `goal_xy` is threaded through for.
           * a TaskResult name ('SUCCEEDED'/'FAILED'/'CANCELED'/'UNKNOWN') when
             Nav2 finishes the goal on its own.
+        `label` names the thing being supervised in this method's own log lines
+        and defaults to ``goal #<goal_num>``. It exists so an escape can reuse
+        this dispatch path verbatim and still not print as a goal — see
+        _run_escape. It changes no behaviour.
+
         Wall clock is used ONLY for the guard + the clock-stall warning.
         """
+        label = label or f'goal #{goal_num}'
         sup = GoalSupervisor()
         wall_start = time.monotonic()
         last_xy = self.sensor.robot_xy()
@@ -2034,7 +2175,7 @@ class FrontierExplorer(BasicNavigator):
 
             wall_elapsed = time.monotonic() - wall_start
             if wall_elapsed >= GOAL_WALL_GUARD:
-                self.error(f'[robot_{self.robot_id}] goal #{goal_num} ran '
+                self.error(f'[robot_{self.robot_id}] {label} ran '
                            f'{wall_elapsed:.0f}s WALL — infrastructure failure '
                            f'(Nav2/SLAM/clock wedged?), not slow progress; '
                            f'cancelling.')
@@ -2046,11 +2187,111 @@ class FrontierExplorer(BasicNavigator):
                 return (outcome, (last_xy or self.sensor.robot_xy()),
                         sup.window_move(), (code, msg, recheck))
 
-            self._hb('nav', f'goal #{goal_num} navigating '
+            self._hb('nav', f'{label} navigating '
                             f'(sim {sup.elapsed():.0f}s, wall {wall_elapsed:.0f}s)',
                      period=5.0)
             time.sleep(0.05)
         return 'CANCELED', last_xy, sup.window_move(), (None, '', None)
+
+    # ── inflation-pocket escape ──────────────────────────────────────────────
+    def _pocket_escape_target(self, rx, ry):
+        """Where to displace to, or None when this pose is not an escapable pocket.
+
+        The gate for the whole feature, and deliberately narrow. It fires on
+        VERDICT_POCKET alone: a pose error means the robot is not where it
+        thinks it is, so driving 0.6 m in any direction is 0.6 m of driving
+        against geometry that is not there; VERDICT_NEITHER means the halt was
+        never about the costmap; and VERDICT_NONE means nobody measured, which
+        is the one state where acting is worse than waiting.
+
+        Never raises, and on any failure to READ returns None — an escape is an
+        action, so an unreadable reading must fall through to the deferral the
+        loop would have taken anyway, never to a dispatch.
+        """
+        try:
+            _, raw = self._costmaps_or_warn('pocket escape')
+            # The SLAM map is read only where it can still change the answer.
+            # Without a costmap _halt_classify returns VERDICT_NONE whatever the
+            # map says, and a run whose costmap never arrived should not be
+            # touching the map on every deferral to be told so.
+            #
+            # A map that exists but cannot be READ is not the same as no map: it
+            # carries the one reading that separates a pocket from a pose error,
+            # so losing it leaves the pocket unestablished and the except below
+            # declines to dispatch. Only a genuinely absent map is off-grid.
+            slam = None
+            if raw is not None:
+                g, _ = self.sensor.get_map()
+                slam = _slam_value_at(g, rx, ry) if g is not None else None
+            reading = _halt_classify(slam, raw, rx, ry)
+            if reading.verdict is not VERDICT_POCKET:
+                return None
+            return _escape_target(raw, rx, ry, self._escape_distance)
+        except Exception as exc:
+            self.warn(f'[robot_{self.robot_id}] pocket escape: could not read '
+                      f'the pose ({exc!r}) — not dispatching one; this cycle '
+                      f'defers exactly as it would have without the escape.')
+            return None
+
+    def _run_escape(self, rx, ry, target, attempt):
+        """Dispatch one displacement goal and log the evidence it worked.
+
+        The SAME Nav2 path a frontier goal takes — _make_goal, goToPose,
+        _supervise_goal — because a second dispatch path would be a second set
+        of failure modes to reason about, and this one has to work in exactly
+        the conditions the normal one is failing in.
+
+        What it is NOT is a goal. It does not advance goal_num, does not reach
+        OutcomeClassifier, does not touch the blacklist or the retirement
+        ledger, and does not update _last_goal (which would make the re-send
+        guard blacklist the next frontier selected near the escape target).
+        Nothing about a displacement is evidence about a frontier: the robot
+        drove somewhere it chose for being cheap, not for being informative,
+        and folding that into the goal statistics would corrupt the one number
+        this run is trying to produce.
+
+        `goal_xy` is withheld from _supervise_goal for the same reason: the
+        masked-code re-query exists to attribute a failure to a GOAL, and an
+        escape has no goal to attribute anything to.
+
+        Two log lines, before and after, and they are the whole point. The
+        dispatch line says where and why with the costs it chose from; the
+        completion line says where the robot actually ended and what the cost
+        there is NOW. A future session reading a run that failed here needs the
+        pair: the second line alone cannot show whether the escape moved the
+        robot to a better cell or merely moved it.
+        """
+        _, raw = self._costmaps_or_warn('pocket escape')
+        dist = math.hypot(target.x - rx, target.y - ry)
+        self.warn(
+            f'[robot_{self.robot_id}] escape #{attempt}/{MAX_CONSEC_ESCAPES} '
+            f'from inflation pocket ({rx:.2f}, {ry:.2f}) -> '
+            f'({target.x:.2f}, {target.y:.2f}): heading '
+            f'{math.degrees(target.heading):.1f} deg, {dist:.2f} m, cheapest of '
+            f'{target.considered}/{ESCAPE_HEADINGS} drivable directions '
+            f'(ray cost {target.score}, samples '
+            f'{",".join(str(c) for c in target.costs)}); at the pose '
+            f'{self._cost_reading_note("raw", raw, rx, ry)}, at the target '
+            f'{self._cost_reading_note("raw", raw, target.x, target.y)}. '
+            f'Displacement only: no frontier is judged by this.')
+
+        self.goToPose(self._make_goal(target.x, target.y))
+        nav2_outcome, end_xy, _, _ = self._supervise_goal(
+            None, label=f'escape #{attempt}')
+
+        ex, ey = end_xy if end_xy is not None else (rx, ry)
+        moved = math.hypot(ex - rx, ey - ry)
+        # Re-read: the point of the second line is the cost AFTER the move, and
+        # the snapshot taken above is from before it.
+        _, raw_after = self._costmaps_or_warn('pocket escape')
+        self.warn(
+            f'[robot_{self.robot_id}] escape #{attempt} END '
+            f'outcome={ESCAPE_OUTCOME} nav2={nav2_outcome} '
+            f'pose=({ex:.2f}, {ey:.2f}) moved={moved:.2f}m now '
+            f'{self._cost_reading_note("raw", raw_after, ex, ey)} '
+            f'(was {self._cost_reading_note("raw", raw, rx, ry)}). '
+            f'Not counted as a goal.')
+        return nav2_outcome
 
     # ── termination evidence ─────────────────────────────────────────────────
     def _pose_occupancy_readout(self, g, seq, px, py):
@@ -2317,6 +2558,16 @@ class FrontierExplorer(BasicNavigator):
         # fault. They neither advance nor reset the defer state — a defer streak
         # interrupted by a stuck-robot cycle is still the same streak.
         consec_start_blocked = 0
+        # Consecutive inflation-pocket escapes, reset by a SUCCESSFUL normal
+        # goal and by nothing else. Not by a dispatch — a goal that dispatches
+        # from a pocket and then fails has not shown the pocket was left — and
+        # not by an escape's own Nav2 result, which reports whether the robot
+        # reached a pose, not whether that pose is out of the inflation. Only a
+        # productive goal demonstrates the run recovered, so only it may re-arm
+        # the budget. Without that asymmetry the pair (defer, escape) repeats
+        # forever, and a livelock is strictly worse than a halt: a halt writes
+        # a diagnostic and stops, a livelock writes log until someone notices.
+        consec_escapes = 0
         while rclpy.ok():
             pose = self.sensor.robot_xy()
             if pose is None:
@@ -2367,6 +2618,47 @@ class FrontierExplorer(BasicNavigator):
                 consec_defers += 1
                 defer_definitive = defer_definitive and self._last_defer_definitive
                 defer_truncated = defer_truncated or self._last_defer_truncated
+
+                # Before the streak is allowed to draw any conclusion: is this
+                # deferral one the robot can act on? An inflation pocket is the
+                # only halt state in this branch that is. Waiting cannot clear
+                # it — SLAM will not free a cell that was never occupied, and
+                # the residue inflating it is a peer robot's — so the cycles a
+                # defer streak spends waiting here are spent on nothing.
+                #
+                # Checked BEFORE the defer cap on purpose. A pocket that runs
+                # the streak out exits EXIT_DEFER_WORLD, which returns True and
+                # reads as "no reachable frontier remains" — a completion claim
+                # for a run that was standing in its own inflation the whole
+                # time. Escaping first means that claim is only ever reached
+                # from a pose where escape was impossible or already spent.
+                escape = self._pocket_escape_target(rx, ry)
+                if escape is not None:
+                    if consec_escapes >= MAX_CONSEC_ESCAPES:
+                        self.error(
+                            f'[robot_{self.robot_id}] {consec_escapes} '
+                            f'consecutive inflation-pocket escapes and the pose '
+                            f'({rx:.2f}, {ry:.2f}) is STILL inside an inflated '
+                            f'region — displacement is not clearing it, so the '
+                            f'run cannot free itself and further escapes would '
+                            f'only livelock. This is NOT "nothing is reachable": '
+                            f'no frontier was judged by any escape. Check the '
+                            f'costmap around the pose above for peer-robot '
+                            f'residue, and inflation_radius vs robot_radius in '
+                            f'EXP_NAV/nav2_robot{self.robot_id}.yaml.')
+                        self._dump_termination_diagnostics(
+                            EXIT_ESCAPE_EXHAUSTED, (rx, ry))
+                        self._log_termination_audit(goal_num)
+                        return False
+                    consec_escapes += 1
+                    self._run_escape(rx, ry, escape, consec_escapes)
+                    # The defer streak is NOT reset: an escape is not evidence
+                    # that selection became productive, and leaving the count
+                    # standing is what stops (defer, escape) pairs from evading
+                    # both caps by alternating. Same doctrine as the
+                    # start-blocked branch below.
+                    self._sleep(MIN_GOAL_PERIOD)
+                    continue
                 if consec_defers >= MAX_CONSEC_DEFERS:
                     if defer_definitive:
                         # WORLD: the planner answered every time and the answer
@@ -2537,6 +2829,13 @@ class FrontierExplorer(BasicNavigator):
             # stack failures across distinct frontiers stops the run loudly.
             decision = self._classifier.classify(
                 outcome, (fx, fy), moved=(net >= MIN_MOVE))
+            # A goal that actually worked is the only evidence that the run got
+            # out of whatever the escapes were fighting, so it is the only thing
+            # that re-arms the escape budget. A dispatched-then-failed goal is
+            # not: the pocket that made the last escape necessary is exactly the
+            # state a goal can dispatch from and still fail in.
+            if decision.category == 'SUCCESS':
+                consec_escapes = 0
             if decision.blacklist:
                 self._blacklist.append((fx, fy))
             if decision.stop_unhealthy:
@@ -2614,8 +2913,13 @@ def main(args=None):
     # Read here beside robot_id because launch delivers params under the /**
     # wildcard (see explore.launch.py), which this bootstrap node also matches.
     boot.declare_parameter('reachability_precheck', False)
+    # Displacement range for the inflation-pocket escape. A parameter because
+    # ESCAPE_DISTANCE is one run's observation and the next run is how it gets
+    # re-measured; 0 disables the escape without touching the code.
+    boot.declare_parameter('escape_distance', ESCAPE_DISTANCE)
     robot_id = int(boot.get_parameter('robot_id').value)
     precheck = bool(boot.get_parameter('reachability_precheck').value)
+    escape_distance = float(boot.get_parameter('escape_distance').value)
     boot.destroy_node()
 
     # The sensor node (map + TF + clock) is spun continuously by its own
@@ -2627,7 +2931,8 @@ def main(args=None):
     sensor_thread = threading.Thread(target=sensor_exec.spin, daemon=True)
     sensor_thread.start()
 
-    explorer = FrontierExplorer(robot_id, sensor, reachability_precheck=precheck)
+    explorer = FrontierExplorer(robot_id, sensor, reachability_precheck=precheck,
+                                escape_distance=escape_distance)
     # False -> exit non-zero, so a run that never got to explore (Nav2 or SLAM
     # never came up) is not reported by launch as "finished cleanly". A SIGINT
     # from launch's own shutdown is an orderly stop, not a failure.
