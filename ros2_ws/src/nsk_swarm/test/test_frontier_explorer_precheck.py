@@ -910,7 +910,8 @@ def make_loop_stub(selections, monkeypatch):
     # touching the filesystem.
     stub._cost_reading_note = FrontierExplorer._cost_reading_note
     for name in ('_pose_occupancy_readout', '_dump_termination_diagnostics',
-                 '_costmap_pose_readout', '_costmaps_or_warn', '_cost_note'):
+                 '_costmap_pose_readout', '_costmaps_or_warn', '_cost_note',
+                 '_halt_verdict_note'):
         setattr(stub, name, getattr(FrontierExplorer, name).__get__(stub))
 
     def select(rx, ry, map_seq=0):
@@ -1247,10 +1248,10 @@ def test_the_stack_health_stop_saves_a_map_too(tmp_path, monkeypatch):
 
 def test_the_readout_names_the_value_of_the_cell_under_the_robot(tmp_path,
                                                                  monkeypatch):
-    # The load-bearing claim. If the robot's own cell is occupied in the grid
-    # the run just saved, the believed pose is inside a mapped wall and a
-    # standoff or back-up recovery is the WRONG fix — so the value has to be in
-    # the log, not left to be inferred from the image months later.
+    # The load-bearing reading. The value of the cell under the robot, in the
+    # grid the run just saved, is one of the three inputs _halt_verdict weighs
+    # — so it has to be in the log as a number, not left to be inferred from
+    # the image months later.
     grid = fake_grid(40, 40, ox=-2.0, oy=3.0)   # free everywhere, res 0.05
     grid.data[21 * 40 + 18] = 100               # (-1.09, 4.07) -> cell (18, 21)
     monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))

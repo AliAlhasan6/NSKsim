@@ -325,7 +325,7 @@ def explorer_stub(costmaps=(None, None), raiser=False):
     stub.sensor = SimpleNamespace(get_costmaps=get_costmaps)
     stub._cost_reading_note = FrontierExplorer._cost_reading_note
     for name in ('_costmaps_or_warn', '_cost_note', '_costmap_pose_readout',
-                 '_pose_occupancy_readout'):
+                 '_pose_occupancy_readout', '_halt_verdict_note'):
         setattr(stub, name, getattr(FrontierExplorer, name).__get__(stub))
     return stub
 
@@ -574,6 +574,267 @@ def test_a_malformed_grid_warns_instead_of_raising():
 
     assert any('termination diagnostic' in m and 'failed' in m
                for m in warns(stub)), stub.logged
+
+
+# ── the halt verdict ────────────────────────────────────────────────────────
+#
+# What replaced a sentence that was wrong in both its premise and its advice:
+#
+#   "An occupied value at the robot's own cell means the believed pose is
+#    inside a mapped wall (SLAM pose error), NOT that the robot is in a pocket
+#    — do not add a standoff or back up on it."
+#
+# It was printed unconditionally, so it was printed at rung2h's halt too, where
+# the SLAM cell read -1 (UNKNOWN, not occupied) and the raw costmap read 253
+# INSCRIBED_INFLATED across the whole 3x3 with a 254 at 0.072 m. The robot was
+# in an inflation pocket of peer-robot residue and backing out is what gets it
+# free — the one action the sentence forbade. These tests pin one verdict per
+# reading, the refusal to give one without the costmap, and the numbers that
+# let each verdict be checked rather than believed.
+
+REMOVED_CLAIMS = ('inside a mapped wall', 'do not add a standoff',
+                  'NOT that the robot is in a pocket')
+
+
+def raw_at(cost, w=40, h=40, ox=-1.0, oy=-1.0, fill=0, px=0.06, py=0.21):
+    """A raw-scale costmap reading `cost` under (px, py)."""
+    return at(grid_of(costmap_msg(w, h, ox=ox, oy=oy, fill=fill)), px, py, cost)
+
+
+def rung2h_pocket():
+    """The costmap as rung2h actually read it: 253 everywhere, one 254 corner."""
+    raw = grid_of(costmap_msg(40, 40, ox=-1.0, oy=-1.0, fill=253))
+    return at(raw, 0.06 + 0.05, 0.21 + 0.05, 254)
+
+
+def test_an_occupied_slam_cell_makes_pose_error_the_verdict():
+    v = fx._halt_verdict(100, raw_at(254), 0.06, 0.21)
+
+    assert v.startswith('Verdict: pose error is plausible')
+    assert 'inside mapped structure' in v
+    # ...and it carries all three readings, so the claim can be checked against
+    # its own evidence.
+    assert 'SLAM value=100 (occupied)' in v
+    assert 'raw cost=254 LETHAL' in v
+    assert '1/9 of the 3x3 at 253-254' in v
+
+
+def test_an_unoccupied_cell_inside_the_inflation_reads_as_a_pocket():
+    # rung2h exactly: unknown under the robot, INSCRIBED_INFLATED under the
+    # planner. The reading the removed sentence could not represent at all.
+    v = fx._halt_verdict(-1, rung2h_pocket(), 0.06, 0.21)
+
+    assert v.startswith('Verdict: inflation pocket')
+    assert 'free or unknown space' in v
+    assert "inside another obstacle's inflation radius" in v
+    assert 'SLAM value=-1 (unknown)' in v
+    assert 'raw cost=253 INSCRIBED_INFLATED' in v
+    assert '9/9 of the 3x3 at 253-254' in v
+    # The two things the run established about this state, and nothing further.
+    assert 'Short-range plans may still succeed where long-range ones fail' in v
+    assert 'displacement out of the inflated region is the indicated recovery' in v
+
+
+def test_the_pocket_verdict_prescribes_no_distance_and_no_threshold():
+    # rung2h's reach limit — successes 0.43-1.81 m, failures 0.66-6.34 m — is
+    # one run, and the two bands overlap. A number taken from it and printed as
+    # advice would be the removed sentence's mistake with a decimal point.
+    v = fx._halt_verdict(-1, rung2h_pocket(), 0.06, 0.21)
+
+    assert ' m ' not in v and ' m.' not in v
+    for measured in ('0.43', '1.81', '0.66', '6.34', '0.072'):
+        assert measured not in v
+
+
+def test_a_free_cell_under_an_ordinary_cost_claims_neither():
+    v = fx._halt_verdict(0, raw_at(0), 0.06, 0.21)
+
+    assert v.startswith('Verdict: neither pose error nor inflation pocket')
+    assert 'some other cause' in v
+    assert 'SLAM value=0 (free)' in v and 'raw cost=0 FREE' in v
+    assert '0/9 of the 3x3 at 253-254' in v
+
+
+def test_a_mid_inflation_cost_is_not_a_pocket():
+    # 1-252 is the inflation gradient, which navfn will happily expand through.
+    v = fx._halt_verdict(-1, raw_at(196), 0.06, 0.21)
+
+    assert v.startswith('Verdict: neither')
+    assert 'raw cost=196 COST' in v
+
+
+def test_no_information_under_the_robot_is_not_called_a_pocket():
+    # 255 is >= 253 but is not inflation: it is a cell the costmap has no
+    # evidence about. Twenty of rung2h's fifty precheck readings were 255, so
+    # calling this a pocket would mislabel the commonest reading in the run.
+    v = fx._halt_verdict(-1, raw_at(255, fill=255), 0.06, 0.21)
+
+    assert v.startswith('Verdict: neither')
+    assert 'raw cost=255 NO_INFORMATION' in v
+    assert '0/9 of the 3x3 at 253-254' in v
+
+
+def test_no_costmap_means_no_verdict_rather_than_a_slam_only_guess():
+    # The SLAM grid alone is exactly what the removed sentence reasoned from.
+    # With no costmap there is no second reading to check it against, so the
+    # honest output is the absence.
+    v = fx._halt_verdict(100, None, 0.06, 0.21)
+
+    assert v.startswith('No verdict')
+    assert 'nothing has ever been received on the raw costmap' in v
+    assert 'SLAM value=100 (occupied)' in v
+    # An occupied cell and no costmap is precisely the case the old sentence
+    # ruled on. Nothing is ruled here.
+    assert 'pose error is plausible' not in v
+    assert 'inflation pocket' in v.split('cannot tell')[1]   # named, not claimed
+    for claim in REMOVED_CLAIMS:
+        assert claim not in v
+
+
+def test_a_pose_the_costmap_does_not_cover_gets_no_verdict_either():
+    elsewhere = grid_of(costmap_msg(10, 10, ox=5.0, oy=5.0))
+    v = fx._halt_verdict(-1, elsewhere, 0.06, 0.21)
+
+    assert v.startswith('No verdict')
+    assert 'outside the raw costmap' in v
+    assert 'SLAM value=-1 (unknown)' in v
+
+
+def test_an_off_grid_pose_is_not_read_as_mapped_structure():
+    # A pose the SLAM map does not cover is not evidence of a wall under it.
+    g = slam_grid(4, 4, ox=0.0, oy=0.0)
+    assert fx._slam_value_at(g, 99.0, 99.0) is None
+
+    v = fx._halt_verdict(None, rung2h_pocket(), 0.06, 0.21)
+
+    assert v.startswith('Verdict: inflation pocket')
+    assert 'SLAM value=off-grid (off-grid)' in v
+
+
+def test_the_ring_count_counts_the_pocket_costs_in_the_3x3_only():
+    raw = grid_of(costmap_msg(40, 40, ox=-1.0, oy=-1.0))
+    cx, cy = raw.cell_of(0.06, 0.21)
+    for i, cost in enumerate((253, 254, 255, 100)):
+        raw.data[(cy - 1 + i // 3) * 40 + (cx - 1 + i % 3)] = cost
+    raw.data[cy * 40 + cx] = 253                 # the robot's own cell counts
+    raw.data[(cy + 2) * 40 + cx] = 254           # a 254 just outside does not
+
+    v = fx._halt_verdict(-1, raw, 0.06, 0.21)
+
+    assert '3/9 of the 3x3 at 253-254' in v
+
+
+@pytest.mark.parametrize('value,state', [
+    (100, 'occupied'), (50, 'occupied'), (49, 'free'), (0, 'free'),
+    (-1, 'unknown'), (None, 'off-grid'),
+])
+def test_the_verdict_names_the_slam_state_on_the_readouts_own_threshold(
+        value, state):
+    # Same OCC_THRESH the readout printed beside it: the verdict must never
+    # call a cell occupied that the line above it calls free.
+    assert fx._slam_state(value) == state
+    assert f'({state})' in fx._halt_verdict(value, raw_at(0), 0.06, 0.21)
+
+
+# ── the verdict where the dump emits it ─────────────────────────────────────
+
+def dump_stub(costmaps, grid, tmp_path, monkeypatch, pose=(0.06, 0.21)):
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = explorer_stub(costmaps)
+    stub.sensor.get_map = lambda: (grid, 7)
+    stub.sensor.robot_xy = lambda: pose
+    stub._dump_termination_diagnostics = \
+        FrontierExplorer._dump_termination_diagnostics.__get__(stub)
+    return stub
+
+
+def dumped(stub):
+    return [m for lvl, m in stub.logged if 'termination diagnostic' in m][0]
+
+
+def boom(*args, **kwargs):
+    raise RuntimeError('the readings went away')
+
+
+def test_the_removed_sentence_is_gone_from_a_non_occupied_halt(tmp_path,
+                                                               monkeypatch):
+    # The regression this commit exists to prevent: rung2h's own readings, and
+    # the log must no longer tell the operator that backing up is the wrong
+    # move. Unknown under the robot, 253 under the planner.
+    g = slam_grid(40, 40, ox=-1.0, oy=-1.0, fill=-1)
+    stub = dump_stub((None, rung2h_pocket()), g, tmp_path, monkeypatch)
+
+    stub._dump_termination_diagnostics(fx.EXIT_DEFER_TRUNCATED, (0.0, 0.0))
+
+    msg = dumped(stub)
+    assert 'value=-1' in msg                       # the reading it ruled on
+    for claim in REMOVED_CLAIMS:
+        assert claim not in msg
+    assert 'Verdict: inflation pocket' in msg
+    assert 'displacement out of the inflated region' in msg
+
+
+def test_an_occupied_halt_still_gets_the_pose_error_reading(tmp_path,
+                                                            monkeypatch):
+    g = slam_grid(40, 40, ox=-1.0, oy=-1.0)
+    g.data[24 * 40 + 21] = 100                     # (0.06, 0.21)
+    stub = dump_stub((None, raw_at(254)), g, tmp_path, monkeypatch)
+
+    stub._dump_termination_diagnostics(fx.EXIT_START_BLOCKED, (0.0, 0.0))
+
+    msg = dumped(stub)
+    assert 'Verdict: pose error is plausible' in msg
+    # Plausible, not proven, and with no instruction attached either way.
+    for claim in REMOVED_CLAIMS:
+        assert claim not in msg
+
+
+def test_a_dump_with_no_costmap_states_the_absence_where_the_verdict_goes(
+        tmp_path, monkeypatch):
+    g = slam_grid(40, 40, ox=-1.0, oy=-1.0)
+    g.data[24 * 40 + 21] = 100
+    stub = dump_stub((None, None), g, tmp_path, monkeypatch)
+
+    stub._dump_termination_diagnostics(fx.EXIT_DEFER_UNANSWERED, (0.0, 0.0))
+
+    msg = dumped(stub)
+    assert 'No verdict' in msg
+    assert 'Verdict:' not in msg
+    for claim in REMOVED_CLAIMS:
+        assert claim not in msg
+    # The readout it is appended to is unaffected, and the missing costmap is
+    # still warned about exactly once.
+    assert 'cell (21, 24) value=100' in msg
+    assert len([m for m in warns(stub) if 'nothing has ever been received on '
+                f'{fx.COSTMAP_TOPIC}' in m]) == 1
+
+
+def test_a_clean_completion_is_given_no_verdict(tmp_path, monkeypatch):
+    # Nothing halted, so there is nothing to explain; a verdict on the pose
+    # would read as an accusation of a run in which nothing went wrong.
+    g = slam_grid(40, 40, ox=-1.0, oy=-1.0, fill=-1)
+    stub = dump_stub((None, rung2h_pocket()), g, tmp_path, monkeypatch)
+
+    stub._dump_termination_diagnostics(fx.EXIT_NO_FRONTIERS, (0.0, 0.0))
+
+    msg = dumped(stub)
+    assert 'Verdict' not in msg and 'verdict' not in msg
+    assert 'cell (21, 24) value=-1' in msg          # the readout is unchanged
+
+
+def test_a_verdict_that_cannot_be_formed_costs_only_the_verdict(tmp_path,
+                                                                monkeypatch):
+    # Diagnostic text may not take the readout down with it, and may not raise.
+    g = slam_grid(40, 40, ox=-1.0, oy=-1.0)
+    stub = dump_stub((None, raw_at(0)), g, tmp_path, monkeypatch)
+    monkeypatch.setattr(fx, '_halt_verdict', boom)
+
+    stub._dump_termination_diagnostics(fx.EXIT_START_BLOCKED, (0.0, 0.0))
+
+    msg = dumped(stub)
+    assert 'No verdict: its readings could not be taken' in msg
+    assert 'cell (21, 24) value=0' in msg
+    assert list(tmp_path.glob('*.pgm'))             # and the map still saved
 
 
 # ── the probe log lines ─────────────────────────────────────────────────────

@@ -438,6 +438,125 @@ class _CostGrid:
                 f'origin=({self.origin_x:.3f}, {self.origin_y:.3f})')
 
 
+# ── the halt verdict (READ-ONLY; text, not a decision) ──────────────────────
+# Which explanation a halt's own readings support. This replaces a sentence
+# that asserted one unconditionally — "an occupied value at the robot's own
+# cell means the believed pose is inside a mapped wall (SLAM pose error), NOT
+# that the robot is in a pocket — do not add a standoff or back up on it" —
+# which rung2h falsified in both halves at once. At that halt the SLAM cell
+# read -1 (UNKNOWN, not occupied) while the raw costmap read 253
+# INSCRIBED_INFLATED across the entire 3x3 with a 254 at 0.072 m: an inflation
+# pocket left by peer-robot residue, in which backing out is exactly the
+# recovery the sentence forbade.
+#
+# So the verdict is now derived from three readings actually taken — the SLAM
+# value under the robot, the raw cost under the robot, and the raw 3x3 around
+# it — and it CARRIES those numbers, so it can be checked against its own
+# evidence instead of believed. Where the readings cannot support a verdict it
+# says so; there is no SLAM-only fallback, because guessing from one grid is
+# what produced the sentence being removed.
+#
+# No recovery beyond naming displacement as indicated: rung2h measured
+# successes at 0.43-1.81 m and failures at 0.66-6.34 m, which is n=1 and
+# overlapping. A threshold read off it would be this same mistake with a
+# decimal point.
+
+
+def _pocket_cost(cost):
+    """True for a cost that is untraversable BECAUSE an obstacle put it there.
+
+    253 and 254 only. 255 NO_INFORMATION is also >= 253, but it is not
+    inflation — it is a cell the costmap has no evidence about, and naming that
+    an inflation pocket would repeat, with a different number, exactly the
+    unsupported claim this verdict exists to remove. Not a corner case: 20 of
+    rung2h's 50 precheck readings were 255.
+    """
+    return cost in (COST_INSCRIBED, COST_LETHAL)
+
+
+def _slam_cell_of(g, px, py):
+    """The SLAM grid cell holding world (px, py). May be outside the grid.
+
+    Truncating, not flooring — _CostGrid.cell_of floors and says why. The two
+    are kept apart deliberately: this is the arithmetic the termination readout
+    has always printed, and the verdict must read the cell the readout NAMES,
+    not a neighbouring one that happens to be more correct.
+    """
+    info = g.info
+    return (int((px - info.origin.position.x) / info.resolution),
+            int((py - info.origin.position.y) / info.resolution))
+
+
+def _slam_value_at(g, px, py):
+    """The SLAM value under (px, py), or None where the grid does not cover it."""
+    cx, cy = _slam_cell_of(g, px, py)
+    w, h = g.info.width, g.info.height
+    if 0 <= cx < w and 0 <= cy < h:
+        return g.data[cy * w + cx]
+    return None
+
+
+def _slam_state(value):
+    """Name a SLAM cell value: occupied, free, unknown, or off-grid.
+
+    Occupancy is `>= OCC_THRESH`, the same test _frontier_clusters and the
+    termination readout use, so the verdict cannot call a cell occupied that
+    the readout printed beside it calls free. `None` is off-grid: a pose the
+    SLAM map does not cover is not evidence of mapped structure under it.
+    """
+    if value is None:
+        return 'off-grid'
+    if value < 0:
+        return 'unknown'
+    return 'occupied' if value >= OCC_THRESH else 'free'
+
+
+def _halt_verdict(slam_value, raw, px, py):
+    """One sentence on what the readings at (px, py) support, with the numbers.
+
+    `raw` is the raw-scale costmap snapshot (0-255, the costs navfn reads) or
+    None. The translated grid is deliberately not consulted: it cannot tell
+    INSCRIBED_INFLATED from an ordinary cost, both landing near 99, which is
+    the whole reason the raw topic is subscribed.
+
+    Never a verdict without the costmap behind it. A missing or uncovering
+    costmap yields a stated absence, because the SLAM grid alone is exactly
+    what the removed sentence reasoned from.
+    """
+    shown = 'off-grid' if slam_value is None else slam_value
+    slam_note = f'SLAM value={shown} ({_slam_state(slam_value)})'
+
+    if raw is None:
+        return (f'No verdict: nothing has ever been received on the raw '
+                f'costmap, so the cost navfn read under the robot is unknown '
+                f'and the SLAM grid alone cannot tell a pose error from an '
+                f'inflation pocket ({slam_note}).')
+    here = raw.cost_at(px, py)
+    if here.cost is OFF_COSTMAP:
+        return (f'No verdict: this pose lies outside the raw costmap, so the '
+                f'cost navfn read under the robot is unknown and the SLAM grid '
+                f'alone cannot tell a pose error from an inflation pocket '
+                f'({slam_note}).')
+
+    cx, cy = raw.cell_of(px, py)
+    ring = sum(1 for y in (cy - 1, cy, cy + 1) for x in (cx - 1, cx, cx + 1)
+               if _pocket_cost(raw.cost_of_cell(x, y).cost))
+    evidence = (f'{slam_note}, raw cost={here.cost} {here.name}, '
+                f'{ring}/9 of the 3x3 at {COST_INSCRIBED}-{COST_LETHAL}')
+
+    if _slam_state(slam_value) == 'occupied':
+        return (f'Verdict: pose error is plausible — the believed pose is '
+                f'inside mapped structure ({evidence}).')
+    if _pocket_cost(here.cost):
+        return (f'Verdict: inflation pocket — the pose is in free or unknown '
+                f'space but inside another obstacle\'s inflation radius '
+                f'({evidence}). Short-range plans may still succeed where '
+                f'long-range ones fail; displacement out of the inflated '
+                f'region is the indicated recovery.')
+    return (f'Verdict: neither pose error nor inflation pocket — the halt has '
+            f'some other cause ({evidence}).')
+
+
 # Consecutive DEFER cycles (see _Defer) before the run STOPS instead of waiting
 # again. Each cycle is individually bounded — _wait_for_fresh_map is timeout-
 # capped and MIN_GOAL_PERIOD floors the interval — so a DEFER loop cannot spin;
@@ -1941,12 +2060,13 @@ class FrontierExplorer(BasicNavigator):
         need opposite fixes: (a) the robot really is in a pocket and the map is
         right, or (b) the believed pose is wrong and sits inside a mapped wall —
         the feature-poor northern region can stall SLAM's pose graph while
-        transform_publish_period keeps map->odom looking fresh. An OCCUPIED
-        value at the robot's own cell, in the grid this run saved, is (b); the
-        3x3 and the nearest-obstacle range say how close to (b) the pose is when
-        that cell is free. Under (b) a back-up-and-clear recovery drives against
-        geometry that is not where the robot thinks it is, so this readout is
-        what decides whether such a recovery is safe to build.
+        transform_publish_period keeps map->odom looking fresh. The two need
+        opposite fixes — under (b) a back-up-and-clear recovery drives against
+        geometry that is not where the robot thinks it is — so this readout
+        prints the robot's own cell, its 3x3 and the nearest-obstacle range
+        rather than a conclusion. _halt_verdict draws the conclusion, from
+        these numbers plus the planner's own costs; an occupied own-cell alone
+        does not settle it, as rung2h's unknown cell inside a 253 pocket showed.
 
         Grid arithmetic is _frontier_clusters': row-major ``y * w + x``, cell
         centre at ``origin + (i + 0.5) * res``, occupied is ``v >= OCC_THRESH``.
@@ -1963,8 +2083,7 @@ class FrontierExplorer(BasicNavigator):
         ox = g.info.origin.position.x
         oy = g.info.origin.position.y
         data = g.data
-        cx = int((px - ox) / res)
-        cy = int((py - oy) / res)
+        cx, cy = _slam_cell_of(g, px, py)
 
         def val(x, y):
             # None = outside the grid, which is itself a finding: a pose the
@@ -2011,6 +2130,26 @@ class FrontierExplorer(BasicNavigator):
                 f'3x3 north-row-first {rows}; nearest occupied {nearest}; '
                 f'map seq {seq}, grid {w}x{h} res={res:.3f} '
                 f'origin=({ox:.3f}, {oy:.3f}); {costmaps}')
+
+    def _halt_verdict_note(self, g, pose):
+        """_halt_verdict for this halt, with its three readings gathered.
+
+        Its own try/except, inside the dump's: the verdict is an addendum to
+        the readout, and a failure to form one must not cost us the readout it
+        would have been appended to. Reported, never swallowed and never
+        raised.
+
+        Asks _costmaps_or_warn under the same `where` as the readout it follows,
+        so the once-per-run missing-costmap warning still names the diagnostic
+        point rather than gaining a second spelling for the same one.
+        """
+        try:
+            _, raw = self._costmaps_or_warn('termination readout')
+            return _halt_verdict(_slam_value_at(g, pose[0], pose[1]),
+                                 raw, pose[0], pose[1])
+        except Exception as exc:
+            return (f'No verdict: its readings could not be taken ({exc!r}) — '
+                    f'the readout above is unaffected.')
 
     def _dump_termination_diagnostics(self, reason, fallback_xy):
         """Save the grid and log what it says about the pose the run ended on.
@@ -2068,16 +2207,14 @@ class FrontierExplorer(BasicNavigator):
                     f'[robot_{self.robot_id}] termination diagnostic ({reason}): '
                     f'could not write the map: {exc!r} — the readout below still '
                     f'describes the grid that would have been saved.')
+            readout = self._pose_occupancy_readout(g, seq, pose[0], pose[1])
             # The pose is only under suspicion where the run ended badly; on a
-            # clean completion the same sentence would read as an accusation.
-            advisory = ('' if reason == EXIT_NO_FRONTIERS else
-                        ' An occupied value at the robot\'s own cell means the '
-                        'believed pose is inside a mapped wall (SLAM pose error), '
-                        'NOT that the robot is in a pocket — do not add a standoff '
-                        'or back up on it.')
+            # clean completion a verdict on it would read as an accusation.
+            verdict = ('' if reason == EXIT_NO_FRONTIERS else
+                       ' ' + self._halt_verdict_note(g, pose))
             log(f'[robot_{self.robot_id}] termination diagnostic ({reason}): '
-                f'{self._pose_occupancy_readout(g, seq, pose[0], pose[1])}; '
-                f'map {"saved to " + saved if saved else "NOT saved"}.{advisory}')
+                f'{readout}; '
+                f'map {"saved to " + saved if saved else "NOT saved"}.{verdict}')
         except Exception as exc:
             self.warn(f'[robot_{self.robot_id}] termination diagnostic ({reason}) '
                       f'failed: {exc!r} — the run still ends exactly as it would '

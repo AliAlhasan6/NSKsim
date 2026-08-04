@@ -21,6 +21,9 @@
        pre-check. It also arrives transitively via nav2_simple_commander, but a
        direct import needs a direct declaration. -->
   <depend>nav2_msgs</depend>
+  <!-- frontier_explorer subscribes to global_costmap/costmap_updates for its
+       costmap diagnostics; nav2 publishes those as map_msgs/OccupancyGridUpdate. -->
+  <depend>map_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>std_msgs</depend>
   <depend>visualization_msgs</depend>
