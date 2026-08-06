@@ -28,9 +28,9 @@ import pytest
 
 from ament_index_python.packages import PackageNotFoundError
 from launch import LaunchContext, LaunchDescription
-from launch.actions import (DeclareLaunchArgument, GroupAction,
+from launch.actions import (DeclareLaunchArgument, EmitEvent, GroupAction,
                             IncludeLaunchDescription, OpaqueFunction,
-                            TimerAction)
+                            RegisterEventHandler, TimerAction)
 from launch.utilities import perform_substitutions
 from launch_ros.actions import LifecycleNode, Node, PushROSNamespace, SetRemap
 
@@ -142,6 +142,30 @@ def resolved(launch_description, **arguments):
     return LaunchDescription(expanded)
 
 
+def enabled(launch_description, **arguments):
+    """The top-level entities whose condition passes, as launch evaluates it.
+
+    `_walk` ignores conditions on purpose (see the module docstring), so a gated
+    entity sits in the tree whether its gate works or not — asserting on the
+    tree alone would pass for EVERY value of the flag. This asks each entity's
+    condition instead, against a context filled the way `resolved` fills one:
+    command-line `arguments` first, then each DeclareLaunchArgument supplies its
+    default for whatever is still unset.
+
+    Only the top level, which is where this file's conditions live. Unlike
+    ParameterValue (see `explorer_parameter`), a Condition caches nothing — it
+    re-performs its substitutions per call — so one built description can be
+    probed with several argument sets.
+    """
+    context = LaunchContext()
+    context.launch_configurations.update(arguments)
+    for entity in launch_description.entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+    return [entity for entity in launch_description.entities
+            if entity.condition is None or entity.condition.evaluate(context)]
+
+
 def declared_defaults(launch_description):
     """The launch arguments' declared defaults, as launch would resolve them."""
     context = LaunchContext()
@@ -224,6 +248,45 @@ def test_explore_launches_slam_nav2_and_the_explorer():
     assert slam[0].node_executable == 'async_slam_toolbox_node'
 
     assert present.count(('nsk_swarm', 'frontier_explorer')) == 1
+
+
+def test_the_nav2_flag_gates_nav2_and_the_explorer_but_never_slam():
+    # nav2:=false is the mapper-only rung: slam_toolbox and its two lifecycle
+    # transitions, nothing else. The explorer rides the SAME flag on purpose —
+    # FrontierExplorer is a BasicNavigator, so with no stack under it there is
+    # nothing it could do — which makes "Nav2 off, explorer on" a combination
+    # that must not be reachable. SLAM switches with neither: gating it would
+    # leave a launch that brings up nothing at all.
+    ld = build('explore.launch.py')
+
+    def surviving(**arguments):
+        kept = enabled(ld, **arguments)
+        return {
+            'slam': sum(isinstance(e, LifecycleNode)
+                        and e.node_package == 'slam_toolbox' for e in kept),
+            'configure': sum(isinstance(e, EmitEvent) for e in kept),
+            'activate': sum(isinstance(e, RegisterEventHandler) for e in kept),
+            # The Nav2 group is the one holding the include (same predicate as
+            # test_explore_nav2_group_pushes_the_namespace_and_keeps_the_global_tf).
+            'nav2': sum(isinstance(e, GroupAction)
+                        and any(isinstance(s, IncludeLaunchDescription)
+                                for s in e.get_sub_entities())
+                        for e in kept),
+            'explorer': nodes(LaunchDescription(kept)).count(
+                ('nsk_swarm', 'frontier_explorer')),
+        }
+
+    mapper_only = surviving(nav2='false')
+    assert mapper_only == {'slam': 1, 'configure': 1, 'activate': 1,
+                           'nav2': 0, 'explorer': 0}, (
+        f'nav2:=false must leave SLAM alone and drop the rest, got {mapper_only}')
+
+    whole_stack = {'slam': 1, 'configure': 1, 'activate': 1,
+                   'nav2': 1, 'explorer': 1}
+    # MUST hold for the bare default: every command that does not name nav2 has
+    # to reproduce its previous rung exactly.
+    assert surviving() == whole_stack, 'the default must bring up everything'
+    assert surviving(nav2='true') == whole_stack
 
 
 @pytest.mark.skipif(ESCAPE_DISTANCE is None, reason='needs nav2_simple_commander')

@@ -6,6 +6,9 @@ Brings up, all under the /robot_<id> namespace (default robot_0):
   2. Nav2 stack (navigation_launch.py)     -> plans and drives /robot_<id>/cmd_vel
   3. frontier_explorer node                -> sends NavigateToPose goals at map frontiers
 
+nav2:=false drops 2 and 3 and brings up 1 alone — SLAM only: a mapper-only
+robot, which maps whatever it is driven past but neither plans nor drives.
+
 This proves the explore -> plan -> drive -> map loop for one robot and lets us
 measure RTF before scaling to 5 robots.
 
@@ -13,6 +16,12 @@ PREREQUISITE: swarm_sim.launch.py must ALREADY be running with
 nav_robots:=[<id>] so the target robot's wander driver is muted and its
 /robot_<id>/cmd_vel is free for Nav2 to command. This launch adds only the SLAM,
 Nav2 and explorer nodes on top of that running sim.
+
+A robot launched with nav2:=false must NOT appear in that nav_robots list.
+nav_robots exists to MUTE the wander driver, and a mapper-only robot has no
+other source of motion — muting it leaves the robot stationary, mapping one
+static view of its spawn pose forever. That is the failure that invalidated
+rung2f through rung2i.
 
 TF NOTE: tf2 uses the absolute /tf topic and the whole swarm shares one global
 /tf tree keyed by robot_N/-prefixed frames. navigation_launch.py hardcodes a
@@ -45,6 +54,7 @@ from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, EmitEvent, GroupAction,
                             IncludeLaunchDescription, OpaqueFunction,
                             RegisterEventHandler)
+from launch.conditions import IfCondition
 from launch.events import matches_action
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -92,6 +102,20 @@ def generate_launch_description():
         default_value=[os.path.join(EXP_NAV, 'nav2_robot'), robot_id, '.yaml'],
         description='Nav2 params (frames namespaced to robot_<id>, '
                     'enable_stamped_cmd_vel:false).')
+
+    declare_nav2 = DeclareLaunchArgument(
+        'nav2', default_value='true',
+        description='Bring up the Nav2 stack. Gates the frontier explorer as '
+                    'well, not Nav2 alone: FrontierExplorer IS a '
+                    'BasicNavigator and works only by sending NavigateToPose '
+                    'goals, so without the stack under it there is nothing it '
+                    'can do — a separate explorer flag would buy nothing but '
+                    'the invalid combination (no Nav2, explorer on), an '
+                    'explorer that comes up only to block forever on servers '
+                    'nobody launched. false therefore leaves slam_toolbox '
+                    'alone: a mapper-only robot. MUST default true: any '
+                    'command that does not set it has to reproduce its '
+                    'previous rung exactly.')
 
     declare_precheck = DeclareLaunchArgument(
         'reachability_precheck', default_value='false',
@@ -236,7 +260,7 @@ def generate_launch_description():
                 'use_respawn': 'False',
             }.items(),
         ),
-    ])
+    ], condition=IfCondition(LaunchConfiguration('nav2')))
 
     # ── 3. Frontier explorer ────────────────────────────────────────────────
     # No namespace= here: FrontierExplorer(BasicNavigator) applies the robot_<id>
@@ -276,6 +300,7 @@ def generate_launch_description():
             'use_sim_time': True,
         }],
         output='screen',
+        condition=IfCondition(LaunchConfiguration('nav2')),
     )
 
     # ── 4. RViz (opt-in; OFF by default) ─────────────────────────────────────
@@ -313,6 +338,7 @@ def generate_launch_description():
         declare_robot_id,
         declare_slam_params,
         declare_nav2_params,
+        declare_nav2,
         declare_precheck,
         declare_escape_distance,
         declare_rviz,
