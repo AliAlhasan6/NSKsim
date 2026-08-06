@@ -20,6 +20,7 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
                        QoSReliabilityPolicy, qos_profile_sensor_data)
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
 from nsk_swarm_interfaces.srv import Compress, Merge, SimilarityQuery
@@ -43,6 +44,11 @@ KG_SHARE_QOS = QoSProfile(
 # QoS, which is compatible with a best-effort subscriber (reliable pub +
 # best-effort sub connects; only best-effort pub + reliable sub fails).
 ODOM_QOS = qos_profile_sensor_data
+
+# /robot_N/scan: same reasoning as ODOM_QOS — latest-sample-only sensor
+# stream off the gz bridge, and only ever read on the motion timer, so a
+# dropped scan costs nothing.
+SCAN_QOS = qos_profile_sensor_data
 
 # /robot_N/cmd_vel: command stream — each message matters.
 CMD_VEL_QOS = QoSProfile(
@@ -79,6 +85,22 @@ _RECOVERY_ROTATE_ESCALATE_MAX_RAD        = math.radians(270.0)
 _RECOVERY_ROTATE_ESCALATE_EXCLUDE_LO_RAD = math.radians(160.0)
 _RECOVERY_ROTATE_ESCALATE_EXCLUDE_HI_RAD = math.radians(200.0)
 _RECOVERY_ROTATE_TOLERANCE_RAD           = math.radians(3.0)
+
+# Forward-arc bin count for lidar obstacle steering (see _forward_arc_bins).
+# Nine bins over the default +/-90 deg arc is 20 deg each — fine enough to
+# tell a gap from the wall beside it, coarse enough that a single noisy
+# return cannot invent an opening.
+_OBSTACLE_ARC_BINS = 9
+
+# Two forward bins whose minimum ranges differ by less than this are treated
+# as equally open, and the steer target is drawn at random from among them.
+# Sized off the sensor, not the geometry: the burger lidar carries gaussian
+# noise with stddev 0.01 m (model.sdf), so 0.05 m is ~5 sigma — below it, one
+# bin reading "wider" than another is noise rather than a real gap. Picking
+# the strict maximum instead would make the choice deterministic in a
+# symmetric opening, and since the bins run right-to-left, first-wins sends
+# every robot the same way every time (see _update_motion_state).
+_OBSTACLE_OPEN_TIE_M = 0.05
 
 
 def _discard_future(future):
@@ -136,6 +158,21 @@ class NSKRobotNode(Node):
         # the wheels?") — both must permit motion for cmd_vel to be
         # published. Set from the launch file's wander argument.
         'wander_enabled': False,
+        # Lidar obstacle steering. The near_wall guard in
+        # _update_motion_state tests pose against the world boundary only, so
+        # it cannot see the interior maze walls; the stuck detector cannot
+        # cover them either, because a robot sliding along a wall displaces
+        # well over stuck_epsilon_m per window and _check_stuck correctly
+        # returns False. Interior walls exist only in the scan.
+        #   obstacle_stop_m:  a forward return closer than this reads as
+        #                     blocked.
+        #   obstacle_arc_rad: half-width of the forward arc searched for one.
+        #   obstacle_enabled: False restores the pre-scan behaviour exactly,
+        #                     for reproducing earlier runs. Set from the
+        #                     launch file's obstacle argument.
+        'obstacle_stop_m':  0.6,
+        'obstacle_arc_rad': math.pi / 2,
+        'obstacle_enabled': True,
     }
 
     def __init__(self):
@@ -181,6 +218,9 @@ class NSKRobotNode(Node):
             'escape_repeat_window_sec').value
         self.nav_controlled = self.get_parameter('nav_controlled').value
         self.wander_enabled = self.get_parameter('wander_enabled').value
+        self.obstacle_stop_m  = self.get_parameter('obstacle_stop_m').value
+        self.obstacle_arc_rad = self.get_parameter('obstacle_arc_rad').value
+        self.obstacle_enabled = self.get_parameter('obstacle_enabled').value
 
         # Position state
         self.pos_x = 0.0
@@ -188,6 +228,12 @@ class NSKRobotNode(Node):
         self.yaw   = 0.0
         self.peer_positions: dict[int, tuple[float, float]] = {}
         self.peer_similarity: dict[int, float] = {}
+
+        # Latest LaserScan, or None until the first one arrives (which is
+        # also the permanent state when the sensor never publishes). Written
+        # by _scan_cb on an executor thread, read on the motion timer — see
+        # _scan_cb for why that needs no lock.
+        self._latest_scan = None
 
         # Movement state machine
         self._state              = EXPLORE
@@ -199,7 +245,14 @@ class NSKRobotNode(Node):
         # Stuck detector + recovery (wall-pinning escape; odom-only, no
         # perception — interior maze walls pin a diff-drive robot in a way
         # the near_wall boundary check, which only sees the outer walls,
-        # never catches). _recovery_phase is None during normal operation;
+        # never catches). This is the last of three layers, and the only one
+        # that acts after contact: the scan-based steering in
+        # _update_motion_state turns away from an interior wall before it is
+        # reached, the near_wall guard holds the outer boundary, and this
+        # catches whatever still ends up pinned. It cannot replace the scan
+        # layer — a robot *sliding* along a wall displaces well over
+        # stuck_epsilon_m per window, so _check_stuck never fires on it.
+        # _recovery_phase is None during normal operation;
         # self._state is left untouched while it isn't (nothing consults it
         # — see _publish_cmd_vel) and is reset to EXPLORE once recovery
         # completes, so the normal state machine re-evaluates FLOCK/EXPLORE
@@ -276,6 +329,8 @@ class NSKRobotNode(Node):
                 self.create_subscription(
                     Odometry, f'/robot_{j}/odom',
                     lambda msg, peer=j: self._peer_odom_cb(msg, peer), ODOM_QOS)
+        self.create_subscription(LaserScan, f'/robot_{self.robot_id}/scan',
+                                 self._scan_cb, SCAN_QOS)
         self.create_subscription(String, '/kg_share', self._on_kg_share,
                                  KG_SHARE_QOS, callback_group=self._cb_group)
 
@@ -308,6 +363,65 @@ class NSKRobotNode(Node):
         self.peer_positions[peer_id] = (
             ox + msg.pose.pose.position.x,
             oy + msg.pose.pose.position.y)
+
+    # ── Lidar obstacle steering ──────────────────────────────────────────────
+
+    def _scan_cb(self, msg: LaserScan):
+        # Store only, never filter here: the sole consumer is the 2 s motion
+        # timer, and the burger lidar publishes 360 samples at 5 Hz, so
+        # processing in the callback would do the work ten times over for
+        # every time it is read. The bare rebind is atomic, so the motion
+        # timer either sees the previous scan or this one, never a
+        # half-updated message — no lock needed.
+        self._latest_scan = msg
+
+    def _forward_arc_bins(self) -> list[tuple[float, float]]:
+        """Bin the forward arc (+/-obstacle_arc_rad about straight ahead) of
+        the latest scan. Returns [(bin_centre_bearing, min_valid_range), ...]
+        for every bin holding at least one valid sample, bearings relative to
+        straight ahead and ordered right-to-left.
+
+        Bearings are recomputed per sample from angle_min/angle_increment and
+        wrapped to (-pi, pi]; the arc is never taken as a contiguous index
+        range. The stock TurtleBot3 burger lidar this sim runs sweeps
+        angle_min=0 .. angle_max=2*pi, so its forward arc is SPLIT across the
+        two ends of the ranges array — slicing would silently read only the
+        robot's right-hand side.
+
+        inf, nan, and returns outside [range_min, range_max] are invalid and
+        dropped: a 0.0 'no return' is a common encoding, and taking it at
+        face value would read as an obstacle permanently touching the robot.
+        A bin left with no valid sample is omitted, so an arc of nothing but
+        invalid samples returns [] and the caller reads that as not blocked.
+        """
+        scan = self._latest_scan        # one read: _scan_cb may rebind it
+        if scan is None or len(scan.ranges) == 0:
+            return []
+        arc = self.obstacle_arc_rad
+        if arc <= 0.0 or scan.angle_increment == 0.0:
+            return []
+
+        width = 2.0 * arc / _OBSTACLE_ARC_BINS
+        # None means no valid sample has landed in this bin yet. Deliberately
+        # not an infinity sentinel: against inf, an invalid inf or nan return
+        # loses every comparison and drops out on its own, which makes the
+        # validity test below look redundant when it is in fact the only
+        # thing keeping junk out of the bins.
+        best: list[float | None] = [None] * _OBSTACLE_ARC_BINS
+        for i, r in enumerate(scan.ranges):
+            if (not math.isfinite(r)
+                    or r < scan.range_min or r > scan.range_max):
+                continue
+            bearing = scan.angle_min + i * scan.angle_increment
+            bearing = math.atan2(math.sin(bearing), math.cos(bearing))
+            if abs(bearing) > arc:
+                continue
+            # Clamp the top edge (bearing == +arc) into the last bin.
+            k = min(int((bearing + arc) / width), _OBSTACLE_ARC_BINS - 1)
+            if best[k] is None or r < best[k]:
+                best[k] = r
+        return [(-arc + (k + 0.5) * width, r)
+                for k, r in enumerate(best) if r is not None]
 
     # ── Motion state machine ─────────────────────────────────────────────────
 
@@ -348,11 +462,42 @@ class NSKRobotNode(Node):
         # Compute angular velocity for current state
         half = self.world_size / 2.0 - 0.5
         near_wall = abs(self.pos_x) > half or abs(self.pos_y) > half
+        # The pose test above sees the outer boundary; the scan below sees
+        # whatever is actually in front of the robot, interior walls
+        # included. They are independent OR terms on purpose, NOT a scan-with-
+        # pose-fallback: were the boundary guard consulted only when the scan
+        # is missing, a silently dead /scan would quietly restore the old
+        # boundary-only behaviour with nothing to show for it. If no scan has
+        # ever arrived the bins are empty, scan_blocked is False, and the pose
+        # guard still fires on its own.
+        scan_bins    = self._forward_arc_bins() if self.obstacle_enabled else []
+        scan_blocked = bool(scan_bins) and min(
+            r for _, r in scan_bins) < self.obstacle_stop_m
 
-        if near_wall:
-            # Always steer toward centre when near wall — a legitimate
-            # boundary guard, kept live even during post-escape suppression.
-            target = math.atan2(-self.pos_y, -self.pos_x)
+        if near_wall or scan_blocked:
+            # Always steer clear when near a wall — a legitimate boundary
+            # guard, kept live even during post-escape suppression.
+            if scan_blocked:
+                # Steer toward the most open bearing in the forward arc. The
+                # scan wins when both terms fire: it sees the obstacle
+                # actually in the way, where centre-steer only knows where
+                # the middle of the world is and may drive straight into an
+                # interior wall on the way there.
+                #
+                # Ties go to a random draw, not to max()'s first-wins rule.
+                # The bins run right-to-left, so first-wins would turn every
+                # robot right out of every symmetric opening — and because
+                # each robot runs the same rule on the same geometry, that is
+                # a correlated fleet-wide drift, not a per-robot quirk. It
+                # would bias the Levy walk this node exists to perform.
+                # Unseeded, like the escape rotation in _advance_recovery.
+                widest = max(r for _, r in scan_bins)
+                target = self.yaw + random.choice(
+                    [b for b, r in scan_bins
+                     if r >= widest - _OBSTACLE_OPEN_TIE_M])
+            else:
+                # Pose-only trigger: unchanged steer-toward-centre.
+                target = math.atan2(-self.pos_y, -self.pos_x)
             diff   = math.atan2(math.sin(target - self.yaw),
                                 math.cos(target - self.yaw))
             self._current_angular_z = max(-self.walk_turn_max,

@@ -31,6 +31,8 @@ def make_robot_stub(pos_x=0.0, pos_y=0.0, yaw=0.0, robot_id=0,
                     escape_reverse_m=0.9, escape_suppress_sec=4.0,
                     escape_repeat_radius_m=1.0, escape_repeat_window_sec=60.0,
                     num_robots=2, comm_range=3.0, world_size=20.0,
+                    obstacle_stop_m=0.6, obstacle_arc_rad=math.pi / 2,
+                    obstacle_enabled=True, latest_scan=None,
                     state=EXPLORE):
     stub = SimpleNamespace(
         robot_id=robot_id, pos_x=pos_x, pos_y=pos_y, yaw=yaw,
@@ -41,6 +43,12 @@ def make_robot_stub(pos_x=0.0, pos_y=0.0, yaw=0.0, robot_id=0,
         escape_repeat_radius_m=escape_repeat_radius_m,
         escape_repeat_window_sec=escape_repeat_window_sec,
         num_robots=num_robots, comm_range=comm_range, world_size=world_size,
+        # Lidar obstacle steering. Defaults to no scan ever received, which
+        # is what keeps the tests in this module about the pose guard alone;
+        # test_obstacle_steering.py passes a real LaserScan through
+        # latest_scan to exercise the scan term.
+        obstacle_stop_m=obstacle_stop_m, obstacle_arc_rad=obstacle_arc_rad,
+        obstacle_enabled=obstacle_enabled, _latest_scan=latest_scan,
         _state=state,
         peer_positions={},
         _current_angular_z=0.0,
@@ -65,7 +73,8 @@ def make_robot_stub(pos_x=0.0, pos_y=0.0, yaw=0.0, robot_id=0,
     stub.get_logger = lambda: stub.logger
     for name in ('_record_motion_sample', '_check_stuck', '_enter_recovery',
                  '_advance_recovery', '_exit_recovery',
-                 '_update_motion_state', '_peers_in_range', '_in_range'):
+                 '_update_motion_state', '_peers_in_range', '_in_range',
+                 '_forward_arc_bins'):
         setattr(stub, name, getattr(NSKRobotNode, name).__get__(stub))
     return stub
 

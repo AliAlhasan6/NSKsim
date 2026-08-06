@@ -25,6 +25,9 @@
        costmap diagnostics; nav2 publishes those as map_msgs/OccupancyGridUpdate. -->
   <depend>map_msgs</depend>
   <depend>nav_msgs</depend>
+  <!-- robot_node subscribes to /robot_N/scan for its lidar obstacle
+       steering, which needs sensor_msgs/LaserScan directly. -->
+  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>visualization_msgs</depend>
   <depend>ros_gz_bridge</depend>

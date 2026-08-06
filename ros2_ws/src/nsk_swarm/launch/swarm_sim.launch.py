@@ -213,6 +213,12 @@ def generate_launch_description():
             # seed/csv_path do.
             'wander_enabled': ParameterValue(
                 LaunchConfiguration('wander'), value_type=bool),
+            # Lidar obstacle steering: on by default, set false to reproduce
+            # runs recorded before it existed. Same yaml-parsing hazard as
+            # wander above — pin the type or 'false' arrives as a truthy
+            # string.
+            'obstacle_enabled': ParameterValue(
+                LaunchConfiguration('obstacle'), value_type=bool),
         }
 
     # ── Bridge topic specs ──────────────────────────────────────────────────
@@ -353,6 +359,16 @@ def generate_launch_description():
             default_value='[]',
             description='List of robot IDs whose wander driver is muted so '
                         'Nav2 can drive them, e.g. [0]',
+        ),
+        DeclareLaunchArgument(
+            'obstacle',
+            default_value='true',
+            description='Steer the wander driver away from whatever its lidar '
+                        'sees in the forward arc. On by default: without it '
+                        'the only wall check is a pose test against the outer '
+                        'boundary, which cannot see the interior maze walls, '
+                        'and robots grind along them indefinitely. Set false '
+                        'to reproduce runs recorded before it existed.',
         ),
         DeclareLaunchArgument(
             'rviz',
