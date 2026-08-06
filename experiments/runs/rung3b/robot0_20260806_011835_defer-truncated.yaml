@@ -1,0 +1,7 @@
+image: robot0_20260806_011835_defer-truncated.pgm
+mode: trinary
+resolution: 0.05000000074505806
+origin: [-7.367050878551745, -5.98180881613901, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25

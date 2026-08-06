@@ -1,0 +1,874 @@
+[INFO] [launch]: All log files can be found below /home/lawlite/.ros/log/2026-08-04-11-59-45-342231-lawlite-Lenovo-Y520-15IKBN-46679
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [async_slam_toolbox_node-1]: process started with pid [46723]
+[INFO] [controller_server-2]: process started with pid [46724]
+[INFO] [smoother_server-3]: process started with pid [46725]
+[INFO] [planner_server-4]: process started with pid [46726]
+[INFO] [route_server-5]: process started with pid [46727]
+[INFO] [behavior_server-6]: process started with pid [46728]
+[INFO] [bt_navigator-7]: process started with pid [46729]
+[INFO] [waypoint_follower-8]: process started with pid [46730]
+[INFO] [velocity_smoother-9]: process started with pid [46731]
+[INFO] [collision_monitor-10]: process started with pid [46732]
+[INFO] [opennav_docking-11]: process started with pid [46733]
+[INFO] [lifecycle_manager-12]: process started with pid [46734]
+[INFO] [frontier_explorer-13]: process started with pid [46735]
+[collision_monitor-10] [INFO] [1785833988.001171176] [robot_0.collision_monitor]: 
+[collision_monitor-10] 	collision_monitor lifecycle node launched. 
+[collision_monitor-10] 	Waiting on external lifecycle transitions to activate
+[collision_monitor-10] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[bt_navigator-7] [INFO] [1785833988.235293056] [robot_0.bt_navigator]: 
+[bt_navigator-7] 	bt_navigator lifecycle node launched. 
+[bt_navigator-7] 	Waiting on external lifecycle transitions to activate
+[bt_navigator-7] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[bt_navigator-7] [INFO] [1785833988.307432203] [robot_0.bt_navigator]: Creating
+[opennav_docking-11] [INFO] [1785833988.366066430] [robot_0.docking_server]: 
+[opennav_docking-11] 	docking_server lifecycle node launched. 
+[opennav_docking-11] 	Waiting on external lifecycle transitions to activate
+[opennav_docking-11] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[opennav_docking-11] [INFO] [1785833988.366179606] [robot_0.docking_server]: Creating docking_server
+[waypoint_follower-8] [INFO] [1785833988.710503734] [robot_0.waypoint_follower]: 
+[waypoint_follower-8] 	waypoint_follower lifecycle node launched. 
+[waypoint_follower-8] 	Waiting on external lifecycle transitions to activate
+[waypoint_follower-8] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[waypoint_follower-8] [INFO] [1785833988.728860468] [robot_0.waypoint_follower]: Creating
+[planner_server-4] [INFO] [1785833988.729429480] [robot_0.planner_server]: 
+[planner_server-4] 	planner_server lifecycle node launched. 
+[planner_server-4] 	Waiting on external lifecycle transitions to activate
+[planner_server-4] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[planner_server-4] [INFO] [1785833988.731025970] [robot_0.planner_server]: Creating
+[async_slam_toolbox_node-1] [INFO] [1785833988.968523974] [robot_0.slam_toolbox]: Node using stack size 40000000
+[planner_server-4] [INFO] [1785833989.054059474] [robot_0.global_costmap.global_costmap]: 
+[planner_server-4] 	global_costmap lifecycle node launched. 
+[planner_server-4] 	Waiting on external lifecycle transitions to activate
+[planner_server-4] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[planner_server-4] [INFO] [1785833989.078054537] [robot_0.global_costmap.global_costmap]: Creating Costmap
+[controller_server-2] [INFO] [1785833989.424567155] [robot_0.controller_server]: 
+[controller_server-2] 	controller_server lifecycle node launched. 
+[controller_server-2] 	Waiting on external lifecycle transitions to activate
+[controller_server-2] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[lifecycle_manager-12] [INFO] [1785833989.462158783] [robot_0.lifecycle_manager_navigation]: Creating
+[controller_server-2] [INFO] [1785833989.499328433] [robot_0.controller_server]: Creating controller server
+[smoother_server-3] [INFO] [1785833989.513450045] [robot_0.smoother_server]: 
+[smoother_server-3] 	smoother_server lifecycle node launched. 
+[smoother_server-3] 	Waiting on external lifecycle transitions to activate
+[smoother_server-3] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[route_server-5] [INFO] [1785833989.528261785] [robot_0.route_server]: 
+[route_server-5] 	route_server lifecycle node launched. 
+[route_server-5] 	Waiting on external lifecycle transitions to activate
+[route_server-5] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[smoother_server-3] [INFO] [1785833989.547489742] [robot_0.smoother_server]: Creating smoother server
+[lifecycle_manager-12] [INFO] [1785833989.585521915] [robot_0.lifecycle_manager_navigation]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
+[behavior_server-6] [INFO] [1785833989.692408128] [robot_0.behavior_server]: 
+[behavior_server-6] 	behavior_server lifecycle node launched. 
+[behavior_server-6] 	Waiting on external lifecycle transitions to activate
+[behavior_server-6] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[velocity_smoother-9] [INFO] [1785833989.735412367] [robot_0.velocity_smoother]: 
+[velocity_smoother-9] 	velocity_smoother lifecycle node launched. 
+[velocity_smoother-9] 	Waiting on external lifecycle transitions to activate
+[velocity_smoother-9] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[controller_server-2] [INFO] [1785833990.051338187] [robot_0.local_costmap.local_costmap]: 
+[controller_server-2] 	local_costmap lifecycle node launched. 
+[controller_server-2] 	Waiting on external lifecycle transitions to activate
+[controller_server-2] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[controller_server-2] [INFO] [1785833990.056786852] [robot_0.local_costmap.local_costmap]: Creating Costmap
+[async_slam_toolbox_node-1] [INFO] [1785833990.739196888] [robot_0.slam_toolbox]: Configuring
+[async_slam_toolbox_node-1] [INFO] [1785833991.036033307] [robot_0.slam_toolbox]: Using solver plugin solver_plugins::CeresSolver
+[async_slam_toolbox_node-1] [INFO] [1785833991.040227048] [robot_0.slam_toolbox]: CeresSolver: Using SCHUR_JACOBI preconditioner.
+[lifecycle_manager-12] [INFO] [1785833991.085053065] [robot_0.lifecycle_manager_navigation]: [34m[1mStarting managed nodes bringup...[0m[0m
+[lifecycle_manager-12] [INFO] [1785833991.085101241] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring controller_server[0m[0m
+[controller_server-2] [INFO] [1785833991.087808138] [robot_0.controller_server]: Configuring controller interface
+[controller_server-2] [INFO] [1785833991.087840230] [robot_0.controller_server]: getting progress checker plugins..
+[controller_server-2] [INFO] [1785833991.088036874] [robot_0.controller_server]: getting goal checker plugins..
+[controller_server-2] [INFO] [1785833991.088145349] [robot_0.controller_server]: Controller frequency set to 20.0000Hz
+[controller_server-2] [INFO] [1785833991.088174839] [robot_0.local_costmap.local_costmap]: Configuring
+[controller_server-2] [INFO] [1785833991.203127539] [robot_0.local_costmap.local_costmap]: Using plugin "voxel_layer"
+[controller_server-2] [INFO] [1785833991.294222936] [robot_0.local_costmap.local_costmap]: Subscribed to Topics: scan
+[controller_server-2] [INFO] [1785833991.367602048] [robot_0.local_costmap.local_costmap]: Initialized plugin "voxel_layer"
+[controller_server-2] [INFO] [1785833991.367640420] [robot_0.local_costmap.local_costmap]: Using plugin "inflation_layer"
+[controller_server-2] [INFO] [1785833991.372119305] [robot_0.local_costmap.local_costmap]: Initialized plugin "inflation_layer"
+[async_slam_toolbox_node-1] [INFO] [1785833991.538745489] [robot_0.slam_toolbox]: Activating
+[async_slam_toolbox_node-1] Info: clipped range threshold to be within minimum and maximum range!
+[async_slam_toolbox_node-1] Registering sensor: [Custom Described Lidar]
+[controller_server-2] [INFO] [1785833991.717593912] [robot_0.controller_server]: Created progress_checker : progress_checker of type nav2_controller::SimpleProgressChecker
+[controller_server-2] [INFO] [1785833991.719050153] [robot_0.controller_server]: Controller Server has progress_checker  progress checkers available.
+[controller_server-2] [INFO] [1785833991.720689969] [robot_0.controller_server]: Created goal checker : goal_checker of type nav2_controller::SimpleGoalChecker
+[controller_server-2] [INFO] [1785833991.720996448] [robot_0.controller_server]: Controller Server has goal_checker  goal checkers available.
+[controller_server-2] [INFO] [1785833991.771937452] [robot_0.controller_server]: Created controller : FollowPath of type dwb_core::DWBLocalPlanner
+[controller_server-2] [INFO] [1785833991.773284593] [robot_0.controller_server]: Setting transform_tolerance to 0.500000
+[controller_server-2] [INFO] [1785833991.894866249] [robot_0.controller_server]: Using critic "RotateToGoal" (dwb_critics::RotateToGoalCritic)
+[controller_server-2] [INFO] [1785833991.899956386] [robot_0.controller_server]: Critic plugin initialized
+[controller_server-2] [INFO] [1785833991.900058944] [robot_0.controller_server]: Using critic "Oscillation" (dwb_critics::OscillationCritic)
+[controller_server-2] [INFO] [1785833991.900255188] [robot_0.controller_server]: Critic plugin initialized
+[controller_server-2] [INFO] [1785833991.900308638] [robot_0.controller_server]: Using critic "BaseObstacle" (dwb_critics::BaseObstacleCritic)
+[controller_server-2] [INFO] [1785833991.900389438] [robot_0.controller_server]: Critic plugin initialized
+[controller_server-2] [INFO] [1785833991.900441384] [robot_0.controller_server]: Using critic "GoalAlign" (dwb_critics::GoalAlignCritic)
+[controller_server-2] [INFO] [1785833991.900612580] [robot_0.controller_server]: Critic plugin initialized
+[controller_server-2] [INFO] [1785833991.900665670] [robot_0.controller_server]: Using critic "PathAlign" (dwb_critics::PathAlignCritic)
+[controller_server-2] [INFO] [1785833991.916313949] [robot_0.controller_server]: Critic plugin initialized
+[controller_server-2] [INFO] [1785833991.919783936] [robot_0.controller_server]: Using critic "PathDist" (dwb_critics::PathDistCritic)
+[controller_server-2] [INFO] [1785833991.923354967] [robot_0.controller_server]: Critic plugin initialized
+[controller_server-2] [INFO] [1785833991.930546465] [robot_0.controller_server]: Using critic "GoalDist" (dwb_critics::GoalDistCritic)
+[controller_server-2] [INFO] [1785833991.930798342] [robot_0.controller_server]: Critic plugin initialized
+[controller_server-2] [INFO] [1785833991.930818167] [robot_0.controller_server]: Controller Server has FollowPath  controllers available.
+[lifecycle_manager-12] [INFO] [1785833992.065622666] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring smoother_server[0m[0m
+[smoother_server-3] [INFO] [1785833992.067921241] [robot_0.smoother_server]: Configuring smoother server
+[smoother_server-3] [INFO] [1785833992.303468897] [robot_0.smoother_server]: Created smoother : simple_smoother of type nav2_smoother::SimpleSmoother
+[smoother_server-3] [INFO] [1785833992.303822386] [robot_0.smoother_server]: Smoother Server has simple_smoother  smoothers available.
+[lifecycle_manager-12] [INFO] [1785833992.432233823] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring planner_server[0m[0m
+[planner_server-4] [INFO] [1785833992.433552378] [robot_0.planner_server]: Configuring
+[planner_server-4] [INFO] [1785833992.433590841] [robot_0.global_costmap.global_costmap]: Configuring
+[planner_server-4] [INFO] [1785833992.575300482] [robot_0.global_costmap.global_costmap]: Using plugin "static_layer"
+[planner_server-4] [INFO] [1785833992.600365765] [robot_0.global_costmap.global_costmap]: Subscribing to the map topic (/robot_0/map) with transient local durability
+[planner_server-4] [INFO] [1785833992.618600489] [robot_0.global_costmap.global_costmap]: Initialized plugin "static_layer"
+[planner_server-4] [INFO] [1785833992.618641353] [robot_0.global_costmap.global_costmap]: Using plugin "obstacle_layer"
+[planner_server-4] [INFO] [1785833992.629582498] [robot_0.global_costmap.global_costmap]: Subscribed to Topics: scan
+[planner_server-4] [INFO] [1785833992.667700633] [robot_0.global_costmap.global_costmap]: Initialized plugin "obstacle_layer"
+[planner_server-4] [INFO] [1785833992.667741669] [robot_0.global_costmap.global_costmap]: Using plugin "inflation_layer"
+[planner_server-4] [INFO] [1785833992.675443915] [robot_0.global_costmap.global_costmap]: Initialized plugin "inflation_layer"
+[planner_server-4] [INFO] [1785833992.952799907] [robot_0.planner_server]: Created global planner plugin GridBased of type nav2_navfn_planner::NavfnPlanner
+[planner_server-4] [INFO] [1785833992.952847664] [robot_0.planner_server]: Configuring plugin GridBased of type NavfnPlanner
+[planner_server-4] [INFO] [1785833992.954347409] [robot_0.planner_server]: Planner Server has GridBased  planners available.
+[lifecycle_manager-12] [INFO] [1785833993.088734382] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring route_server[0m[0m
+[route_server-5] [INFO] [1785833993.090342767] [robot_0.route_server]: Configuring
+[route_server-5] [INFO] [1785833993.440345667] [robot_0.route_server]: Created GraphFileLoader GeoJsonGraphFileLoader of type nav2_route::GeoJsonGraphFileLoader
+[route_server-5] [INFO] [1785833993.440406834] [robot_0.route_server]: Configuring geojson graph file loader
+[route_server-5] [INFO] [1785833993.440422088] [robot_0.route_server]: No graph file provided to load yet.
+[route_server-5] [INFO] [1785833993.460760145] [robot_0.route_server]: Created edge cost function plugin DistanceScorer of type nav2_route::DistanceScorer
+[route_server-5] [INFO] [1785833993.460813559] [robot_0.route_server]: Configuring distance scorer.
+[route_server-5] [INFO] [1785833993.468239114] [robot_0.route_server]: Created edge cost function plugin CostmapScorer of type nav2_route::CostmapScorer
+[route_server-5] [INFO] [1785833993.468272769] [robot_0.route_server]: Configuring costmap scorer.
+[route_server-5] [INFO] [1785833993.487620599] [robot_0.route_server]: Created route operation AdjustSpeedLimit of type nav2_route::AdjustSpeedLimit
+[route_server-5] [INFO] [1785833993.487669247] [robot_0.route_server]: Configuring Adjust speed limit operation.
+[route_server-5] [INFO] [1785833993.516332372] [robot_0.route_server]: Created route operation ReroutingService of type nav2_route::ReroutingService
+[route_server-5] [INFO] [1785833993.516381188] [robot_0.route_server]: Configuring Rerouting service operation.
+[route_server-5] [INFO] [1785833993.541864924] [robot_0.route_server]: Created route operation CollisionMonitor of type nav2_route::CollisionMonitor
+[route_server-5] [INFO] [1785833993.545119360] [robot_0.route_server]: Using costmap topic: local_costmap/costmap_raw instead of server costmap topic: global_costmap/costmap_raw for CollisionMonitor.
+[lifecycle_manager-12] [INFO] [1785833993.594345226] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring behavior_server[0m[0m
+[behavior_server-6] [INFO] [1785833993.596435088] [robot_0.behavior_server]: Configuring
+[planner_server-4] [INFO] [1785833993.653733204] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 108 X 117 at 0.050000 m/pix
+[behavior_server-6] [INFO] [1785833993.676651781] [robot_0.behavior_server]: Creating behavior plugin spin of type nav2_behaviors::Spin
+[behavior_server-6] [INFO] [1785833993.700216162] [robot_0.behavior_server]: Creating behavior plugin backup of type nav2_behaviors::BackUp
+[behavior_server-6] [INFO] [1785833993.715368693] [robot_0.behavior_server]: Creating behavior plugin drive_on_heading of type nav2_behaviors::DriveOnHeading
+[behavior_server-6] [INFO] [1785833993.725956322] [robot_0.behavior_server]: Creating behavior plugin assisted_teleop of type nav2_behaviors::AssistedTeleop
+[behavior_server-6] [INFO] [1785833993.765049056] [robot_0.behavior_server]: Creating behavior plugin wait of type nav2_behaviors::Wait
+[behavior_server-6] [INFO] [1785833993.853449631] [robot_0.behavior_server]: Configuring spin
+[behavior_server-6] [INFO] [1785833993.937545312] [robot_0.behavior_server]: Configuring backup
+[behavior_server-6] [INFO] [1785833993.977924015] [robot_0.behavior_server]: Configuring drive_on_heading
+[behavior_server-6] [INFO] [1785833994.047770351] [robot_0.behavior_server]: Configuring assisted_teleop
+[behavior_server-6] [INFO] [1785833994.117885156] [robot_0.behavior_server]: Configuring wait
+[lifecycle_manager-12] [INFO] [1785833994.155430429] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring velocity_smoother[0m[0m
+[velocity_smoother-9] [INFO] [1785833994.155808870] [robot_0.velocity_smoother]: Configuring velocity smoother
+[lifecycle_manager-12] [INFO] [1785833994.194088895] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring collision_monitor[0m[0m
+[collision_monitor-10] [INFO] [1785833994.194418520] [robot_0.collision_monitor]: Configuring
+[collision_monitor-10] [INFO] [1785833994.276472018] [collision_monitor]: [scan]: Creating Scan
+[collision_monitor-10] [INFO] [1785833994.315271231] [collision_monitor]: [FootprintApproach]: Creating Polygon
+[collision_monitor-10] [INFO] [1785833994.318337692] [collision_monitor]: [FootprintApproach]: Polygon points are not defined. Using dynamic subscription instead.
+[collision_monitor-10] [INFO] [1785833994.348699238] [collision_monitor]: [FootprintApproach]: Making footprint subscriber on local_costmap/published_footprint topic
+[lifecycle_manager-12] [INFO] [1785833994.502132974] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring bt_navigator[0m[0m
+[bt_navigator-7] [INFO] [1785833994.512548753] [robot_0.bt_navigator]: Configuring
+[bt_navigator-7] [INFO] [1785833994.608431520] [robot_0.bt_navigator]: Creating navigator id navigate_to_pose of type nav2_bt_navigator::NavigateToPoseNavigator
+[bt_navigator-7] [INFO] [1785833995.992196570] [robot_0.bt_navigator]: Creating navigator id navigate_through_poses of type nav2_bt_navigator::NavigateThroughPosesNavigator
+[lifecycle_manager-12] [INFO] [1785833996.437625866] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring waypoint_follower[0m[0m
+[waypoint_follower-8] [INFO] [1785833996.444536844] [robot_0.waypoint_follower]: Configuring
+[frontier_explorer-13] [INFO] [1785833996.568523881] [robot_0.frontier_explorer]: [robot_0] waiting for Nav2 to activate...
+[waypoint_follower-8] [INFO] [1785833996.767235835] [robot_0.waypoint_follower]: Created waypoint_task_executor : wait_at_waypoint of type nav2_waypoint_follower::WaitAtWaypoint
+[lifecycle_manager-12] [INFO] [1785833996.776968199] [robot_0.lifecycle_manager_navigation]: [34m[1mConfiguring docking_server[0m[0m
+[opennav_docking-11] [INFO] [1785833996.777453185] [robot_0.docking_server]: Configuring docking_server
+[opennav_docking-11] [INFO] [1785833996.777492344] [robot_0.docking_server]: Controller frequency set to 50.0000Hz
+[opennav_docking-11] [INFO] [1785833997.181797034] [robot_0.docking_server]: Created charging dock plugin simple_charging_dock of type opennav_docking::SimpleChargingDock
+[opennav_docking-11] [INFO] [1785833997.234490985] [robot_0.docking_server]: Loading docks from parameter file.
+[opennav_docking-11] [INFO] [1785833997.234714010] [robot_0.docking_server]: Docking Server has 1 dock types and 1 dock instances available.
+[lifecycle_manager-12] [INFO] [1785833997.274665864] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating controller_server[0m[0m
+[controller_server-2] [INFO] [1785833997.275809297] [robot_0.controller_server]: Activating
+[controller_server-2] [INFO] [1785833997.275857472] [robot_0.local_costmap.local_costmap]: Activating
+[controller_server-2] [INFO] [1785833997.275864806] [robot_0.local_costmap.local_costmap]: Checking transform
+[controller_server-2] [INFO] [1785833997.275962418] [robot_0.local_costmap.local_costmap]: start
+[controller_server-2] [INFO] [1785833997.487151587] [robot_0.controller_server]: Creating bond (controller_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785833997.616034667] [robot_0.lifecycle_manager_navigation]: Server controller_server connected with bond.
+[lifecycle_manager-12] [INFO] [1785833997.616094859] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating smoother_server[0m[0m
+[smoother_server-3] [INFO] [1785833997.616431764] [robot_0.smoother_server]: Activating
+[smoother_server-3] [INFO] [1785833997.616462011] [robot_0.smoother_server]: Creating bond (smoother_server) to lifecycle manager.
+[frontier_explorer-13] [INFO] [1785833997.750104108] [robot_0.frontier_explorer]: bt_navigator/get_state service not available, waiting...
+[lifecycle_manager-12] [INFO] [1785833997.773100377] [robot_0.lifecycle_manager_navigation]: Server smoother_server connected with bond.
+[lifecycle_manager-12] [INFO] [1785833997.773144703] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating planner_server[0m[0m
+[planner_server-4] [INFO] [1785833997.793794141] [robot_0.planner_server]: Activating
+[planner_server-4] [INFO] [1785833997.793835293] [robot_0.global_costmap.global_costmap]: Activating
+[planner_server-4] [INFO] [1785833997.793844051] [robot_0.global_costmap.global_costmap]: Checking transform
+[planner_server-4] [INFO] [1785833997.793944812] [robot_0.global_costmap.global_costmap]: start
+[planner_server-4] [INFO] [1785833998.841953257] [robot_0.planner_server]: Activating plugin GridBased of type NavfnPlanner
+[planner_server-4] [INFO] [1785833998.857497112] [robot_0.planner_server]: Creating bond (planner_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785833999.786395529] [robot_0.lifecycle_manager_navigation]: Server planner_server connected with bond.
+[lifecycle_manager-12] [INFO] [1785833999.786440194] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating route_server[0m[0m
+[route_server-5] [INFO] [1785833999.786844933] [robot_0.route_server]: Activating
+[route_server-5] [INFO] [1785833999.786996382] [robot_0.route_server]: Creating bond (route_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785833999.920729161] [robot_0.lifecycle_manager_navigation]: Server route_server connected with bond.
+[lifecycle_manager-12] [INFO] [1785833999.920775472] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating behavior_server[0m[0m
+[behavior_server-6] [INFO] [1785833999.921720045] [robot_0.behavior_server]: Activating
+[behavior_server-6] [INFO] [1785833999.921744632] [robot_0.behavior_server]: Activating spin
+[behavior_server-6] [INFO] [1785833999.921756205] [robot_0.behavior_server]: Activating backup
+[behavior_server-6] [INFO] [1785833999.921765045] [robot_0.behavior_server]: Activating drive_on_heading
+[behavior_server-6] [INFO] [1785833999.921772474] [robot_0.behavior_server]: Activating assisted_teleop
+[behavior_server-6] [INFO] [1785833999.921779879] [robot_0.behavior_server]: Activating wait
+[behavior_server-6] [INFO] [1785833999.921790706] [robot_0.behavior_server]: Creating bond (behavior_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785834000.086526371] [robot_0.lifecycle_manager_navigation]: Server behavior_server connected with bond.
+[lifecycle_manager-12] [INFO] [1785834000.086571611] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating velocity_smoother[0m[0m
+[velocity_smoother-9] [INFO] [1785834000.089865463] [robot_0.velocity_smoother]: Activating
+[velocity_smoother-9] [INFO] [1785834000.090017767] [robot_0.velocity_smoother]: Creating bond (velocity_smoother) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785834000.245302066] [robot_0.lifecycle_manager_navigation]: Server velocity_smoother connected with bond.
+[lifecycle_manager-12] [INFO] [1785834000.245346761] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating collision_monitor[0m[0m
+[collision_monitor-10] [INFO] [1785834000.245987811] [robot_0.collision_monitor]: Activating
+[collision_monitor-10] [INFO] [1785834000.246018991] [robot_0.collision_monitor]: Creating bond (collision_monitor) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785834000.394614389] [robot_0.lifecycle_manager_navigation]: Server collision_monitor connected with bond.
+[lifecycle_manager-12] [INFO] [1785834000.394653272] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating bt_navigator[0m[0m
+[bt_navigator-7] [INFO] [1785834000.398901955] [robot_0.bt_navigator]: Activating
+[bt_navigator-7] [INFO] [1785834001.415652160] [robot_0.bt_navigator]: Creating bond (bt_navigator) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785834001.561558308] [robot_0.lifecycle_manager_navigation]: Server bt_navigator connected with bond.
+[lifecycle_manager-12] [INFO] [1785834001.561603075] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating waypoint_follower[0m[0m
+[waypoint_follower-8] [INFO] [1785834001.564453810] [robot_0.waypoint_follower]: Activating
+[waypoint_follower-8] [INFO] [1785834001.564499209] [robot_0.waypoint_follower]: Creating bond (waypoint_follower) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785834001.751641375] [robot_0.lifecycle_manager_navigation]: Server waypoint_follower connected with bond.
+[lifecycle_manager-12] [INFO] [1785834001.751714246] [robot_0.lifecycle_manager_navigation]: [34m[1mActivating docking_server[0m[0m
+[opennav_docking-11] [INFO] [1785834001.752634046] [robot_0.docking_server]: Activating docking_server
+[opennav_docking-11] [INFO] [1785834001.875545464] [robot_0.docking_server]: Creating bond (docking_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785834002.026366576] [robot_0.lifecycle_manager_navigation]: Server docking_server connected with bond.
+[lifecycle_manager-12] [INFO] [1785834002.026410549] [robot_0.lifecycle_manager_navigation]: [34m[1mManaged nodes are active[0m[0m
+[lifecycle_manager-12] [INFO] [1785834002.026419946] [robot_0.lifecycle_manager_navigation]: [34m[1mCreating bond timer...[0m[0m
+[frontier_explorer-13] [INFO] [1785834005.545596493] [robot_0.frontier_explorer]: Nav2 is ready for use!
+[frontier_explorer-13] [INFO] [1785834005.626832088] [robot_0.frontier_explorer]: [robot_0] controller_server is active (0.1s wall)
+[frontier_explorer-13] [INFO] [1785834005.682452881] [robot_0.frontier_explorer]: [robot_0] planner_server is active (0.1s wall)
+[frontier_explorer-13] [INFO] [1785834005.682845365] [robot_0.frontier_explorer]: [robot_0] Nav2 readiness gate passed: controller_server, planner_server all active — sending goals.
+[frontier_explorer-13] [INFO] [1785834005.688942367] [robot_0.frontier_explorer]: [robot_0] waiting for first /robot_0/map...
+[frontier_explorer-13] [INFO] [1785834005.689364752] [robot_0.frontier_explorer]: [robot_0] map received — exploring.
+[planner_server-4] [WARN] [1785834005.842874486] [robot_0.planner_server]: No planners specified in action call. Server will use only plugin GridBased  in server. This warning will appear once.
+[frontier_explorer-13] [INFO] [1785834005.905549903] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (0.70, -0.04) -> REACHABLE error_code=0 planning_time=0.000s poses=27 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834005.905998766] [robot_0.frontier_explorer]: [robot_0] goal #1 -> (0.70, -0.04) [337 cells, frontier (0.18, -0.01), 0.70 m away]
+[frontier_explorer-13] [INFO] [1785834005.918712202] [robot_0.frontier_explorer]: Navigating to goal: 0.6987977907373472 -0.04102413717447883...
+[bt_navigator-7] [INFO] [1785834005.926273640] [robot_0.bt_navigator]: Begin navigating from current location (0.00, -0.00) to (0.70, -0.04)
+[controller_server-2] [INFO] [1785834005.948012753] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [WARN] [1785834005.948056585] [robot_0.controller_server]: No goal checker was specified in parameter 'current_goal_checker'. Server will use only plugin loaded goal_checker . This warning will appear once.
+[controller_server-2] [WARN] [1785834005.948068701] [robot_0.controller_server]: No progress checker was specified in parameter 'current_progress_checker'. Server will use only plugin loaded progress_checker . This warning will appear once.
+[frontier_explorer-13] [INFO] [1785834006.048709357] [robot_0.frontier_explorer]: [robot_0] goal #1 navigating (sim 0s, wall 0s)
+[controller_server-2] [INFO] [1785834007.002450738] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834007.795928071] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 108 X 117 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834008.053634371] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834008.717357145] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834008.747945759] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834008.753109599] [robot_0.frontier_explorer]: [robot_0] goal #1 END frontier=(0.18, -0.01) outcome=SUCCEEDED sim=2.6s wall=2.8s net=0.41m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834008.844442526] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (0.29, -1.14) -> REACHABLE error_code=0 planning_time=0.000s poses=45 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834008.844872899] [robot_0.frontier_explorer]: [robot_0] goal #2 -> (0.29, -1.14) [4 cells, frontier (0.29, -1.14), 1.13 m away]
+[frontier_explorer-13] [INFO] [1785834008.845703314] [robot_0.frontier_explorer]: Navigating to goal: 0.2913983903184949 -1.141573824275091...
+[bt_navigator-7] [INFO] [1785834008.846385239] [robot_0.bt_navigator]: Begin navigating from current location (0.46, -0.02) to (0.29, -1.14)
+[controller_server-2] [INFO] [1785834008.868680770] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834009.931166664] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834010.921231946] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834011.148524010] [robot_0.frontier_explorer]: [robot_0] goal #2 navigating (sim 2s, wall 2s)
+[planner_server-4] [INFO] [1785834011.799500537] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 108 X 118 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834011.976347102] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834012.969529799] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834013.795971493] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 109 X 120 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834014.021480224] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834015.022819000] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834015.722601417] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [WARN] [1785834015.922777100] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [INFO] [1785834016.032347431] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834016.214745296] [robot_0.frontier_explorer]: [robot_0] goal #2 navigating (sim 7s, wall 7s)
+[controller_server-2] [INFO] [1785834017.075992227] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834017.282787833] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [WARN] [1785834017.536630973] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834018.089717555] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834018.948021629] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834019.004357394] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 16.6667 Hz.
+[controller_server-2] [INFO] [1785834019.108757234] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834019.433288146] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834019.456866592] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834019.465304152] [robot_0.frontier_explorer]: [robot_0] goal #2 END frontier=(0.29, -1.14) outcome=SUCCEEDED sim=9.6s wall=10.6s net=0.94m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834019.568269279] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (0.37, -0.26) -> REACHABLE error_code=0 planning_time=0.000s poses=28 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834019.568668923] [robot_0.frontier_explorer]: [robot_0] goal #3 -> (0.37, -0.26) [16 cells, frontier (0.37, -0.26), 0.69 m away]
+[frontier_explorer-13] [INFO] [1785834019.569606044] [robot_0.frontier_explorer]: Navigating to goal: 0.3695233914826481 -0.25888631370672677...
+[bt_navigator-7] [INFO] [1785834019.571768036] [robot_0.bt_navigator]: Begin navigating from current location (0.43, -0.95) to (0.37, -0.26)
+[controller_server-2] [INFO] [1785834019.595627850] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834020.647417564] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834021.315940465] [robot_0.frontier_explorer]: [robot_0] goal #3 navigating (sim 1s, wall 2s)
+[controller_server-2] [INFO] [1785834021.652898399] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834022.699649919] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834022.996819730] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834023.257557733] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [INFO] [1785834023.713076860] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834023.958976399] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834024.715336120] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834025.765144439] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834026.429151482] [robot_0.frontier_explorer]: [robot_0] goal #3 navigating (sim 6s, wall 7s)
+[controller_server-2] [INFO] [1785834026.761879520] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834027.822187156] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834028.265476723] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834028.818085004] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834029.868649744] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834030.629229482] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834030.654788242] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834030.707437579] [robot_0.frontier_explorer]: [robot_0] goal #3 END frontier=(0.37, -0.26) outcome=SUCCEEDED sim=9.2s wall=11.1s net=0.46m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834030.962747124] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (0.04, 0.12) -> REACHABLE error_code=0 planning_time=0.000s poses=29 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834030.963184517] [robot_0.frontier_explorer]: [robot_0] goal #4 -> (0.04, 0.12) [7 cells, frontier (0.04, 0.12), 0.69 m away]
+[frontier_explorer-13] [INFO] [1785834030.964071528] [robot_0.frontier_explorer]: Navigating to goal: 0.041398386593204606 0.11611369188120868...
+[bt_navigator-7] [INFO] [1785834030.982381079] [robot_0.bt_navigator]: Begin navigating from current location (0.36, -0.50) to (0.04, 0.12)
+[controller_server-2] [INFO] [1785834031.007739879] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[frontier_explorer-13] [INFO] [1785834031.457420102] [robot_0.frontier_explorer]: [robot_0] goal #4 navigating (sim 0s, wall 0s)
+[controller_server-2] [WARN] [1785834031.816831300] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834031.872144874] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834032.084559290] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834032.084597715] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834032.581209897] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834033.000026441] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [INFO] [1785834033.050954635] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834034.103339013] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834034.103381252] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834035.154385875] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834036.160719591] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834036.630794867] [robot_0.frontier_explorer]: [robot_0] goal #4 navigating (sim 4s, wall 6s)
+[controller_server-2] [WARN] [1785834036.854146663] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834037.205720110] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834037.519497501] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834038.222477269] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834039.228386410] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834040.276146887] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834041.280086252] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834041.703398422] [robot_0.frontier_explorer]: [robot_0] goal #4 navigating (sim 8s, wall 11s)
+[controller_server-2] [WARN] [1785834041.721130264] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [WARN] [1785834041.774255267] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[planner_server-4] [INFO] [1785834041.799549947] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 122 X 135 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834042.276645639] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834043.327961525] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834044.327664991] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834045.374769184] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834046.303649949] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834046.330622076] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834046.457559727] [robot_0.frontier_explorer]: [robot_0] goal #4 END frontier=(0.04, 0.12) outcome=SUCCEEDED sim=12.6s wall=15.5s net=0.50m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834046.558316847] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-0.73, -0.36) -> REACHABLE error_code=0 planning_time=0.000s poses=33 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834046.574813120] [robot_0.frontier_explorer]: [robot_0] goal #5 -> (-0.73, -0.36) [192 cells, frontier (-0.73, -0.36), 0.81 m away]
+[frontier_explorer-13] [INFO] [1785834046.579139998] [robot_0.frontier_explorer]: Navigating to goal: -0.7309352915491574 -0.362720018798508...
+[bt_navigator-7] [INFO] [1785834046.582378452] [robot_0.bt_navigator]: Begin navigating from current location (0.04, -0.12) to (-0.73, -0.36)
+[controller_server-2] [INFO] [1785834046.612028269] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[frontier_explorer-13] [INFO] [1785834046.729820357] [robot_0.frontier_explorer]: [robot_0] goal #5 navigating (sim 0s, wall 0s)
+[controller_server-2] [INFO] [1785834047.667862303] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834048.563272784] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834048.668928186] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834049.714751161] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834050.714057126] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834051.713728628] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834051.812866657] [robot_0.frontier_explorer]: [robot_0] goal #5 navigating (sim 4s, wall 5s)
+[controller_server-2] [INFO] [1785834052.763907670] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834053.567034730] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834053.767595984] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834054.622503025] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [INFO] [1785834054.794201393] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834054.848562861] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834054.964947973] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834055.066196733] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 100.0000 Hz.
+[controller_server-2] [INFO] [1785834055.779035659] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834055.921521735] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834056.821634478] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834056.952709436] [robot_0.frontier_explorer]: [robot_0] goal #5 navigating (sim 9s, wall 10s)
+[controller_server-2] [INFO] [1785834057.821712220] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834057.995932829] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834058.200461361] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834058.851994541] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834059.370568652] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834059.380950272] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834059.385021763] [robot_0.frontier_explorer]: [robot_0] goal #5 END frontier=(-0.73, -0.36) outcome=SUCCEEDED sim=10.7s wall=12.8s net=0.61m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834059.464639097] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-1.18, -1.97) -> REACHABLE error_code=0 planning_time=0.000s poses=74 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834059.465105624] [robot_0.frontier_explorer]: [robot_0] goal #6 -> (-1.18, -1.97) [47 cells, frontier (-1.18, -1.97), 1.70 m away]
+[frontier_explorer-13] [INFO] [1785834059.466017601] [robot_0.frontier_explorer]: Navigating to goal: -1.1760926563385474 -1.966919954050467...
+[bt_navigator-7] [INFO] [1785834059.494831700] [robot_0.bt_navigator]: Begin navigating from current location (-0.50, -0.41) to (-1.18, -1.97)
+[controller_server-2] [INFO] [1785834059.534479572] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834060.587153558] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834061.590682448] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834061.976357374] [robot_0.frontier_explorer]: [robot_0] goal #6 navigating (sim 2s, wall 2s)
+[controller_server-2] [INFO] [1785834062.587970022] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834063.102740388] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834063.604301786] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834064.654839914] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834065.656138448] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834065.798111496] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 122 X 137 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834066.653722587] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834067.084753137] [robot_0.frontier_explorer]: [robot_0] goal #6 navigating (sim 6s, wall 7s)
+[controller_server-2] [WARN] [1785834067.660509216] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834067.721720880] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834068.163849437] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834068.583943476] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834068.645220064] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834068.696313467] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834068.696352860] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834069.746812212] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834070.750074845] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834071.799172853] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834072.194249018] [robot_0.frontier_explorer]: [robot_0] goal #6 navigating (sim 10s, wall 13s)
+[controller_server-2] [INFO] [1785834072.802101861] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834073.803608429] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 20.0000 Hz.
+[controller_server-2] [INFO] [1785834073.803649271] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834073.856153713] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 20.0000 Hz.
+[controller_server-2] [WARN] [1785834074.106286885] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834074.806400827] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834075.263125342] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834075.523946687] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 20.0000 Hz.
+[controller_server-2] [WARN] [1785834075.574969616] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [WARN] [1785834075.727474941] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [INFO] [1785834075.844077119] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834075.894639544] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 20.0000 Hz.
+[controller_server-2] [WARN] [1785834076.000943581] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834076.744024964] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834076.771916224] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834076.837846046] [robot_0.frontier_explorer]: [robot_0] goal #6 END frontier=(-1.18, -1.97) outcome=SUCCEEDED sim=14.5s wall=17.4s net=1.47m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834076.975841781] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-1.19, -0.40) -> REACHABLE error_code=0 planning_time=0.000s poses=62 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [INFO] [1785834076.976237070] [robot_0.frontier_explorer]: [robot_0] goal #7 -> (-1.19, -0.40) [87 cells, frontier (-1.19, -0.40), 1.33 m away]
+[frontier_explorer-13] [INFO] [1785834076.980269910] [robot_0.frontier_explorer]: Navigating to goal: -1.1851839360738485 -0.4041172895303178...
+[bt_navigator-7] [INFO] [1785834076.985655973] [robot_0.bt_navigator]: Begin navigating from current location (-1.11, -1.74) to (-1.19, -0.40)
+[controller_server-2] [INFO] [1785834077.013220637] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[frontier_explorer-13] [INFO] [1785834077.280731195] [robot_0.frontier_explorer]: [robot_0] goal #7 navigating (sim 0s, wall 0s)
+[controller_server-2] [INFO] [1785834078.066087367] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834079.113537666] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834080.119884387] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834081.115458104] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834082.123401923] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834082.357090934] [robot_0.frontier_explorer]: [robot_0] goal #7 navigating (sim 5s, wall 5s)
+[controller_server-2] [INFO] [1785834083.164011712] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834084.164947436] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834085.214536339] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834086.214813977] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834087.266526442] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834087.422937054] [robot_0.frontier_explorer]: [robot_0] goal #7 navigating (sim 10s, wall 10s)
+[controller_server-2] [INFO] [1785834088.265094413] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834088.740303155] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834088.765977008] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834088.832289488] [robot_0.frontier_explorer]: [robot_0] goal #7 END frontier=(-1.19, -0.40) outcome=SUCCEEDED sim=11.2s wall=11.8s net=1.10m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834088.955182221] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-1.14, 0.17) -> REACHABLE error_code=0 planning_time=0.000s poses=33 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834088.955597985] [robot_0.frontier_explorer]: [robot_0] goal #8 -> (-1.14, 0.17) [24 cells, frontier (-1.14, 0.17), 0.82 m away]
+[frontier_explorer-13] [INFO] [1785834088.956478960] [robot_0.frontier_explorer]: Navigating to goal: -1.1378419813454101 0.17425915586977236...
+[bt_navigator-7] [INFO] [1785834088.959038162] [robot_0.bt_navigator]: Begin navigating from current location (-1.19, -0.64) to (-1.14, 0.17)
+[controller_server-2] [INFO] [1785834088.981350814] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834090.038391537] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834091.084163865] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834092.082733076] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834092.486605052] [robot_0.frontier_explorer]: [robot_0] goal #8 navigating (sim 3s, wall 3s)
+[controller_server-2] [INFO] [1785834093.082653414] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834093.800084436] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 126 X 137 at 0.050000 m/pix
+[controller_server-2] [WARN] [1785834094.054876239] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 14.2857 Hz.
+[controller_server-2] [INFO] [1785834094.112682881] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834094.172458071] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834094.302810964] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834094.413941103] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834094.476168112] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834094.587831141] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834095.139348906] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834096.002649483] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [INFO] [1785834096.208684309] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834096.521204697] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [WARN] [1785834096.622706453] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [WARN] [1785834096.724598645] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [WARN] [1785834097.225557641] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 33.3333 Hz.
+[controller_server-2] [INFO] [1785834097.225599281] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834097.537386741] [robot_0.frontier_explorer]: [robot_0] goal #8 navigating (sim 7s, wall 8s)
+[controller_server-2] [INFO] [1785834097.554507098] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834097.577961799] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834097.596751466] [robot_0.frontier_explorer]: [robot_0] goal #8 END frontier=(-1.14, 0.17) outcome=SUCCEEDED sim=7.0s wall=8.6s net=0.61m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834097.732307718] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-0.24, -0.34) -> REACHABLE error_code=0 planning_time=0.000s poses=36 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [INFO] [1785834097.732770279] [robot_0.frontier_explorer]: [robot_0] goal #9 -> (-0.24, -0.34) [4 cells, frontier (-0.24, -0.34), 0.86 m away]
+[frontier_explorer-13] [INFO] [1785834097.756467202] [robot_0.frontier_explorer]: Navigating to goal: -0.24110744847745202 -0.34032418513145046...
+[bt_navigator-7] [INFO] [1785834097.758759811] [robot_0.bt_navigator]: Begin navigating from current location (-1.06, -0.05) to (-0.24, -0.34)
+[controller_server-2] [INFO] [1785834097.791153698] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834098.803283639] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834099.796748675] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 129 X 137 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834099.847108934] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834100.892383590] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834101.892134994] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834102.451490834] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 14.2857 Hz.
+[frontier_explorer-13] [INFO] [1785834102.621733512] [robot_0.frontier_explorer]: [robot_0] goal #9 navigating (sim 4s, wall 5s)
+[controller_server-2] [WARN] [1785834102.705822074] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834102.910224239] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834103.355912963] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 25.0000 Hz.
+[controller_server-2] [WARN] [1785834103.460838290] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 20.0000 Hz.
+[controller_server-2] [INFO] [1785834103.961709587] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834104.173183831] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834104.984718555] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834105.031054222] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 20.0000 Hz.
+[controller_server-2] [INFO] [1785834105.965370894] [robot_0.controller_server]: Reached the goal!
+[controller_server-2] [INFO] [1785834105.965543501] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834105.987497381] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834106.009195187] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834106.061159129] [robot_0.frontier_explorer]: [robot_0] goal #9 END frontier=(-0.24, -0.34) outcome=SUCCEEDED sim=6.6s wall=8.3s net=0.68m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834106.332395591] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-1.25, -0.33) -> REACHABLE error_code=0 planning_time=0.000s poses=34 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834106.332813801] [robot_0.frontier_explorer]: [robot_0] goal #10 -> (-1.25, -0.33) [16 cells, frontier (-1.25, -0.33), 0.88 m away]
+[frontier_explorer-13] [INFO] [1785834106.333771711] [robot_0.frontier_explorer]: Navigating to goal: -1.2471692312716525 -0.3309491849917521...
+[bt_navigator-7] [INFO] [1785834106.359289187] [robot_0.bt_navigator]: Begin navigating from current location (-0.39, -0.16) to (-1.25, -0.33)
+[controller_server-2] [INFO] [1785834106.374303097] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834107.426225402] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834107.659894578] [robot_0.frontier_explorer]: [robot_0] goal #10 navigating (sim 1s, wall 1s)
+[controller_server-2] [INFO] [1785834108.426084037] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834109.436030514] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834110.478891347] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [WARN] [1785834111.032876944] [robot_0.controller_server]: Control loop missed its desired rate of 20.0000 Hz. Current loop rate is 50.0000 Hz.
+[controller_server-2] [INFO] [1785834111.491363520] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834112.484641980] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834112.688934485] [robot_0.frontier_explorer]: [robot_0] goal #10 navigating (sim 5s, wall 6s)
+[controller_server-2] [INFO] [1785834113.537852982] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834114.585448987] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834115.585849870] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834116.586771773] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834117.598544941] [robot_0.controller_server]: Reached the goal!
+[controller_server-2] [INFO] [1785834117.603916548] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834117.626032020] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834117.650415049] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834117.685279607] [robot_0.frontier_explorer]: [robot_0] goal #10 END frontier=(-1.25, -0.33) outcome=SUCCEEDED sim=10.5s wall=11.4s net=0.66m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834117.781543126] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-1.71, -2.08) -> REACHABLE error_code=0 planning_time=0.000s poses=76 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834117.781961740] [robot_0.frontier_explorer]: [robot_0] goal #11 -> (-1.71, -2.08) [76 cells, frontier (-1.71, -2.08), 1.86 m away]
+[frontier_explorer-13] [INFO] [1785834117.782799753] [robot_0.frontier_explorer]: Navigating to goal: -1.706379764430212 -2.0758505267822818...
+[bt_navigator-7] [INFO] [1785834117.788767637] [robot_0.bt_navigator]: Begin navigating from current location (-1.02, -0.35) to (-1.71, -2.08)
+[controller_server-2] [INFO] [1785834117.813265164] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[frontier_explorer-13] [INFO] [1785834117.914341432] [robot_0.frontier_explorer]: [robot_0] goal #11 navigating (sim 0s, wall 0s)
+[controller_server-2] [INFO] [1785834118.865619118] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834119.866812492] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834120.914725470] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834121.916798422] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834122.964270101] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834122.978338295] [robot_0.frontier_explorer]: [robot_0] goal #11 navigating (sim 5s, wall 5s)
+[controller_server-2] [INFO] [1785834123.969359033] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834124.966325437] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834126.019298258] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834127.013687366] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834127.795928664] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 164 X 137 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834128.065211246] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834128.065979807] [robot_0.frontier_explorer]: [robot_0] goal #11 navigating (sim 10s, wall 10s)
+[controller_server-2] [INFO] [1785834129.064911135] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834129.796858176] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 164 X 137 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834130.115547627] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834131.113979892] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834132.175114777] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834132.486831777] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834132.509083594] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834132.536429872] [robot_0.frontier_explorer]: [robot_0] goal #11 END frontier=(-1.71, -2.08) outcome=SUCCEEDED sim=14.4s wall=14.7s net=1.64m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834132.685335045] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-2.65, -1.83) -> REACHABLE error_code=0 planning_time=0.000s poses=43 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834132.688987584] [robot_0.frontier_explorer]: [robot_0] goal #12 -> (-2.65, -1.83) [294 cells, frontier (-2.65, -1.83), 1.09 m away]
+[frontier_explorer-13] [INFO] [1785834132.712913119] [robot_0.frontier_explorer]: Navigating to goal: -2.6525965474050066 -1.831310601906702...
+[bt_navigator-7] [INFO] [1785834132.715723374] [robot_0.bt_navigator]: Begin navigating from current location (-1.57, -1.89) to (-2.65, -1.83)
+[controller_server-2] [INFO] [1785834132.726438700] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[frontier_explorer-13] [INFO] [1785834133.182005682] [robot_0.frontier_explorer]: [robot_0] goal #12 navigating (sim 0s, wall 0s)
+[controller_server-2] [INFO] [1785834133.777381242] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834134.780830426] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834135.837726303] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834136.829930828] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834137.800002252] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 165 X 137 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834137.876610230] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834138.239158787] [robot_0.frontier_explorer]: [robot_0] goal #12 navigating (sim 5s, wall 5s)
+[controller_server-2] [INFO] [1785834138.881148560] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834139.796448411] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 165 X 140 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834139.882921598] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834140.929379203] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834141.930154156] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834142.932322410] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834143.301150886] [robot_0.frontier_explorer]: [robot_0] goal #12 navigating (sim 10s, wall 10s)
+[controller_server-2] [INFO] [1785834143.982752826] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834144.147951071] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834144.177614145] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834144.192897291] [robot_0.frontier_explorer]: [robot_0] goal #12 END frontier=(-2.65, -1.83) outcome=SUCCEEDED sim=11.3s wall=11.5s net=0.87m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834144.298157450] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-2.24, -2.48) -> REACHABLE error_code=0 planning_time=0.000s poses=24 costmap=76 COST raw=196 COST
+[frontier_explorer-13] [INFO] [1785834144.298540889] [robot_0.frontier_explorer]: [robot_0] goal #13 -> (-2.24, -2.48) [34 cells, frontier (-2.24, -2.48), 0.61 m away]
+[frontier_explorer-13] [INFO] [1785834144.299338093] [robot_0.frontier_explorer]: Navigating to goal: -2.2372602645300503 -2.4809319702589616...
+[bt_navigator-7] [INFO] [1785834144.302588764] [robot_0.bt_navigator]: Begin navigating from current location (-2.44, -1.90) to (-2.24, -2.48)
+[controller_server-2] [INFO] [1785834144.322485516] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834145.372726566] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834146.426511848] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834147.427641458] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834147.802417888] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 170 X 140 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834148.426547519] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834148.440487317] [robot_0.frontier_explorer]: [robot_0] goal #13 navigating (sim 4s, wall 4s)
+[controller_server-2] [INFO] [1785834149.429872835] [robot_0.controller_server]: Passing new path to controller.
+[planner_server-4] [INFO] [1785834149.798440747] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 170 X 141 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834150.473217283] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834151.475273475] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834152.049358234] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834152.064356370] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834152.090465528] [robot_0.frontier_explorer]: [robot_0] goal #13 END frontier=(-2.24, -2.48) outcome=SUCCEEDED sim=7.6s wall=7.8s net=0.50m blacklisted=False
+[frontier_explorer-13] [INFO] [1785834152.239713131] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-2.09, -2.88) -> REACHABLE error_code=0 planning_time=0.000s poses=32 costmap=99 COST raw=253 INSCRIBED_INFLATED
+[frontier_explorer-13] [INFO] [1785834152.243239921] [robot_0.frontier_explorer]: [robot_0] goal #14 -> (-2.09, -2.88) [7 cells, frontier (-2.09, -2.88), 0.60 m away]
+[frontier_explorer-13] [INFO] [1785834152.246231962] [robot_0.frontier_explorer]: Navigating to goal: -2.0857660954413597 -2.8818574620715585...
+[bt_navigator-7] [INFO] [1785834152.257426771] [robot_0.bt_navigator]: Begin navigating from current location (-2.11, -2.28) to (-2.09, -2.88)
+[controller_server-2] [INFO] [1785834152.293735062] [robot_0.controller_server]: Received a goal, begin computing control effort.
+[controller_server-2] [INFO] [1785834153.345921776] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834153.519244057] [robot_0.frontier_explorer]: [robot_0] goal #14 navigating (sim 1s, wall 1s)
+[planner_server-4] [INFO] [1785834153.801988794] [robot_0.global_costmap.global_costmap]: StaticLayer: Resizing costmap to 170 X 141 at 0.050000 m/pix
+[controller_server-2] [INFO] [1785834154.344876261] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834155.393942012] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834156.397854922] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834157.445358004] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834158.450434844] [robot_0.controller_server]: Passing new path to controller.
+[frontier_explorer-13] [INFO] [1785834158.619271997] [robot_0.frontier_explorer]: [robot_0] goal #14 navigating (sim 6s, wall 6s)
+[controller_server-2] [INFO] [1785834159.494106289] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834160.502997808] [robot_0.controller_server]: Passing new path to controller.
+[controller_server-2] [INFO] [1785834161.006205821] [robot_0.controller_server]: Reached the goal!
+[bt_navigator-7] [INFO] [1785834161.028089268] [robot_0.bt_navigator]: Goal succeeded
+[frontier_explorer-13] [INFO] [1785834161.062057013] [robot_0.frontier_explorer]: [robot_0] goal #14 END frontier=(-2.09, -2.88) outcome=SUCCEEDED sim=8.7s wall=8.8s net=0.60m blacklisted=False
+[planner_server-4] [WARN] [1785834161.128075102] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-3.82, -3.50): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.132628861] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.172969024] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-3.82, -3.50) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834161.223394222] [robot_0.frontier_explorer]: [robot_0] start probe 1/3 (-1.77, -2.46) -> START_OK error_code=0 planning_time=0.000s poses=2 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [WARN] [1785834161.223878577] [robot_0.frontier_explorer]: [robot_0] frontier (-3.82, -3.50) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.229245559] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-2.71, -0.84): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.229298942] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.267774634] [robot_0.frontier_explorer]: [robot_0] precheck cand#1 (-2.71, -0.84) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834161.268225024] [robot_0.frontier_explorer]: [robot_0] frontier (-2.71, -0.84) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.280029311] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (0.21, -3.35): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.280087984] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.330265054] [robot_0.frontier_explorer]: [robot_0] precheck cand#2 (0.21, -3.35) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834161.333495103] [robot_0.frontier_explorer]: [robot_0] frontier (0.21, -3.35) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.339595841] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-1.56, -0.53): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.339651147] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.387029433] [robot_0.frontier_explorer]: [robot_0] precheck cand#3 (-1.56, -0.53) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=99 COST raw=253 INSCRIBED_INFLATED
+[frontier_explorer-13] [WARN] [1785834161.392328704] [robot_0.frontier_explorer]: [robot_0] frontier (-1.56, -0.53) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.412520809] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-1.22, -0.46): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.412569937] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.451472420] [robot_0.frontier_explorer]: [robot_0] precheck cand#4 (-1.22, -0.46) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834161.453247299] [robot_0.frontier_explorer]: [robot_0] frontier (-1.22, -0.46) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.462040241] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-4.63, -0.18): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.462093174] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.504421224] [robot_0.frontier_explorer]: [robot_0] precheck cand#5 (-4.63, -0.18) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=99 COST raw=253 INSCRIBED_INFLATED
+[frontier_explorer-13] [WARN] [1785834161.504884134] [robot_0.frontier_explorer]: [robot_0] frontier (-4.63, -0.18) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.514553367] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (1.38, -1.11): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.514600888] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.566437262] [robot_0.frontier_explorer]: [robot_0] precheck cand#6 (1.38, -1.11) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834161.566913016] [robot_0.frontier_explorer]: [robot_0] frontier (1.38, -1.11) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.574456295] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (2.08, -2.86): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.574502865] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.633173077] [robot_0.frontier_explorer]: [robot_0] precheck cand#7 (2.08, -2.86) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834161.633612859] [robot_0.frontier_explorer]: [robot_0] frontier (2.08, -2.86) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.641042031] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (2.04, -1.90): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.641087170] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.692598895] [robot_0.frontier_explorer]: [robot_0] precheck cand#8 (2.04, -1.90) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834161.693061419] [robot_0.frontier_explorer]: [robot_0] frontier (2.04, -1.90) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.702129400] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-2.13, 1.70): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.702194997] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.752259277] [robot_0.frontier_explorer]: [robot_0] precheck cand#9 (-2.13, 1.70) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834161.752712159] [robot_0.frontier_explorer]: [robot_0] frontier (-2.13, 1.70) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [ERROR] [1785834161.772580365] [robot_0.planner_server]: worldToMap failed: mx,my: 51,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772655499] [robot_0.planner_server]: worldToMap failed: mx,my: 52,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772668999] [robot_0.planner_server]: worldToMap failed: mx,my: 53,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772677022] [robot_0.planner_server]: worldToMap failed: mx,my: 54,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772684623] [robot_0.planner_server]: worldToMap failed: mx,my: 55,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772699547] [robot_0.planner_server]: worldToMap failed: mx,my: 56,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772709625] [robot_0.planner_server]: worldToMap failed: mx,my: 57,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772726032] [robot_0.planner_server]: worldToMap failed: mx,my: 58,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772733680] [robot_0.planner_server]: worldToMap failed: mx,my: 59,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772740388] [robot_0.planner_server]: worldToMap failed: mx,my: 60,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772746660] [robot_0.planner_server]: worldToMap failed: mx,my: 61,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772753099] [robot_0.planner_server]: worldToMap failed: mx,my: 62,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772759370] [robot_0.planner_server]: worldToMap failed: mx,my: 63,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772765709] [robot_0.planner_server]: worldToMap failed: mx,my: 64,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772771833] [robot_0.planner_server]: worldToMap failed: mx,my: 65,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772778103] [robot_0.planner_server]: worldToMap failed: mx,my: 66,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772784358] [robot_0.planner_server]: worldToMap failed: mx,my: 67,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772790577] [robot_0.planner_server]: worldToMap failed: mx,my: 68,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772796672] [robot_0.planner_server]: worldToMap failed: mx,my: 69,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772802793] [robot_0.planner_server]: worldToMap failed: mx,my: 70,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772808944] [robot_0.planner_server]: worldToMap failed: mx,my: 51,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772815441] [robot_0.planner_server]: worldToMap failed: mx,my: 52,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772821586] [robot_0.planner_server]: worldToMap failed: mx,my: 53,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772827910] [robot_0.planner_server]: worldToMap failed: mx,my: 54,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772834153] [robot_0.planner_server]: worldToMap failed: mx,my: 55,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772840438] [robot_0.planner_server]: worldToMap failed: mx,my: 56,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772846598] [robot_0.planner_server]: worldToMap failed: mx,my: 57,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772852958] [robot_0.planner_server]: worldToMap failed: mx,my: 58,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772859270] [robot_0.planner_server]: worldToMap failed: mx,my: 59,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772865481] [robot_0.planner_server]: worldToMap failed: mx,my: 60,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772871783] [robot_0.planner_server]: worldToMap failed: mx,my: 61,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772878702] [robot_0.planner_server]: worldToMap failed: mx,my: 62,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772885309] [robot_0.planner_server]: worldToMap failed: mx,my: 63,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772891608] [robot_0.planner_server]: worldToMap failed: mx,my: 64,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772897893] [robot_0.planner_server]: worldToMap failed: mx,my: 65,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772904198] [robot_0.planner_server]: worldToMap failed: mx,my: 66,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772912155] [robot_0.planner_server]: worldToMap failed: mx,my: 67,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772918743] [robot_0.planner_server]: worldToMap failed: mx,my: 68,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772924983] [robot_0.planner_server]: worldToMap failed: mx,my: 69,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772931221] [robot_0.planner_server]: worldToMap failed: mx,my: 70,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772937468] [robot_0.planner_server]: worldToMap failed: mx,my: 51,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772943726] [robot_0.planner_server]: worldToMap failed: mx,my: 52,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772950169] [robot_0.planner_server]: worldToMap failed: mx,my: 53,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772959602] [robot_0.planner_server]: worldToMap failed: mx,my: 54,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772966624] [robot_0.planner_server]: worldToMap failed: mx,my: 55,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772973383] [robot_0.planner_server]: worldToMap failed: mx,my: 56,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772979652] [robot_0.planner_server]: worldToMap failed: mx,my: 57,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772985862] [robot_0.planner_server]: worldToMap failed: mx,my: 58,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772992005] [robot_0.planner_server]: worldToMap failed: mx,my: 59,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.772998338] [robot_0.planner_server]: worldToMap failed: mx,my: 60,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773004627] [robot_0.planner_server]: worldToMap failed: mx,my: 61,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773010765] [robot_0.planner_server]: worldToMap failed: mx,my: 62,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773017025] [robot_0.planner_server]: worldToMap failed: mx,my: 63,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773023397] [robot_0.planner_server]: worldToMap failed: mx,my: 64,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773029590] [robot_0.planner_server]: worldToMap failed: mx,my: 65,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773036029] [robot_0.planner_server]: worldToMap failed: mx,my: 66,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773042610] [robot_0.planner_server]: worldToMap failed: mx,my: 67,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773049261] [robot_0.planner_server]: worldToMap failed: mx,my: 68,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773055585] [robot_0.planner_server]: worldToMap failed: mx,my: 69,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834161.773061895] [robot_0.planner_server]: worldToMap failed: mx,my: 70,143, size_x,size_y: 170,141
+[planner_server-4] [WARN] [1785834161.773094612] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-2.17, 2.54): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.773106959] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.841487390] [robot_0.frontier_explorer]: [robot_0] precheck cand#10 (-2.17, 2.54) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=99 COST raw=253 INSCRIBED_INFLATED
+[frontier_explorer-13] [WARN] [1785834161.842168056] [robot_0.frontier_explorer]: [robot_0] frontier (-2.17, 2.54) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834161.851148402] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (1.56, 1.36): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834161.851197255] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834161.899505055] [robot_0.frontier_explorer]: [robot_0] precheck cand#11 (1.56, 1.36) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834161.911659384] [robot_0.frontier_explorer]: [robot_0] frontier (1.56, 1.36) unplannable — retiring until map #91 (now #81, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[frontier_explorer-13] [INFO] [1785834161.912069697] [robot_0.frontier_explorer]: [robot_0] no reachable frontier: probed 12 of 14 candidates (0 inconclusive, stopped by probe cap 12, 2 unexamined) — deferring to a fresher map
+[planner_server-4] [WARN] [1785834163.965579344] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (0.40, 2.16): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834163.965631246] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834164.010411851] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (0.40, 2.16) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=76 COST raw=196 COST
+[frontier_explorer-13] [INFO] [1785834164.058292468] [robot_0.frontier_explorer]: [robot_0] start probe 1/3 (-1.77, -2.46) -> START_OK error_code=0 planning_time=0.000s poses=2 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [WARN] [1785834164.058760765] [robot_0.frontier_explorer]: [robot_0] frontier (0.40, 2.16) unplannable — retiring until map #93 (now #83, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834164.064008653] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (2.68, 1.29): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834164.064055481] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834164.107466016] [robot_0.frontier_explorer]: [robot_0] precheck cand#1 (2.68, 1.29) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834164.107938573] [robot_0.frontier_explorer]: [robot_0] frontier (2.68, 1.29) unplannable — retiring until map #93 (now #83, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[frontier_explorer-13] [INFO] [1785834164.108355773] [robot_0.frontier_explorer]: [robot_0] waiting for map update (0.0 sim s)
+[planner_server-4] [WARN] [1785834167.827826360] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-2.74, -2.77): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834167.827874035] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834167.870784610] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-2.74, -2.77) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=75 COST raw=193 COST
+[frontier_explorer-13] [INFO] [1785834167.925200252] [robot_0.frontier_explorer]: [robot_0] start probe 1/3 (-1.77, -2.46) -> START_OK error_code=0 planning_time=0.000s poses=2 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [WARN] [1785834167.932458948] [robot_0.frontier_explorer]: [robot_0] frontier (-2.11, -2.87) unplannable — retiring until map #95 (now #85, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[frontier_explorer-13] [INFO] [1785834167.932869049] [robot_0.frontier_explorer]: [robot_0] no reachable frontier: probed 1 of 1 candidates (0 inconclusive, whole list examined) — deferring to a fresher map
+[frontier_explorer-13] [INFO] [1785834167.933254435] [robot_0.frontier_explorer]: [robot_0] waiting for map update (0.0 sim s)
+[frontier_explorer-13] [INFO] [1785834171.764681737] [robot_0.frontier_explorer]: [robot_0] waiting for map update (0.0 sim s)
+[frontier_explorer-13] [INFO] [1785834175.764737013] [robot_0.frontier_explorer]: [robot_0] waiting for map update (0.0 sim s)
+[planner_server-4] [WARN] [1785834179.751028535] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-3.82, -3.50): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834179.751083054] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834179.808731381] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-3.82, -3.50) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [INFO] [1785834179.877920719] [robot_0.frontier_explorer]: [robot_0] start probe 1/3 (-1.77, -2.46) -> START_OK error_code=0 planning_time=0.000s poses=2 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [WARN] [1785834179.878614760] [robot_0.frontier_explorer]: [robot_0] frontier (-3.82, -3.50) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834179.884816790] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-2.71, -0.84): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834179.884864982] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834179.946132041] [robot_0.frontier_explorer]: [robot_0] precheck cand#1 (-2.71, -0.84) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834179.946615999] [robot_0.frontier_explorer]: [robot_0] frontier (-2.71, -0.84) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834179.954420768] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (0.21, -3.35): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834179.954471258] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.005840636] [robot_0.frontier_explorer]: [robot_0] precheck cand#2 (0.21, -3.35) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834180.006575026] [robot_0.frontier_explorer]: [robot_0] frontier (0.21, -3.35) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834180.016028198] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-1.56, -0.53): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.016082354] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.066785997] [robot_0.frontier_explorer]: [robot_0] precheck cand#3 (-1.56, -0.53) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=99 COST raw=253 INSCRIBED_INFLATED
+[frontier_explorer-13] [WARN] [1785834180.067961559] [robot_0.frontier_explorer]: [robot_0] frontier (-1.56, -0.53) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834180.078393227] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-1.22, -0.46): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.078435687] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.136020475] [robot_0.frontier_explorer]: [robot_0] precheck cand#4 (-1.22, -0.46) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834180.137170534] [robot_0.frontier_explorer]: [robot_0] frontier (-1.22, -0.46) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834180.140712734] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-4.63, -0.18): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.140761170] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.202411352] [robot_0.frontier_explorer]: [robot_0] precheck cand#5 (-4.63, -0.18) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=99 COST raw=253 INSCRIBED_INFLATED
+[frontier_explorer-13] [WARN] [1785834180.202861035] [robot_0.frontier_explorer]: [robot_0] frontier (-4.63, -0.18) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834180.212995541] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (1.38, -1.11): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.213045083] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.261169525] [robot_0.frontier_explorer]: [robot_0] precheck cand#6 (1.38, -1.11) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834180.261633995] [robot_0.frontier_explorer]: [robot_0] frontier (1.38, -1.11) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834180.266525165] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (2.08, -2.86): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.268888187] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.344303655] [robot_0.frontier_explorer]: [robot_0] precheck cand#7 (2.08, -2.86) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834180.345018267] [robot_0.frontier_explorer]: [robot_0] frontier (2.08, -2.86) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834180.356069954] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (2.04, -1.90): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.356116581] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.427988163] [robot_0.frontier_explorer]: [robot_0] precheck cand#8 (2.04, -1.90) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834180.428430239] [robot_0.frontier_explorer]: [robot_0] frontier (2.04, -1.90) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834180.432369073] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-2.13, 1.70): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.432413618] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.489446261] [robot_0.frontier_explorer]: [robot_0] precheck cand#9 (-2.13, 1.70) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834180.504576181] [robot_0.frontier_explorer]: [robot_0] frontier (-2.13, 1.70) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [ERROR] [1785834180.507087918] [robot_0.planner_server]: worldToMap failed: mx,my: 51,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507157240] [robot_0.planner_server]: worldToMap failed: mx,my: 52,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507168287] [robot_0.planner_server]: worldToMap failed: mx,my: 53,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507175188] [robot_0.planner_server]: worldToMap failed: mx,my: 54,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507181674] [robot_0.planner_server]: worldToMap failed: mx,my: 55,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507187829] [robot_0.planner_server]: worldToMap failed: mx,my: 56,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507193925] [robot_0.planner_server]: worldToMap failed: mx,my: 57,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507200279] [robot_0.planner_server]: worldToMap failed: mx,my: 58,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507206474] [robot_0.planner_server]: worldToMap failed: mx,my: 59,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507212723] [robot_0.planner_server]: worldToMap failed: mx,my: 60,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507218996] [robot_0.planner_server]: worldToMap failed: mx,my: 61,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507225201] [robot_0.planner_server]: worldToMap failed: mx,my: 62,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507231564] [robot_0.planner_server]: worldToMap failed: mx,my: 63,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507237659] [robot_0.planner_server]: worldToMap failed: mx,my: 64,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507243798] [robot_0.planner_server]: worldToMap failed: mx,my: 65,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507249952] [robot_0.planner_server]: worldToMap failed: mx,my: 66,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507256078] [robot_0.planner_server]: worldToMap failed: mx,my: 67,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507262117] [robot_0.planner_server]: worldToMap failed: mx,my: 68,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507271277] [robot_0.planner_server]: worldToMap failed: mx,my: 69,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507278095] [robot_0.planner_server]: worldToMap failed: mx,my: 70,141, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507284302] [robot_0.planner_server]: worldToMap failed: mx,my: 51,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507290465] [robot_0.planner_server]: worldToMap failed: mx,my: 52,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507296705] [robot_0.planner_server]: worldToMap failed: mx,my: 53,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507303055] [robot_0.planner_server]: worldToMap failed: mx,my: 54,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507309440] [robot_0.planner_server]: worldToMap failed: mx,my: 55,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507315666] [robot_0.planner_server]: worldToMap failed: mx,my: 56,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507321783] [robot_0.planner_server]: worldToMap failed: mx,my: 57,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507328076] [robot_0.planner_server]: worldToMap failed: mx,my: 58,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507334236] [robot_0.planner_server]: worldToMap failed: mx,my: 59,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507340433] [robot_0.planner_server]: worldToMap failed: mx,my: 60,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507346679] [robot_0.planner_server]: worldToMap failed: mx,my: 61,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507352824] [robot_0.planner_server]: worldToMap failed: mx,my: 62,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507359048] [robot_0.planner_server]: worldToMap failed: mx,my: 63,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507365249] [robot_0.planner_server]: worldToMap failed: mx,my: 64,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507371673] [robot_0.planner_server]: worldToMap failed: mx,my: 65,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507377969] [robot_0.planner_server]: worldToMap failed: mx,my: 66,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507384255] [robot_0.planner_server]: worldToMap failed: mx,my: 67,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507390394] [robot_0.planner_server]: worldToMap failed: mx,my: 68,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507396574] [robot_0.planner_server]: worldToMap failed: mx,my: 69,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507402815] [robot_0.planner_server]: worldToMap failed: mx,my: 70,142, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507409145] [robot_0.planner_server]: worldToMap failed: mx,my: 51,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507415361] [robot_0.planner_server]: worldToMap failed: mx,my: 52,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507421622] [robot_0.planner_server]: worldToMap failed: mx,my: 53,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507427761] [robot_0.planner_server]: worldToMap failed: mx,my: 54,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507433965] [robot_0.planner_server]: worldToMap failed: mx,my: 55,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507440196] [robot_0.planner_server]: worldToMap failed: mx,my: 56,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507446475] [robot_0.planner_server]: worldToMap failed: mx,my: 57,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507452806] [robot_0.planner_server]: worldToMap failed: mx,my: 58,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507459069] [robot_0.planner_server]: worldToMap failed: mx,my: 59,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507465333] [robot_0.planner_server]: worldToMap failed: mx,my: 60,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507471619] [robot_0.planner_server]: worldToMap failed: mx,my: 61,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507478172] [robot_0.planner_server]: worldToMap failed: mx,my: 62,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507484504] [robot_0.planner_server]: worldToMap failed: mx,my: 63,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507493895] [robot_0.planner_server]: worldToMap failed: mx,my: 64,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507500769] [robot_0.planner_server]: worldToMap failed: mx,my: 65,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507507219] [robot_0.planner_server]: worldToMap failed: mx,my: 66,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507513435] [robot_0.planner_server]: worldToMap failed: mx,my: 67,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507519817] [robot_0.planner_server]: worldToMap failed: mx,my: 68,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507526137] [robot_0.planner_server]: worldToMap failed: mx,my: 69,143, size_x,size_y: 170,141
+[planner_server-4] [ERROR] [1785834180.507532312] [robot_0.planner_server]: worldToMap failed: mx,my: 70,143, size_x,size_y: 170,141
+[planner_server-4] [WARN] [1785834180.507566177] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-2.17, 2.54): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.507578833] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.581844974] [robot_0.frontier_explorer]: [robot_0] precheck cand#10 (-2.17, 2.54) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=99 COST raw=253 INSCRIBED_INFLATED
+[frontier_explorer-13] [WARN] [1785834180.582331058] [robot_0.frontier_explorer]: [robot_0] frontier (-2.17, 2.54) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834180.586934379] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (1.56, 1.36): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834180.586980355] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834180.634445514] [robot_0.frontier_explorer]: [robot_0] precheck cand#11 (1.56, 1.36) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834180.634947718] [robot_0.frontier_explorer]: [robot_0] frontier (1.56, 1.36) unplannable — retiring until map #101 (now #91, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[frontier_explorer-13] [INFO] [1785834180.635336031] [robot_0.frontier_explorer]: [robot_0] no reachable frontier: probed 12 of 12 candidates (0 inconclusive, whole list examined) — deferring to a fresher map
+[frontier_explorer-13] [INFO] [1785834180.635772260] [robot_0.frontier_explorer]: [robot_0] waiting for map update (0.0 sim s)
+[planner_server-4] [WARN] [1785834183.870555330] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (0.40, 2.16): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834183.870605292] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834183.926657099] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (0.40, 2.16) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=76 COST raw=196 COST
+[frontier_explorer-13] [INFO] [1785834183.980746259] [robot_0.frontier_explorer]: [robot_0] start probe 1/3 (-1.77, -2.46) -> START_OK error_code=0 planning_time=0.000s poses=2 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [WARN] [1785834183.981214652] [robot_0.frontier_explorer]: [robot_0] frontier (0.40, 2.16) unplannable — retiring until map #103 (now #93, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[planner_server-4] [WARN] [1785834183.998191176] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (2.68, 1.29): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834183.998243681] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834184.046634207] [robot_0.frontier_explorer]: [robot_0] precheck cand#1 (2.68, 1.29) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=255 NO_INFORMATION int8=-1 raw=255 NO_INFORMATION
+[frontier_explorer-13] [WARN] [1785834184.047336402] [robot_0.frontier_explorer]: [robot_0] frontier (2.68, 1.29) unplannable — retiring until map #103 (now #93, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[frontier_explorer-13] [INFO] [1785834184.047744938] [robot_0.frontier_explorer]: [robot_0] waiting for map update (0.0 sim s)
+[planner_server-4] [WARN] [1785834187.758312846] [robot_0.planner_server]:  plugin failed to plan from (-2.05, -2.88) to (-2.74, -2.77): "Failed to create plan with tolerance of: 0.500000"
+[planner_server-4] [WARN] [1785834187.758362672] [robot_0.planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[frontier_explorer-13] [INFO] [1785834187.802266716] [robot_0.frontier_explorer]: [robot_0] precheck cand#0 (-2.74, -2.77) -> UNREACHABLE error_code=208 planning_time=0.000s poses=0 costmap=75 COST raw=193 COST
+[frontier_explorer-13] [INFO] [1785834187.857685564] [robot_0.frontier_explorer]: [robot_0] start probe 1/3 (-1.77, -2.46) -> START_OK error_code=0 planning_time=0.000s poses=2 costmap=0 FREE raw=0 FREE
+[frontier_explorer-13] [WARN] [1785834187.858147439] [robot_0.frontier_explorer]: [robot_0] frontier (-2.11, -2.87) unplannable — retiring until map #105 (now #95, TTL 10 maps); start probe cleared the robot pose, so the GOAL is at fault
+[frontier_explorer-13] [INFO] [1785834187.858491678] [robot_0.frontier_explorer]: [robot_0] no reachable frontier: probed 1 of 1 candidates (0 inconclusive, whole list examined) — deferring to a fresher map
+[frontier_explorer-13] [INFO] [1785834187.868234565] [robot_0.frontier_explorer]: [robot_0] waiting for map update (0.0 sim s)
+[frontier_explorer-13] [INFO] [1785834191.813567154] [robot_0.frontier_explorer]: [robot_0] waiting for map update (0.0 sim s)
+[frontier_explorer-13] [ERROR] [1785834195.820339517] [robot_0.frontier_explorer]: [robot_0] 10 consecutive selection cycles produced no dispatchable goal and at least one of them ran out of probe budget before it ran out of candidates — some frontiers were never examined, so this is NOT "nothing is reachable". Raise PRECHECK_MAX_PROBES (now 12) or PRECHECK_CYCLE_BUDGET (now 10s wall); do not read this as a completed map.
+[frontier_explorer-13] [ERROR] [1785834195.884565345] [robot_0.frontier_explorer]: [robot_0] termination diagnostic (defer-truncated): pose (-2.047, -2.877) -> cell (62, 25) value=-1 (OCC_THRESH=50, unknown=-1); 3x3 north-row-first [0,0,100] [0,-1,0] [0,-1,0]; nearest occupied 0.072 m away at (-2.02, -2.81); map seq 99, grid 170x141 res=0.050 origin=(-5.196, -4.136); costmap[translated] /robot_0/global_costmap/costmap seq 102, 0 updates applied (0 rejected), 0.1s old, 170x141 res=0.050 origin=(-5.196, -4.136): cell (62, 25) cost=99 COST; 3x3 north-row-first [99,99,100] [99,99,99] [99,99,99]; at nearest SLAM-occupied cost=100 COST; costmap[raw] /robot_0/global_costmap/costmap_raw seq 102, 0 updates applied (0 rejected), 0.1s old, 170x141 res=0.050 origin=(-5.196, -4.136): cell (62, 25) cost=253 INSCRIBED_INFLATED; 3x3 north-row-first [253,253,254] [253,253,253] [253,253,253]; at nearest SLAM-occupied cost=254 LETHAL; map saved to /home/lawlite/Desktop/NSKsim/experiments/maps/robot0_20260804_120315_defer-truncated.pgm. An occupied value at the robot's own cell means the believed pose is inside a mapped wall (SLAM pose error), NOT that the robot is in a pocket — do not add a standoff or back up on it.
+[frontier_explorer-13] [INFO] [1785834195.945150520] [robot_0.frontier_explorer]: [robot_0] termination audit after 14 goals: 49 frontier clusters detected this scan (0 blacklisted, 0 retry-pending, 15 retired-unexpired, 34 below MIN_CLUSTER=4).
+[frontier_explorer-13] [WARN] [1785834195.947000852] [robot_0.frontier_explorer]: [robot_0] exploration HALTED with 744 frontier cells remaining (non-blacklisted, >= MIN_CLUSTER) — NOT complete; selection could not turn them into a goal.
+[ERROR] [frontier_explorer-13]: process has died [pid 46735, exit code 1, cmd '/home/lawlite/Desktop/NSKsim/ros2_ws/install/nsk_swarm/lib/nsk_swarm/frontier_explorer --ros-args --params-file /tmp/launch_params_xght_oo8'].
+[planner_server-4] [INFO] [1785834210.128422648] [robot_0.global_costmap.global_costmap]: Message Filter dropping message: frame 'robot_0/base_scan' at time 223.200 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[planner_server-4] [INFO] [1785834614.228115224] [robot_0.global_costmap.global_costmap]: Message Filter dropping message: frame 'robot_0/base_scan' at time 626.400 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[controller_server-2] [INFO] [1785834901.863715167] [robot_0.local_costmap.local_costmap]: Message Filter dropping message: frame 'robot_0/base_scan' at time 907.200 for reason 'the timestamp on the message is earlier than all the data in the transform cache'

@@ -1,0 +1,1070 @@
+[INFO] [launch]: All log files can be found below /home/lawlite/.ros/log/2026-08-06-01-09-36-906841-lawlite-Lenovo-Y520-15IKBN-229877
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [gz-1]: process started with pid [229897]
+[INFO] [nsk_engine-2]: process started with pid [229898]
+[INFO] [parameter_bridge-3]: process started with pid [229899]
+[parameter_bridge-3] [INFO] [1785967777.341814678] [clock_bridge]: Creating GZ->ROS Bridge: [/clock (gz.msgs.Clock) -> /clock (rosgraph_msgs/msg/Clock)] (Lazy 0)
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/world[@name="knowledge_world"]/ambient:/home/lawlite/Desktop/NSKsim/ros2_ws/install/nsk_swarm/share/nsk_swarm/worlds/knowledge_world.sdf:L33]: XML Element[ambient], child of element[world], not defined in SDF. Copying[ambient] as children of [world].
+[INFO] [create-4]: process started with pid [229975]
+[INFO] [create-5]: process started with pid [229976]
+[INFO] [create-6]: process started with pid [229977]
+[INFO] [create-7]: process started with pid [229978]
+[INFO] [create-8]: process started with pid [229979]
+[gz-1] libEGL warning: pci id for fd 110: 10de:1c8d, driver (null)
+[gz-1] 
+[gz-1] pci id for fd 111: 10de:1c8d, driver (null)
+[gz-1] pci id for fd 112: 10de:1c8d, driver (null)
+[gz-1] libEGL warning: egl: failed to create dri2 screen
+[gz-1] libEGL warning: pci id for fd 110: 10de:1c8d, driver (null)
+[gz-1] 
+[gz-1] pci id for fd 111: 10de:1c8d, driver (null)
+[gz-1] pci id for fd 112: 10de:1c8d, driver (null)
+[gz-1] libEGL warning: egl: failed to create dri2 screen
+[gz-1] libEGL warning: pci id for fd 110: 10de:1c8d, driver (null)
+[gz-1] 
+[nsk_engine-2] [INFO] [1785967779.517739508] [nsk_engine]: NSK base:     /home/lawlite/Desktop/NSK
+[nsk_engine-2] [INFO] [1785967779.518532234] [nsk_engine]: Checkpoint:   /home/lawlite/Desktop/NSK/experiments/checkpoints/joint_best.pt
+[nsk_engine-2] [INFO] [1785967779.519167525] [nsk_engine]: Config:       /home/lawlite/Desktop/NSK/configs/base.yaml
+[nsk_engine-2] [INFO] [1785967779.519758806] [nsk_engine]: Num robots:   5
+[nsk_engine-2] [INFO] [1785967779.520376649] [nsk_engine]: DS indices:   [0, 900, 1800, 2700, 3600]
+[nsk_engine-2] [INFO] [1785967779.525734841] [nsk_engine]: Seed:         unseeded
+[create-5] [INFO] [1785967779.556029222] [spawn_robot_1]: Entity creation successful.
+[create-4] [INFO] [1785967779.653110533] [spawn_robot_0]: Entity creation successful.
+[INFO] [create-4]: process has finished cleanly [pid 229975]
+[create-6] [INFO] [1785967779.854236627] [spawn_robot_2]: Entity creation successful.
+[INFO] [create-5]: process has finished cleanly [pid 229976]
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:/tmp/robot_1_burger_v79g6cbn.sdf:L141]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[create-8] [INFO] [1785967779.953595151] [spawn_robot_4]: Entity creation successful.
+[INFO] [create-6]: process has finished cleanly [pid 229977]
+[create-7] [INFO] [1785967780.056115633] [spawn_robot_3]: Entity creation successful.
+[INFO] [create-8]: process has finished cleanly [pid 229979]
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:/tmp/robot_0_burger_d2774tfb.sdf:L141]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[INFO] [create-7]: process has finished cleanly [pid 229978]
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:/tmp/robot_2_burger_cgg0etzk.sdf:L141]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[INFO] [ros2-9]: process started with pid [230112]
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:/tmp/robot_4_burger_8l5zah5k.sdf:L141]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:<data-string>:L163]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:<data-string>:L163]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:/tmp/robot_3_burger_m8eoyyj5.sdf:L141]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:<data-string>:L163]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:<data-string>:L163]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] libEGL warning: pci id for fd 83: 10de:1c8d, driver (null)
+[gz-1] 
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="turtlebot3_burger"]/link[@name="base_scan"]/sensor[@name="hls_lfcd_lds"]/gz_frame_id:<data-string>:L163]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] pci id for fd 84: 10de:1c8d, driver (null)
+[gz-1] pci id for fd 85: 10de:1c8d, driver (null)
+[gz-1] libEGL warning: egl: failed to create dri2 screen
+[gz-1] libEGL warning: pci id for fd 83: 10de:1c8d, driver (null)
+[gz-1] 
+[gz-1] pci id for fd 84: 10de:1c8d, driver (null)
+[gz-1] pci id for fd 85: 10de:1c8d, driver (null)
+[gz-1] libEGL warning: egl: failed to create dri2 screen
+[gz-1] libEGL warning: pci id for fd 83: 10de:1c8d, driver (null)
+[gz-1] 
+[ros2-9] [INFO] [1785967780.669063197] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_0/cmd_vel (gz.msgs.Twist) -> /robot_0/cmd_vel (geometry_msgs/msg/Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.672105633] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_0/cmd_vel (geometry_msgs/msg/Twist) -> /robot_0/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.673389378] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_0/odom (gz.msgs.Odometry) -> /robot_0/odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.676138949] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_0/odom (nav_msgs/msg/Odometry) -> /robot_0/odom (gz.msgs.Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.677126319] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_0/scan (gz.msgs.LaserScan) -> /robot_0/scan (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.679258695] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_1/cmd_vel (gz.msgs.Twist) -> /robot_1/cmd_vel (geometry_msgs/msg/Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.679898145] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_1/cmd_vel (geometry_msgs/msg/Twist) -> /robot_1/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.680792424] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_1/odom (gz.msgs.Odometry) -> /robot_1/odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.681440309] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_1/odom (nav_msgs/msg/Odometry) -> /robot_1/odom (gz.msgs.Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.682429251] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_1/scan (gz.msgs.LaserScan) -> /robot_1/scan (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.683102738] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_2/cmd_vel (gz.msgs.Twist) -> /robot_2/cmd_vel (geometry_msgs/msg/Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.683673425] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_2/cmd_vel (geometry_msgs/msg/Twist) -> /robot_2/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.684537133] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_2/odom (gz.msgs.Odometry) -> /robot_2/odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.685389103] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_2/odom (nav_msgs/msg/Odometry) -> /robot_2/odom (gz.msgs.Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.686364129] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_2/scan (gz.msgs.LaserScan) -> /robot_2/scan (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.687135899] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_3/cmd_vel (gz.msgs.Twist) -> /robot_3/cmd_vel (geometry_msgs/msg/Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.687686309] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_3/cmd_vel (geometry_msgs/msg/Twist) -> /robot_3/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.688404665] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_3/odom (gz.msgs.Odometry) -> /robot_3/odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.688930513] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_3/odom (nav_msgs/msg/Odometry) -> /robot_3/odom (gz.msgs.Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.689572264] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_3/scan (gz.msgs.LaserScan) -> /robot_3/scan (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.690037073] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_4/cmd_vel (gz.msgs.Twist) -> /robot_4/cmd_vel (geometry_msgs/msg/Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.690456328] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_4/cmd_vel (geometry_msgs/msg/Twist) -> /robot_4/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.690973429] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_4/odom (gz.msgs.Odometry) -> /robot_4/odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.691437466] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/robot_4/odom (nav_msgs/msg/Odometry) -> /robot_4/odom (gz.msgs.Odometry)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.692112960] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/robot_4/scan (gz.msgs.LaserScan) -> /robot_4/scan (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[ros2-9] [INFO] [1785967780.692767176] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/tf (gz.msgs.Pose_V) -> /tf (tf2_msgs/msg/TFMessage)] (Lazy 0)
+[INFO] [robot_state_publisher-10]: process started with pid [230182]
+[INFO] [robot_state_publisher-11]: process started with pid [230183]
+[INFO] [robot_state_publisher-12]: process started with pid [230184]
+[INFO] [robot_state_publisher-13]: process started with pid [230185]
+[INFO] [robot_state_publisher-14]: process started with pid [230186]
+[robot_state_publisher-11] [INFO] [1785967781.425477214] [robot_1.robot_state_publisher]: Robot initialized
+[robot_state_publisher-13] [INFO] [1785967781.438622552] [robot_3.robot_state_publisher]: Robot initialized
+[robot_state_publisher-10] [INFO] [1785967781.454352125] [robot_0.robot_state_publisher]: Robot initialized
+[robot_state_publisher-12] [INFO] [1785967781.470192018] [robot_2.robot_state_publisher]: Robot initialized
+[robot_state_publisher-14] [INFO] [1785967782.158931695] [robot_4.robot_state_publisher]: Robot initialized
+[INFO] [robot_node-15]: process started with pid [230265]
+[INFO] [robot_node-16]: process started with pid [230266]
+[INFO] [robot_node-17]: process started with pid [230267]
+[INFO] [robot_node-18]: process started with pid [230268]
+[INFO] [robot_node-19]: process started with pid [230269]
+[INFO] [convergence_monitor-20]: process started with pid [230295]
+[nsk_engine-2] /home/lawlite/Desktop/NSKsim/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py:752: UserWarning: 'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.
+[nsk_engine-2]   super().__init__(loader)
+[robot_node-16] [WARN] [1785967785.196556856] [robot_1]: [Robot 1] Waiting for /nsk/compress ...
+[robot_node-19] [WARN] [1785967786.122302635] [robot_4]: [Robot 4] Waiting for /nsk/compress ...
+[robot_node-15] [WARN] [1785967786.382049341] [robot_0]: [Robot 0] Waiting for /nsk/compress ...
+[robot_node-18] [WARN] [1785967786.383251264] [robot_3]: [Robot 3] Waiting for /nsk/compress ...
+[robot_node-17] [WARN] [1785967786.448717976] [robot_2]: [Robot 2] Waiting for /nsk/compress ...
+[convergence_monitor-20] [WARN] [1785967786.869788303] [convergence_monitor]: [NSK Monitor] Waiting for /nsk/similarity_query ...
+[robot_node-16] [WARN] [1785967787.201401999] [robot_1]: [Robot 1] Waiting for /nsk/compress ...
+[robot_node-19] [WARN] [1785967788.126647670] [robot_4]: [Robot 4] Waiting for /nsk/compress ...
+[robot_node-18] [WARN] [1785967788.388978336] [robot_3]: [Robot 3] Waiting for /nsk/compress ...
+[robot_node-15] [WARN] [1785967788.391110141] [robot_0]: [Robot 0] Waiting for /nsk/compress ...
+[robot_node-17] [WARN] [1785967788.450645850] [robot_2]: [Robot 2] Waiting for /nsk/compress ...
+[convergence_monitor-20] [WARN] [1785967788.877741706] [convergence_monitor]: [NSK Monitor] Waiting for /nsk/similarity_query ...
+[robot_node-16] [WARN] [1785967789.206126454] [robot_1]: [Robot 1] Waiting for /nsk/compress ...
+[nsk_engine-2] [INFO] [1785967789.994718036] [nsk_engine]: Ready.
+[robot_node-19] [INFO] [1785967790.199790888] [robot_4]: [Robot 4] Started.
+[robot_node-15] [INFO] [1785967790.220292202] [robot_0]: [Robot 0] Started.
+[robot_node-18] [INFO] [1785967790.246766483] [robot_3]: [Robot 3] Started.
+[robot_node-16] [INFO] [1785967790.277702391] [robot_1]: [Robot 1] Started.
+[robot_node-17] [INFO] [1785967790.285388625] [robot_2]: [Robot 2] Started.
+[ros2-9] [INFO] [1785967790.297274936] [ros_gz_bridge]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[convergence_monitor-20] [INFO] [1785967790.349406761] [convergence_monitor]: [NSK Monitor] Node started.
+[robot_node-19] [INFO] [1785967792.200963131] [robot_4]: [Robot 4] → FLOCK (4 peers)
+[robot_node-15] [INFO] [1785967792.216319595] [robot_0]: [Robot 0] → FLOCK (4 peers)
+[robot_node-18] [INFO] [1785967792.245338818] [robot_3]: [Robot 3] → FLOCK (4 peers)
+[robot_node-16] [INFO] [1785967792.285484076] [robot_1]: [Robot 1] → FLOCK (4 peers)
+[robot_node-17] [INFO] [1785967792.286172418] [robot_2]: [Robot 2] → FLOCK (4 peers)
+[robot_node-19] [INFO] [1785967798.636100321] [robot_4]: [Robot 4] Broadcast to 4 peer(s) retention=0.65 (min_sim=-0.205)
+[robot_node-15] [INFO] [1785967798.860376183] [robot_0]: [Robot 0] Broadcast to 4 peer(s) retention=0.65 (min_sim=-0.049)
+[robot_node-16] [INFO] [1785967799.034406378] [robot_1]: [Robot 1] Broadcast to 4 peer(s) retention=0.65 (min_sim=0.209)
+[robot_node-15] [INFO] [1785967799.821648069] [robot_0]: [Robot 0] Merged from Robot 4 dist=0.71m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967800.524100897] [robot_1]: [Robot 1] Merged from Robot 4 dist=1.02m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967801.644037787] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=016s]  Mean pairwise sim: 0.6647
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×1  (0,2)×1  (0,3)×1  (0,4)×1  (1,0)×1  (1,2)×1  (1,3)×1  (1,4)×1  (4,0)×1  (4,1)×1  (4,2)×1  (4,3)×1
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.0000 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-19] [INFO] [1785967802.917083816] [robot_4]: [Robot 4] Merged from Robot 0 dist=0.70m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967803.654637598] [robot_1]: [Robot 1] Merged from Robot 0 dist=0.47m gate=0.500 z_norm=1.0000
+[robot_node-18] [WARN] [1785967803.658695987] [robot_3]: [Robot 3] /nsk/merge timeout — skipping cycle
+[robot_node-18] [WARN] [1785967803.661299677] [robot_3]: [Robot 3] /nsk/compress timeout — skipping cycle
+[robot_node-17] [WARN] [1785967803.665480104] [robot_2]: [Robot 2] /nsk/merge timeout — skipping cycle
+[robot_node-17] [WARN] [1785967803.671605216] [robot_2]: [Robot 2] /nsk/compress timeout — skipping cycle
+[robot_node-18] [INFO] [1785967803.696491138] [robot_3]: [Robot 3] Merged from Robot 0 dist=1.03m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785967803.797235060] [robot_2]: [Robot 2] Merged from Robot 0 dist=1.03m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967804.044992126] [robot_4]: [Robot 4] Merged from Robot 1 dist=0.95m gate=0.500 z_norm=1.0000
+[robot_node-15] [WARN] [1785967804.055566932] [robot_0]: [Robot 0] /nsk/merge timeout — skipping cycle
+[robot_node-17] [WARN] [1785967804.063768589] [robot_2]: [Robot 2] /nsk/merge timeout — skipping cycle
+[robot_node-18] [WARN] [1785967804.074989390] [robot_3]: [Robot 3] /nsk/merge timeout — skipping cycle
+[robot_node-19] [INFO] [1785967806.501713825] [robot_4]: [Robot 4] Broadcast to 4 peer(s) retention=0.40 (min_sim=0.614)
+[robot_node-15] [INFO] [1785967806.775371611] [robot_0]: [Robot 0] Broadcast to 4 peer(s) retention=0.20 (min_sim=0.776)
+[robot_node-17] [INFO] [1785967806.802751863] [robot_2]: [Robot 2] Broadcast to 4 peer(s) retention=0.20 (min_sim=0.771)
+[robot_node-17] [INFO] [1785967807.492597267] [robot_2]: [Robot 2] Merged from Robot 4 dist=1.23m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967808.739002004] [robot_0]: [Robot 0] Merged from Robot 4 dist=0.40m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785967810.123820198] [robot_2]: [Robot 2] Merged from Robot 0 dist=0.83m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967810.546737648] [robot_4]: [Robot 4] Merged from Robot 0 dist=0.44m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967811.028353278] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=026s]  Mean pairwise sim: 0.8914
+[convergence_monitor-20]   Δ from last:  +0.2267   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×2  (0,2)×2  (0,3)×2  (0,4)×2  (1,0)×1  (1,2)×1  (1,3)×1  (1,4)×1  (2,0)×1  (2,1)×1  (2,3)×1  (2,4)×1  (4,0)×2  (4,1)×2  (4,2)×2  (4,3)×2
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2267 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-16] [WARN] [1785967811.495060375] [robot_1]: [Robot 1] /nsk/compress timeout — skipping cycle
+[robot_node-16] [INFO] [1785967811.496623435] [robot_1]: [Robot 1] → EXPLORE
+[robot_node-18] [WARN] [1785967811.509248663] [robot_3]: [Robot 3] /nsk/compress timeout — skipping cycle
+[robot_node-16] [WARN] [1785967811.530571445] [robot_1]: [Robot 1] /nsk/merge timeout — skipping cycle
+[robot_node-18] [WARN] [1785967811.532544106] [robot_3]: [Robot 3] /nsk/merge timeout — skipping cycle
+[robot_node-18] [INFO] [1785967811.549550485] [robot_3]: [Robot 3] Merged from Robot 0 dist=0.90m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967811.557016434] [robot_1]: [Robot 1] Merged from Robot 0 dist=1.27m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967811.583612705] [robot_4]: [Robot 4] Merged from Robot 2 dist=1.27m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967811.648603482] [robot_1]: [Robot 1] Merged from Robot 2 dist=0.50m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967811.692998813] [robot_0]: [Robot 0] Merged from Robot 2 dist=0.83m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967811.760709292] [robot_3]: [Robot 3] Merged from Robot 2 dist=0.41m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967812.278531527] [robot_1]: [Robot 1] → FLOCK (4 peers)
+[robot_node-19] [INFO] [1785967814.368030667] [robot_4]: [Robot 4] Broadcast to 3 peer(s) retention=0.20 (min_sim=0.794)
+[robot_node-15] [INFO] [1785967814.633113350] [robot_0]: [Robot 0] Broadcast to 4 peer(s) retention=0.20 (min_sim=0.910)
+[robot_node-17] [INFO] [1785967814.691165766] [robot_2]: [Robot 2] Broadcast to 4 peer(s) retention=0.20 (min_sim=0.871)
+[robot_node-17] [INFO] [1785967815.040392775] [robot_2]: [Robot 2] Merged from Robot 4 dist=2.12m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967815.351817354] [robot_1]: [Robot 1] Broadcast to 3 peer(s) retention=0.20 (min_sim=0.838)
+[robot_node-17] [INFO] [1785967816.408844447] [robot_2]: [Robot 2] Merged from Robot 0 dist=0.99m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967816.681724470] [robot_4]: [Robot 4] Merged from Robot 0 dist=1.54m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967816.954898096] [robot_1]: [Robot 1] Merged from Robot 0 dist=1.62m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967818.481051458] [robot_1]: [Robot 1] Merged from Robot 2 dist=1.20m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967819.095499373] [robot_4]: [Robot 4] Merged from Robot 2 dist=2.19m gate=0.500 z_norm=1.0000
+[robot_node-18] [WARN] [1785967819.384376344] [robot_3]: [Robot 3] /nsk/compress timeout — skipping cycle
+[robot_node-18] [WARN] [1785967819.405732915] [robot_3]: [Robot 3] /nsk/merge timeout — skipping cycle
+[robot_node-15] [WARN] [1785967819.418365503] [robot_0]: [Robot 0] /nsk/merge timeout — skipping cycle
+[robot_node-18] [INFO] [1785967819.458721916] [robot_3]: [Robot 3] Merged from Robot 0 dist=0.51m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967819.490042972] [robot_3]: [Robot 3] Merged from Robot 2 dist=1.28m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967819.579419434] [robot_0]: [Robot 0] Merged from Robot 2 dist=1.00m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785967819.783512708] [robot_2]: [Robot 2] Merged from Robot 1 dist=1.17m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967819.976272250] [robot_0]: [Robot 0] Merged from Robot 1 dist=1.58m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967820.357134540] [robot_3]: [Robot 3] Merged from Robot 1 dist=0.85m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967820.371458620] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=035s]  Mean pairwise sim: 0.9590
+[convergence_monitor-20]   Δ from last:  +0.0676   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×3  (0,2)×3  (0,3)×3  (0,4)×3  (1,0)×2  (1,2)×2  (1,3)×2  (1,4)×1  (2,0)×2  (2,1)×2  (2,3)×2  (2,4)×2  (4,0)×3  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2943 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-19] [INFO] [1785967822.415336947] [robot_4]: [Robot 4] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.957)
+[robot_node-15] [INFO] [1785967822.642516061] [robot_0]: [Robot 0] Broadcast to 4 peer(s) retention=0.20 (min_sim=0.957)
+[robot_node-18] [INFO] [1785967822.906541112] [robot_3]: [Robot 3] Broadcast to 3 peer(s) retention=0.20 (min_sim=0.947)
+[robot_node-15] [INFO] [1785967823.307210448] [robot_0]: [Robot 0] Merged from Robot 4 dist=2.64m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785967823.340543967] [robot_2]: [Robot 2] Broadcast to 3 peer(s) retention=0.20 (min_sim=0.947)
+[robot_node-18] [INFO] [1785967824.316297924] [robot_3]: [Robot 3] Merged from Robot 0 dist=0.50m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785967825.105230213] [robot_2]: [Robot 2] Merged from Robot 0 dist=2.08m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967826.039530115] [robot_4]: [Robot 4] Merged from Robot 0 dist=2.67m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785967826.739756316] [robot_2]: [Robot 2] Merged from Robot 3 dist=1.92m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967826.953436401] [robot_0]: [Robot 0] Merged from Robot 3 dist=0.50m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967827.343746069] [robot_0]: [Robot 0] Merged from Robot 2 dist=2.18m gate=0.500 z_norm=1.0000
+[robot_node-16] [WARN] [1785967827.415694073] [robot_1]: [Robot 1] /nsk/compress timeout — skipping cycle
+[robot_node-16] [INFO] [1785967827.417339237] [robot_1]: [Robot 1] → EXPLORE
+[robot_node-16] [INFO] [1785967827.459711984] [robot_1]: [Robot 1] Merged from Robot 0 dist=1.58m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967827.472520398] [robot_1]: [Robot 1] Merged from Robot 3 dist=1.15m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967828.097562643] [robot_3]: [Robot 3] Merged from Robot 2 dist=1.93m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967828.282268605] [robot_1]: [Robot 1] → FLOCK (2 peers)
+[robot_node-16] [INFO] [1785967828.343119742] [robot_1]: [Robot 1] Merged from Robot 2 dist=2.46m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967830.504780630] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=045s]  Mean pairwise sim: 0.9638
+[convergence_monitor-20]   Δ from last:  +0.0048   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×4  (0,2)×4  (0,3)×4  (0,4)×4  (1,0)×2  (1,2)×2  (1,3)×2  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×3  (2,4)×2  (3,0)×1  (3,1)×1  (3,2)×1  (4,0)×4  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2992 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785967830.515712586] [robot_0]: [Robot 0] Broadcast to 2 peer(s) retention=0.20 (min_sim=0.977)
+[robot_node-16] [INFO] [1785967830.815313254] [robot_1]: [Robot 1] Broadcast to 2 peer(s) retention=0.20 (min_sim=0.977)
+[robot_node-18] [INFO] [1785967830.953229564] [robot_3]: [Robot 3] Broadcast to 2 peer(s) retention=0.20 (min_sim=0.982)
+[robot_node-16] [INFO] [1785967831.445611851] [robot_1]: [Robot 1] Merged from Robot 0 dist=1.74m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967831.732028451] [robot_3]: [Robot 3] Merged from Robot 0 dist=1.27m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967831.957554071] [robot_0]: [Robot 0] Merged from Robot 1 dist=1.72m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967832.169734114] [robot_3]: [Robot 3] Merged from Robot 1 dist=0.69m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967832.618920849] [robot_1]: [Robot 1] Merged from Robot 3 dist=0.67m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967832.798198212] [robot_0]: [Robot 0] Merged from Robot 3 dist=1.33m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967834.195721682] [robot_4]: [Robot 4] → EXPLORE
+[robot_node-17] [INFO] [1785967834.286643582] [robot_2]: [Robot 2] → EXPLORE
+[robot_node-15] [INFO] [1785967838.479060526] [robot_0]: [Robot 0] Broadcast to 2 peer(s) retention=0.20 (min_sim=0.966)
+[robot_node-18] [INFO] [1785967838.570059172] [robot_3]: [Robot 3] Broadcast to 2 peer(s) retention=0.20 (min_sim=0.984)
+[robot_node-16] [INFO] [1785967838.923990389] [robot_1]: [Robot 1] Broadcast to 2 peer(s) retention=0.20 (min_sim=0.966)
+[robot_node-18] [INFO] [1785967839.621740159] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.44m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967839.948539083] [robot_1]: [Robot 1] Merged from Robot 0 dist=1.80m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967840.239393430] [robot_1]: [Robot 1] Merged from Robot 3 dist=0.70m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967840.685782919] [robot_0]: [Robot 0] Merged from Robot 3 dist=2.46m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967840.909260380] [robot_3]: [Robot 3] Merged from Robot 1 dist=0.72m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967840.930742567] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=056s]  Mean pairwise sim: 0.9454
+[convergence_monitor-20]   Δ from last:  -0.0185   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×6  (0,2)×4  (0,3)×6  (0,4)×4  (1,0)×4  (1,2)×2  (1,3)×4  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×3  (2,4)×2  (3,0)×3  (3,1)×3  (3,2)×1  (4,0)×4  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2807 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785967841.268020269] [robot_0]: [Robot 0] Merged from Robot 1 dist=1.86m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967846.496727845] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.937)
+[robot_node-18] [INFO] [1785967846.616097047] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.952)
+[robot_node-16] [INFO] [1785967846.739700502] [robot_1]: [Robot 1] Broadcast to 2 peer(s) retention=0.20 (min_sim=0.937)
+[robot_node-16] [INFO] [1785967847.192291235] [robot_1]: [Robot 1] Merged from Robot 0 dist=2.94m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785967847.746181974] [robot_1]: [Robot 1] Merged from Robot 3 dist=1.14m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967847.836777176] [robot_0]: [Robot 0] Merged from Robot 1 dist=2.97m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967848.162753007] [robot_3]: [Robot 3] Merged from Robot 1 dist=1.17m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967850.358405728] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=065s]  Mean pairwise sim: 0.9259
+[convergence_monitor-20]   Δ from last:  -0.0195   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×4  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×3  (2,4)×2  (3,0)×3  (3,1)×4  (3,2)×1  (4,0)×4  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2612 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785967854.590967914] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.887)
+[robot_node-16] [INFO] [1785967854.794062999] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.887)
+[robot_node-16] [INFO] [1785967855.426363344] [robot_1]: [Robot 1] Merged from Robot 3 dist=2.96m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967858.220505892] [robot_0]: [Robot 0] → EXPLORE
+[convergence_monitor-20] [INFO] [1785967860.383104010] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=075s]  Mean pairwise sim: 0.9191
+[convergence_monitor-20]   Δ from last:  -0.0068   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×4  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×3  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×1  (4,0)×4  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2544 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785967866.245900182] [robot_3]: [Robot 3] → EXPLORE
+[robot_node-16] [INFO] [1785967866.284415652] [robot_1]: [Robot 1] → EXPLORE
+[robot_node-18] [INFO] [1785967868.245523273] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785967868.288288535] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785967870.641125762] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.971)
+[convergence_monitor-20] [INFO] [1785967870.654440994] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=085s]  Mean pairwise sim: 0.9191
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×4  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×3  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×2  (4,0)×4  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2544 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-17] [INFO] [1785967870.730130713] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.971)
+[robot_node-17] [INFO] [1785967871.600505193] [robot_2]: [Robot 2] Merged from Robot 3 dist=2.52m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967871.906985399] [robot_3]: [Robot 3] Merged from Robot 2 dist=2.51m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967878.531618794] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.955)
+[robot_node-17] [INFO] [1785967878.591983707] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.955)
+[robot_node-17] [INFO] [1785967878.700620645] [robot_2]: [Robot 2] Merged from Robot 3 dist=2.55m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785967878.773326993] [robot_3]: [Robot 3] Merged from Robot 2 dist=2.57m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967880.383719840] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=095s]  Mean pairwise sim: 0.9112
+[convergence_monitor-20]   Δ from last:  -0.0079   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×4  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×4  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2465 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785967890.238118302] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785967890.246674552] [robot_3]: [Robot 3] → EXPLORE
+[robot_node-19] [INFO] [1785967890.260367765] [robot_4]: [Robot 4] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785967890.297863209] [robot_2]: [Robot 2] → EXPLORE
+[convergence_monitor-20] [INFO] [1785967890.403807882] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=105s]  Mean pairwise sim: 0.9112
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×4  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×4  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2465 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-19] [INFO] [1785967894.669066779] [robot_4]: [Robot 4] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.913)
+[robot_node-15] [INFO] [1785967895.133670002] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.913)
+[robot_node-15] [INFO] [1785967896.360037878] [robot_0]: [Robot 0] Merged from Robot 4 dist=2.65m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967897.581048479] [robot_4]: [Robot 4] Merged from Robot 0 dist=2.60m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967900.394565007] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=115s]  Mean pairwise sim: 0.9056
+[convergence_monitor-20]   Δ from last:  -0.0056   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×5  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×5  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2409 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-19] [INFO] [1785967902.442489061] [robot_4]: [Robot 4] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.912)
+[robot_node-15] [INFO] [1785967902.710060912] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.912)
+[robot_node-15] [INFO] [1785967903.425194453] [robot_0]: [Robot 0] Merged from Robot 4 dist=2.35m gate=0.500 z_norm=1.0000
+[robot_node-19] [INFO] [1785967904.387743378] [robot_4]: [Robot 4] Merged from Robot 0 dist=2.35m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785967910.371560084] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=125s]  Mean pairwise sim: 0.8935
+[convergence_monitor-20]   Δ from last:  -0.0121   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2288 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-19] [INFO] [1785967914.214465928] [robot_4]: [Robot 4] → EXPLORE
+[robot_node-15] [INFO] [1785967914.219266483] [robot_0]: [Robot 0] → EXPLORE
+[convergence_monitor-20] [INFO] [1785967920.376164302] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=135s]  Mean pairwise sim: 0.8935
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2288 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785967930.379713408] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=145s]  Mean pairwise sim: 0.8935
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2288 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: NOT YET
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785967940.411478502] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=155s]  Mean pairwise sim: 0.8935
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2288 (min 0.03)   Stable: 3/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785967940.412098646] [convergence_monitor]: 
+[convergence_monitor-20] ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+[convergence_monitor-20] [NSK Monitor] CONVERGENCE REACHED at t=155s
+[convergence_monitor-20]   Final mean pairwise similarity: 0.8935
+[convergence_monitor-20]   Rise over baseline: +0.2288
+[convergence_monitor-20]   Merge events:
+[convergence_monitor-20]     Robot 0 → Robot 1: 7 merges
+[convergence_monitor-20]     Robot 0 → Robot 2: 4 merges
+[convergence_monitor-20]     Robot 0 → Robot 3: 6 merges
+[convergence_monitor-20]     Robot 0 → Robot 4: 6 merges
+[convergence_monitor-20]     Robot 1 → Robot 0: 5 merges
+[convergence_monitor-20]     Robot 1 → Robot 2: 2 merges
+[convergence_monitor-20]     Robot 1 → Robot 3: 5 merges
+[convergence_monitor-20]     Robot 1 → Robot 4: 1 merges
+[convergence_monitor-20]     Robot 2 → Robot 0: 3 merges
+[convergence_monitor-20]     Robot 2 → Robot 1: 3 merges
+[convergence_monitor-20]     Robot 2 → Robot 3: 5 merges
+[convergence_monitor-20]     Robot 2 → Robot 4: 2 merges
+[convergence_monitor-20]     Robot 3 → Robot 0: 3 merges
+[convergence_monitor-20]     Robot 3 → Robot 1: 5 merges
+[convergence_monitor-20]     Robot 3 → Robot 2: 3 merges
+[convergence_monitor-20]     Robot 4 → Robot 0: 6 merges
+[convergence_monitor-20]     Robot 4 → Robot 1: 2 merges
+[convergence_monitor-20]     Robot 4 → Robot 2: 3 merges
+[convergence_monitor-20]     Robot 4 → Robot 3: 3 merges
+[convergence_monitor-20]   Total merge events: 74
+[convergence_monitor-20] ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+[convergence_monitor-20] [INFO] [1785967950.380214320] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=165s]  Mean pairwise sim: 0.8935
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2288 (min 0.03)   Stable: 4/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785967960.400044107] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=175s]  Mean pairwise sim: 0.8935
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2288 (min 0.03)   Stable: 5/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785967970.405811927] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=185s]  Mean pairwise sim: 0.8935
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2288 (min 0.03)   Stable: 6/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785967980.228339299] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785967980.294229387] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[convergence_monitor-20] [INFO] [1785967980.366992522] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=195s]  Mean pairwise sim: 0.8935
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×4  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×3  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2288 (min 0.03)   Stable: 7/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785967982.940254424] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.924)
+[robot_node-17] [INFO] [1785967983.018140944] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.924)
+[robot_node-17] [INFO] [1785967983.768478938] [robot_2]: [Robot 2] Merged from Robot 0 dist=2.58m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967984.935999007] [robot_0]: [Robot 0] Merged from Robot 2 dist=2.57m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967990.789495022] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.926)
+[convergence_monitor-20] [INFO] [1785967990.808434443] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=205s]  Mean pairwise sim: 0.9078
+[convergence_monitor-20]   Δ from last:  +0.0143   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×6  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×4  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2431 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-17] [INFO] [1785967990.926644891] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.926)
+[robot_node-17] [INFO] [1785967991.987772689] [robot_2]: [Robot 2] Merged from Robot 0 dist=2.49m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785967992.545578725] [robot_0]: [Robot 0] Merged from Robot 2 dist=2.50m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968000.396182833] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=215s]  Mean pairwise sim: 0.9153
+[convergence_monitor-20]   Δ from last:  +0.0075   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×6  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×5  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2507 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968002.229466766] [robot_0]: [Robot 0] → EXPLORE
+[robot_node-17] [INFO] [1785968002.287826321] [robot_2]: [Robot 2] → EXPLORE
+[robot_node-15] [INFO] [1785968006.226993429] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785968006.294684019] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[robot_node-15] [INFO] [1785968006.798756385] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.920)
+[robot_node-17] [INFO] [1785968006.870020979] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.920)
+[robot_node-17] [INFO] [1785968007.796570573] [robot_2]: [Robot 2] Merged from Robot 0 dist=2.74m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968008.350864278] [robot_0]: [Robot 0] Merged from Robot 2 dist=2.73m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968010.414309798] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=225s]  Mean pairwise sim: 0.9171
+[convergence_monitor-20]   Δ from last:  +0.0018   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×7  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×6  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2525 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968014.662995476] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.906)
+[robot_node-17] [INFO] [1785968014.731685841] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.906)
+[robot_node-17] [INFO] [1785968015.419658797] [robot_2]: [Robot 2] Merged from Robot 0 dist=2.25m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968016.337311669] [robot_0]: [Robot 0] Merged from Robot 2 dist=2.26m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968020.360970270] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=235s]  Mean pairwise sim: 0.9144
+[convergence_monitor-20]   Δ from last:  -0.0028   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×8  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×7  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2497 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968026.257854897] [robot_0]: [Robot 0] → EXPLORE
+[robot_node-17] [INFO] [1785968026.293153611] [robot_2]: [Robot 2] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968030.424989875] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=245s]  Mean pairwise sim: 0.9144
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×8  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×7  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2497 (min 0.03)   Stable: 3/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968038.227332183] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785968038.317699081] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[robot_node-15] [INFO] [1785968038.640228982] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.888)
+[robot_node-17] [INFO] [1785968038.778237052] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.888)
+[robot_node-17] [INFO] [1785968039.679537702] [robot_2]: [Robot 2] Merged from Robot 0 dist=2.90m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968040.319883318] [robot_0]: [Robot 0] Merged from Robot 2 dist=2.90m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968040.384899490] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=255s]  Mean pairwise sim: 0.9082
+[convergence_monitor-20]   Δ from last:  -0.0062   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2435 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968050.218123223] [robot_0]: [Robot 0] → EXPLORE
+[robot_node-17] [INFO] [1785968050.323054173] [robot_2]: [Robot 2] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968050.380882732] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=265s]  Mean pairwise sim: 0.9082
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2435 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968060.384069747] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=275s]  Mean pairwise sim: 0.9082
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2435 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968070.376097639] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=285s]  Mean pairwise sim: 0.9082
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2435 (min 0.03)   Stable: 3/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968080.413041861] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=295s]  Mean pairwise sim: 0.9082
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2435 (min 0.03)   Stable: 4/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968090.420104172] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=305s]  Mean pairwise sim: 0.9082
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2435 (min 0.03)   Stable: 5/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968100.386833332] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=315s]  Mean pairwise sim: 0.9082
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2435 (min 0.03)   Stable: 6/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968110.380189209] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=325s]  Mean pairwise sim: 0.9082
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×6  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×3  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2435 (min 0.03)   Stable: 7/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968116.218356240] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785968116.253582993] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[robot_node-15] [INFO] [1785968118.830885204] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.978)
+[robot_node-18] [INFO] [1785968119.027328173] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.978)
+[robot_node-18] [INFO] [1785968120.464898908] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.58m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968121.206350023] [robot_0]: [Robot 0] Merged from Robot 3 dist=2.53m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968121.212762539] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=336s]  Mean pairwise sim: 0.9210
+[convergence_monitor-20]   Δ from last:  +0.0128   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×7  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×4  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2563 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968126.603321632] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.969)
+[robot_node-18] [INFO] [1785968126.769927055] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.969)
+[robot_node-18] [INFO] [1785968127.897275060] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.95m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968130.415615673] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=345s]  Mean pairwise sim: 0.9237
+[convergence_monitor-20]   Δ from last:  +0.0028   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×8  (0,4)×6  (1,0)×5  (1,2)×2  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×3  (2,3)×5  (2,4)×2  (3,0)×4  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2591 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-17] [INFO] [1785968132.288742334] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[robot_node-16] [INFO] [1785968132.302225278] [robot_1]: [Robot 1] → FLOCK (1 peers)
+[robot_node-16] [INFO] [1785968135.850884031] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.971)
+[robot_node-17] [INFO] [1785968135.968307513] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.971)
+[robot_node-17] [INFO] [1785968136.938261725] [robot_2]: [Robot 2] Merged from Robot 1 dist=2.23m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968137.637274310] [robot_1]: [Robot 1] Merged from Robot 2 dist=2.21m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968138.230558193] [robot_0]: [Robot 0] → EXPLORE
+[robot_node-18] [INFO] [1785968138.252535151] [robot_3]: [Robot 3] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968140.378679094] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=355s]  Mean pairwise sim: 0.9322
+[convergence_monitor-20]   Δ from last:  +0.0085   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×8  (0,4)×6  (1,0)×5  (1,2)×3  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×4  (2,3)×5  (2,4)×2  (3,0)×4  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2676 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-16] [INFO] [1785968142.612162721] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.950)
+[robot_node-17] [INFO] [1785968142.683571580] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.950)
+[robot_node-17] [INFO] [1785968143.532129860] [robot_2]: [Robot 2] Merged from Robot 1 dist=2.42m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968144.314850842] [robot_1]: [Robot 1] Merged from Robot 2 dist=2.44m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968150.379143232] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=365s]  Mean pairwise sim: 0.9270
+[convergence_monitor-20]   Δ from last:  -0.0052   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×8  (0,4)×6  (1,0)×5  (1,2)×4  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×5  (2,3)×5  (2,4)×2  (3,0)×4  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2624 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968154.225088516] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785968154.260533619] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[robot_node-16] [INFO] [1785968154.288558423] [robot_1]: [Robot 1] → EXPLORE
+[robot_node-17] [INFO] [1785968154.294740064] [robot_2]: [Robot 2] → EXPLORE
+[robot_node-15] [INFO] [1785968158.661413050] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.961)
+[robot_node-18] [INFO] [1785968158.947845629] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.961)
+[robot_node-18] [INFO] [1785968159.990807697] [robot_3]: [Robot 3] Merged from Robot 0 dist=1.99m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968160.844247186] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=376s]  Mean pairwise sim: 0.9259
+[convergence_monitor-20]   Δ from last:  -0.0011   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×4  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×5  (2,3)×5  (2,4)×2  (3,0)×5  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2613 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968160.856841575] [robot_0]: [Robot 0] Merged from Robot 3 dist=1.97m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968166.848885714] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.940)
+[robot_node-18] [INFO] [1785968167.034427031] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.940)
+[robot_node-16] [INFO] [1785968168.279557754] [robot_1]: [Robot 1] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785968168.304216842] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[convergence_monitor-20] [INFO] [1785968170.385527307] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=385s]  Mean pairwise sim: 0.9259
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×4  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×5  (2,3)×5  (2,4)×2  (3,0)×5  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2613 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-16] [INFO] [1785968174.850805358] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.898)
+[robot_node-17] [INFO] [1785968175.072476867] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.898)
+[robot_node-17] [INFO] [1785968175.959888609] [robot_2]: [Robot 2] Merged from Robot 1 dist=1.75m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968176.545316166] [robot_1]: [Robot 1] Merged from Robot 2 dist=1.72m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968178.224924915] [robot_0]: [Robot 0] → EXPLORE
+[robot_node-18] [INFO] [1785968178.279935286] [robot_3]: [Robot 3] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968180.419182833] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=395s]  Mean pairwise sim: 0.9114
+[convergence_monitor-20]   Δ from last:  -0.0145   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×5  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×6  (2,3)×5  (2,4)×2  (3,0)×5  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2467 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-17] [INFO] [1785968182.454881104] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.833)
+[robot_node-16] [INFO] [1785968182.830323953] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.833)
+[robot_node-16] [INFO] [1785968183.697438784] [robot_1]: [Robot 1] Merged from Robot 2 dist=1.60m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785968184.726527404] [robot_2]: [Robot 2] Merged from Robot 1 dist=1.68m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968190.365624620] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=405s]  Mean pairwise sim: 0.8937
+[convergence_monitor-20]   Δ from last:  -0.0177   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×6  (1,3)×5  (1,4)×1  (2,0)×8  (2,1)×7  (2,3)×5  (2,4)×2  (3,0)×5  (3,1)×5  (3,2)×3  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2291 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968192.259166932] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[robot_node-16] [INFO] [1785968194.290771503] [robot_1]: [Robot 1] → EXPLORE
+[robot_node-17] [INFO] [1785968194.298058640] [robot_2]: [Robot 2] → EXPLORE
+[robot_node-17] [INFO] [1785968196.310929727] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[robot_node-16] [INFO] [1785968198.279552412] [robot_1]: [Robot 1] → FLOCK (1 peers)
+[robot_node-16] [INFO] [1785968198.726002753] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.929)
+[robot_node-18] [INFO] [1785968198.793349777] [robot_3]: [Robot 3] Broadcast to 2 peer(s) retention=0.20 (min_sim=0.918)
+[robot_node-17] [INFO] [1785968198.878303421] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.918)
+[robot_node-18] [INFO] [1785968199.644266488] [robot_3]: [Robot 3] Merged from Robot 1 dist=2.88m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785968200.672606023] [robot_2]: [Robot 2] Merged from Robot 3 dist=2.44m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968201.631809908] [robot_1]: [Robot 1] Merged from Robot 3 dist=2.88m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968201.642850652] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=416s]  Mean pairwise sim: 0.9024
+[convergence_monitor-20]   Δ from last:  +0.0087   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×6  (1,3)×6  (1,4)×1  (2,0)×8  (2,1)×7  (2,3)×6  (2,4)×2  (3,0)×5  (3,1)×6  (3,2)×4  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2377 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968202.384856794] [robot_3]: [Robot 3] Merged from Robot 2 dist=2.44m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968206.609813882] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.939)
+[robot_node-17] [INFO] [1785968206.715318422] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.939)
+[robot_node-18] [INFO] [1785968207.788925233] [robot_3]: [Robot 3] Merged from Robot 2 dist=2.01m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785968208.992421963] [robot_2]: [Robot 2] Merged from Robot 3 dist=2.01m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968210.278573600] [robot_1]: [Robot 1] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968210.393186466] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=425s]  Mean pairwise sim: 0.9014
+[convergence_monitor-20]   Δ from last:  -0.0010   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×6  (1,3)×6  (1,4)×1  (2,0)×8  (2,1)×7  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×6  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2368 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-16] [INFO] [1785968216.279671480] [robot_1]: [Robot 1] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785968218.255443802] [robot_3]: [Robot 3] → EXPLORE
+[robot_node-17] [INFO] [1785968218.287980388] [robot_2]: [Robot 2] → EXPLORE
+[robot_node-18] [INFO] [1785968220.250501172] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[convergence_monitor-20] [INFO] [1785968220.406601673] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=435s]  Mean pairwise sim: 0.9014
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×6  (1,3)×6  (1,4)×1  (2,0)×8  (2,1)×7  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×6  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2368 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968222.520335351] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.916)
+[robot_node-16] [INFO] [1785968223.086735183] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.916)
+[robot_node-16] [INFO] [1785968223.997690455] [robot_1]: [Robot 1] Merged from Robot 3 dist=1.68m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968225.215036304] [robot_3]: [Robot 3] Merged from Robot 1 dist=1.57m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968230.521771515] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.854)
+[convergence_monitor-20] [INFO] [1785968230.725833479] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=445s]  Mean pairwise sim: 0.8982
+[convergence_monitor-20]   Δ from last:  -0.0032   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×6  (1,3)×7  (1,4)×1  (2,0)×8  (2,1)×7  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×8  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2335 (min 0.03)   Stable: 3/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-16] [INFO] [1785968230.739084638] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.854)
+[robot_node-16] [INFO] [1785968231.552029560] [robot_1]: [Robot 1] Merged from Robot 3 dist=1.36m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968232.187191573] [robot_3]: [Robot 3] Merged from Robot 1 dist=1.42m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785968234.291426664] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785968238.424999548] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.880)
+[robot_node-16] [INFO] [1785968238.619600201] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.880)
+[robot_node-16] [INFO] [1785968239.306517693] [robot_1]: [Robot 1] Merged from Robot 2 dist=2.05m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785968240.212893371] [robot_2]: [Robot 2] Merged from Robot 1 dist=2.05m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968240.372601721] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=455s]  Mean pairwise sim: 0.8801
+[convergence_monitor-20]   Δ from last:  -0.0180   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×7  (1,3)×8  (1,4)×1  (2,0)×8  (2,1)×8  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×8  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2155 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968242.264753861] [robot_3]: [Robot 3] → EXPLORE
+[robot_node-16] [INFO] [1785968247.157882582] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.808)
+[robot_node-17] [INFO] [1785968247.257432683] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.808)
+[robot_node-17] [INFO] [1785968248.271464476] [robot_2]: [Robot 2] Merged from Robot 1 dist=2.52m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968249.046492653] [robot_1]: [Robot 1] Merged from Robot 2 dist=2.52m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968250.381596461] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=465s]  Mean pairwise sim: 0.8678
+[convergence_monitor-20]   Δ from last:  -0.0124   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×8  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×8  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.2031 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968252.254678550] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785968254.751047718] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.794)
+[robot_node-16] [INFO] [1785968255.025205791] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.794)
+[robot_node-16] [INFO] [1785968256.055312488] [robot_1]: [Robot 1] Merged from Robot 3 dist=2.50m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968257.042781707] [robot_3]: [Robot 3] Merged from Robot 1 dist=2.50m gate=0.500 z_norm=1.0000
+[robot_node-17] [INFO] [1785968258.303019630] [robot_2]: [Robot 2] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968260.417842129] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=475s]  Mean pairwise sim: 0.8604
+[convergence_monitor-20]   Δ from last:  -0.0073   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×9  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×9  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1958 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968262.470872214] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.738)
+[robot_node-16] [INFO] [1785968263.528469260] [robot_1]: [Robot 1] Merged from Robot 3 dist=2.00m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968263.668064607] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.738)
+[robot_node-18] [INFO] [1785968264.235700424] [robot_3]: [Robot 3] Merged from Robot 1 dist=2.16m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968270.385548520] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=485s]  Mean pairwise sim: 0.8513
+[convergence_monitor-20]   Δ from last:  -0.0091   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×10  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×10  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1866 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968274.251256790] [robot_3]: [Robot 3] → EXPLORE
+[robot_node-16] [INFO] [1785968274.289408886] [robot_1]: [Robot 1] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968280.441506886] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=495s]  Mean pairwise sim: 0.8513
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×10  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×10  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1866 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968288.229309851] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785968288.256064170] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[convergence_monitor-20] [INFO] [1785968290.371913728] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=505s]  Mean pairwise sim: 0.8513
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×9  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×10  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×5  (3,1)×10  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1866 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968295.066211444] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.878)
+[robot_node-18] [INFO] [1785968295.354572755] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.878)
+[robot_node-18] [INFO] [1785968296.160577868] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.40m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968297.025329928] [robot_0]: [Robot 0] Merged from Robot 3 dist=2.39m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968300.360076463] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=515s]  Mean pairwise sim: 0.8563
+[convergence_monitor-20]   Δ from last:  +0.0050   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×10  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×10  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×6  (3,1)×10  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1916 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968302.575474211] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.870)
+[robot_node-18] [INFO] [1785968302.683644124] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.870)
+[robot_node-18] [INFO] [1785968303.737463036] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.52m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968304.551014972] [robot_0]: [Robot 0] Merged from Robot 3 dist=2.53m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968310.280450197] [robot_1]: [Robot 1] → FLOCK (1 peers)
+[convergence_monitor-20] [INFO] [1785968310.633620584] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=525s]  Mean pairwise sim: 0.8568
+[convergence_monitor-20]   Δ from last:  +0.0005   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×11  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×10  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×7  (3,1)×10  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1921 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968310.693582653] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.756)
+[robot_node-16] [INFO] [1785968311.145784622] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.756)
+[robot_node-16] [INFO] [1785968312.034345261] [robot_1]: [Robot 1] Merged from Robot 3 dist=2.71m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968313.724247962] [robot_3]: [Robot 3] Merged from Robot 1 dist=2.67m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968314.222596269] [robot_0]: [Robot 0] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968320.384776816] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=535s]  Mean pairwise sim: 0.8480
+[convergence_monitor-20]   Δ from last:  -0.0088   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×11  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×7  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1833 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968322.252696045] [robot_3]: [Robot 3] → EXPLORE
+[robot_node-16] [INFO] [1785968322.331509828] [robot_1]: [Robot 1] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968330.379468510] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=545s]  Mean pairwise sim: 0.8480
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×11  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×7  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1833 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968332.219021598] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785968332.260587469] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[robot_node-15] [INFO] [1785968334.630755290] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.834)
+[robot_node-18] [INFO] [1785968335.014701395] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.834)
+[robot_node-18] [INFO] [1785968335.659646977] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.73m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968336.261328342] [robot_0]: [Robot 0] Merged from Robot 3 dist=2.70m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968340.369914646] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=555s]  Mean pairwise sim: 0.8482
+[convergence_monitor-20]   Δ from last:  +0.0002   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×12  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×8  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1835 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968342.557103558] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.824)
+[robot_node-18] [INFO] [1785968342.640143137] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.824)
+[robot_node-18] [INFO] [1785968343.281953088] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.61m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968343.988071053] [robot_0]: [Robot 0] Merged from Robot 3 dist=2.63m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968350.412775501] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=565s]  Mean pairwise sim: 0.8458
+[convergence_monitor-20]   Δ from last:  -0.0024   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1811 (min 0.03)   Stable: 3/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968354.233630615] [robot_0]: [Robot 0] → EXPLORE
+[robot_node-18] [INFO] [1785968354.256714404] [robot_3]: [Robot 3] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968360.398180526] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=575s]  Mean pairwise sim: 0.8458
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1811 (min 0.03)   Stable: 4/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968370.370574790] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=585s]  Mean pairwise sim: 0.8458
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1811 (min 0.03)   Stable: 5/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968380.378126661] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=595s]  Mean pairwise sim: 0.8458
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1811 (min 0.03)   Stable: 6/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968390.400504713] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=605s]  Mean pairwise sim: 0.8458
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×8  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×9  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1811 (min 0.03)   Stable: 7/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-16] [INFO] [1785968398.283254549] [robot_1]: [Robot 1] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785968398.297277354] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[robot_node-16] [INFO] [1785968398.565396104] [robot_1]: [Robot 1] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.758)
+[robot_node-17] [INFO] [1785968398.608071300] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.758)
+[robot_node-17] [INFO] [1785968398.965071150] [robot_2]: [Robot 2] Merged from Robot 1 dist=2.93m gate=0.500 z_norm=1.0000
+[robot_node-16] [INFO] [1785968400.169593922] [robot_1]: [Robot 1] Merged from Robot 2 dist=2.92m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968400.371830546] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=615s]  Mean pairwise sim: 0.8327
+[convergence_monitor-20]   Δ from last:  -0.0131   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1681 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-16] [INFO] [1785968410.282468033] [robot_1]: [Robot 1] → EXPLORE
+[robot_node-17] [INFO] [1785968410.295054944] [robot_2]: [Robot 2] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968410.370540405] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=625s]  Mean pairwise sim: 0.8327
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1681 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968420.384529766] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=635s]  Mean pairwise sim: 0.8327
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1681 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968430.375856083] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=645s]  Mean pairwise sim: 0.8327
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1681 (min 0.03)   Stable: 3/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968440.218790721] [robot_0]: [Robot 0] → FLOCK (1 peers)
+[robot_node-18] [INFO] [1785968440.251801887] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[convergence_monitor-20] [INFO] [1785968440.379546887] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=655s]  Mean pairwise sim: 0.8327
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×13  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×9  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1681 (min 0.03)   Stable: 4/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968447.195977044] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.812)
+[robot_node-18] [INFO] [1785968447.428312745] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.812)
+[robot_node-18] [INFO] [1785968448.170898953] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.52m gate=0.500 z_norm=1.0000
+[robot_node-15] [INFO] [1785968448.795485466] [robot_0]: [Robot 0] Merged from Robot 3 dist=2.50m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968450.376447955] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=665s]  Mean pairwise sim: 0.8278
+[convergence_monitor-20]   Δ from last:  -0.0049   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×14  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×10  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1632 (min 0.03)   Stable: 5/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968454.672691133] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.798)
+[robot_node-15] [INFO] [1785968455.135441162] [robot_0]: [Robot 0] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.798)
+[robot_node-15] [INFO] [1785968456.016002555] [robot_0]: [Robot 0] Merged from Robot 3 dist=2.68m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968457.268094983] [robot_3]: [Robot 3] Merged from Robot 0 dist=2.73m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968460.444090827] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=675s]  Mean pairwise sim: 0.8219
+[convergence_monitor-20]   Δ from last:  -0.0060   Trend: ↓ diverging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×15  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×11  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1572 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-15] [INFO] [1785968466.217420554] [robot_0]: [Robot 0] → EXPLORE
+[robot_node-18] [INFO] [1785968466.263544981] [robot_3]: [Robot 3] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968470.575378743] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=685s]  Mean pairwise sim: 0.8219
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×15  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×11  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1572 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968480.528853331] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=695s]  Mean pairwise sim: 0.8219
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×15  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×11  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1572 (min 0.03)   Stable: 2/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [INFO] [1785968490.373404904] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=705s]  Mean pairwise sim: 0.8219
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×15  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×11  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1572 (min 0.03)   Stable: 3/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968496.247630227] [robot_3]: [Robot 3] → FLOCK (1 peers)
+[robot_node-17] [INFO] [1785968496.313841430] [robot_2]: [Robot 2] → FLOCK (1 peers)
+[convergence_monitor-20] [INFO] [1785968500.372514906] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=715s]  Mean pairwise sim: 0.8219
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×15  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×7  (2,4)×2  (3,0)×11  (3,1)×11  (3,2)×5  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1572 (min 0.03)   Stable: 4/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968502.736837587] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.900)
+[robot_node-17] [INFO] [1785968502.867337248] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.900)
+[robot_node-17] [INFO] [1785968503.850075801] [robot_2]: [Robot 2] Merged from Robot 3 dist=1.92m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968504.854189010] [robot_3]: [Robot 3] Merged from Robot 2 dist=1.90m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968510.555796425] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=725s]  Mean pairwise sim: 0.8380
+[convergence_monitor-20]   Δ from last:  +0.0161   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×15  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×8  (2,4)×2  (3,0)×11  (3,1)×11  (3,2)×6  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1733 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968510.577931481] [robot_3]: [Robot 3] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.884)
+[robot_node-17] [INFO] [1785968510.677112961] [robot_2]: [Robot 2] Broadcast to 1 peer(s) retention=0.20 (min_sim=0.884)
+[robot_node-17] [INFO] [1785968511.751806673] [robot_2]: [Robot 2] Merged from Robot 3 dist=1.55m gate=0.500 z_norm=1.0000
+[robot_node-18] [INFO] [1785968512.444602137] [robot_3]: [Robot 3] Merged from Robot 2 dist=1.58m gate=0.500 z_norm=1.0000
+[convergence_monitor-20] [INFO] [1785968520.411423486] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=735s]  Mean pairwise sim: 0.8448
+[convergence_monitor-20]   Δ from last:  +0.0069   Trend: ↑ converging
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×15  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×9  (2,4)×2  (3,0)×11  (3,1)×11  (3,2)×7  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1802 (min 0.03)   Stable: 0/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[robot_node-18] [INFO] [1785968522.246541161] [robot_3]: [Robot 3] → EXPLORE
+[robot_node-17] [INFO] [1785968522.291602136] [robot_2]: [Robot 2] → EXPLORE
+[convergence_monitor-20] [INFO] [1785968530.385726023] [convergence_monitor]: 
+[convergence_monitor-20] ════════════════════════════════════════════════════
+[convergence_monitor-20] [NSK Monitor  t=745s]  Mean pairwise sim: 0.8448
+[convergence_monitor-20]   Δ from last:  +0.0000   Trend: → stable
+[convergence_monitor-20]   Active pairs: (0,1)×7  (0,2)×9  (0,3)×15  (0,4)×6  (1,0)×5  (1,2)×9  (1,3)×11  (1,4)×1  (2,0)×8  (2,1)×10  (2,3)×9  (2,4)×2  (3,0)×11  (3,1)×11  (3,2)×7  (4,0)×6  (4,1)×2  (4,2)×3  (4,3)×3
+[convergence_monitor-20]   Baseline: 0.6647   Rise: +0.1802 (min 0.03)   Stable: 1/3
+[convergence_monitor-20]   Status: CONVERGED ✓ (monitoring continues)
+[convergence_monitor-20] ════════════════════════════════════════════════════
