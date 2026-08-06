@@ -25,14 +25,15 @@ displacement is ~0 while it has plainly been moving. Net displacement is
 reported alongside for context and is never asserted on.
 
 Usage:
-  preflight_motion.py --min-path 0.5                      # robots 0-4, 20 s
-  preflight_motion.py --min-path 0.5 --robots 0,3         # just those two
-  preflight_motion.py --min-path 0.5 --window 60          # longer window
+  preflight_motion.py                                     # robots 0-4, 20 s
+  preflight_motion.py --robots 0,3                        # just those two
+  preflight_motion.py --window 60                         # longer window
   preflight_motion.py --min-path 0.0                      # CALIBRATION pass
 
---min-path is REQUIRED and has no default; see its help text. The last form is
-how you calibrate it: every robot passes by construction and the path_m column
-is the measurement a real floor gets derived from.
+--min-path defaults to 0.30 m, a number measured on 2026-08-07 rather than
+guessed; see its help text for the observations behind it. The last form is how
+you re-calibrate it: every robot passes by construction and the path_m column is
+the measurement a real floor gets derived from.
 
 Exit codes:
   0  every robot passed both assertions
@@ -195,14 +196,39 @@ def main():
         help='Sampling window in SIM seconds (default: 20.0). Sim time, not '
              'wall clock: under a degraded RTF a wall-clock window samples a '
              'much shorter slice of simulated motion.')
+    # The default is MEASURED, not guessed. Calibrated 2026-08-07 against
+    # swarm_sim.launch.py on this machine, 20 s sim windows, five TurtleBot3
+    # Burgers:
+    #
+    #   wander on   path_m 1.175–1.505 in one window, 3.081–3.084 in another
+    #   wander off  path_m exactly 0.000 on all five, ~985 messages received
+    #
+    # The stationary zeros are exact, not merely small: Gazebo's DiffDrive
+    # publishes no odometry noise for an uncommanded robot, so the messages keep
+    # arriving while the pose never changes. The two populations therefore do
+    # not overlap at all, and 0.30 m sits at ~25 % of the lowest moving
+    # observation while being unreachable without commands.
+    #
+    # CAVEAT: that was calibrated for a robot with NO CONTROLLER. A Nav2-driven
+    # robot that is commanded but blocked can accumulate small non-zero path, so
+    # the stationary population is not necessarily 0.000 there. Re-check this
+    # number the first time it gates a run with mappers or planners attached.
     ap.add_argument(
-        '--min-path', type=float, required=True,
-        help='REQUIRED, no default. Cumulative path-length floor in metres, '
-             'below which a robot counts as not moving. Deliberately has no '
-             'default: it must be CALIBRATED against a real wandering robot '
-             'before it can gate anything, and a default would harden a number '
-             'nobody measured into the pass criterion. Run once with '
-             '--min-path 0 and read the path_m column to get one.')
+        '--min-path', type=float, default=0.30,
+        help='Cumulative path-length floor in metres, below which a robot '
+             'counts as not moving (default: 0.30). Calibrated 2026-08-07 '
+             'against swarm_sim.launch.py on this machine, 20 s sim windows, '
+             'five TurtleBot3 Burgers: wander on gave path_m 1.175-1.505 in '
+             'one window and 3.081-3.084 in another, while wander off gave '
+             'exactly 0.000 on all five with ~985 messages received, since '
+             "Gazebo's DiffDrive publishes no odometry noise for an "
+             'uncommanded robot. 0.30 is ~25%% of the lowest moving '
+             'observation and unreachable without commands. Calibrated for a '
+             'robot with NO CONTROLLER: a Nav2-driven robot that is commanded '
+             'but blocked may accumulate small non-zero path, so re-check this '
+             'the first time it gates a run with mappers or planners attached. '
+             'Run with --min-path 0 and read the path_m column to '
+             're-calibrate.')
     ap.add_argument(
         '--wall-timeout', type=float, default=300.0,
         help='Wall-clock hang guard in seconds (default: 300.0). Caps the wait '
