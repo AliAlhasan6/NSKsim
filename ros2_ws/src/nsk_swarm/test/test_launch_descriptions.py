@@ -504,3 +504,79 @@ def test_swarm_sim_clock_bridge_starts_immediately():
     assert bridge in nodes(ld)
     assert bridge not in delayed(ld), (
         'the /clock bridge must start immediately, not on a timer')
+
+
+def robot_parameter(name, **arguments):
+    """Evaluate one parameter on every robot node, as launch would.
+
+    The swarm_sim counterpart of `explorer_parameter`, working around the same
+    two launch_ros traps for the same reasons — performed keys, and the fresh
+    build per call that keeps ParameterValue's evaluation cache from making
+    every spelling resolve to whatever the first one did.
+
+    One difference: swarm_sim launches NUM_ROBOTS robot nodes, and
+    robot_params() builds a separate ParameterValue for each, so this returns
+    the list rather than a single value. A plumbing mistake that wired only
+    robot 0 then shows up as a disagreement instead of passing on first hit.
+    Parameters that are plain Python values (robot_id, comm_range) are passed
+    through unevaluated; only substitutions carry an .evaluate.
+    """
+    launch_description = build('swarm_sim.launch.py')
+
+    context = LaunchContext()
+    context.launch_configurations.update(arguments)
+    for entity in launch_description.entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+
+    robots = [e for e in _walk(launch_description)
+              if isinstance(e, Node) and e.node_executable == 'robot_node']
+    assert robots, 'expected at least one robot node'
+
+    values = []
+    for robot in robots:
+        for block in robot._Node__parameters:
+            if not isinstance(block, dict):
+                continue
+            for key, value in block.items():
+                if perform_substitutions(context, list(key)) == name:
+                    values.append(value.evaluate(context)
+                                  if hasattr(value, 'evaluate') else value)
+    assert len(values) == len(robots), (
+        f'{name} reached {len(values)} of {len(robots)} robot nodes')
+    return values
+
+
+def test_swarm_sim_declares_the_obstacle_stop_distance_defaulting_to_the_node():
+    # robot_node's own PARAMS default. A command that does not set it has to
+    # reproduce the previous run exactly, so this default is what keeps an
+    # unset run comparable.
+    ld = build('swarm_sim.launch.py')
+    assert declared_defaults(ld)['obstacle_stop_m'] == '0.6'
+
+
+def test_obstacle_stop_m_reaches_every_robot_node_as_a_float():
+    # The default and an override both have to arrive as actual floats, on
+    # every robot rather than just the first.
+    default = robot_parameter('obstacle_stop_m')
+    assert default == [0.6] * len(default), f'default resolved to {default!r}'
+    assert all(isinstance(v, float) for v in default)
+
+    passed = robot_parameter('obstacle_stop_m', obstacle_stop_m='1.25')
+    assert passed == [1.25] * len(passed), f'override resolved to {passed!r}'
+
+
+def test_integer_obstacle_stop_spellings_stay_floats():
+    # What value_type=float actually buys, and the reason escape_distance is
+    # pinned the same way in explore.launch.py: launch_ros infers a bare '0.6'
+    # as a float on its own, but 'obstacle_stop_m:=1' infers as the INT 1 —
+    # and robot_node declares this parameter with a float default, which rclpy
+    # will not accept an int for. Without the cast a robot would die at
+    # startup on a spelling that looks entirely reasonable at the command line.
+    for raw in ('1', '2'):
+        got = robot_parameter('obstacle_stop_m', obstacle_stop_m=raw)
+        assert got == [float(raw)] * len(got), (
+            f'obstacle_stop_m:={raw} resolved to {got!r}')
+        assert all(isinstance(v, float) for v in got), (
+            f'obstacle_stop_m:={raw} gave '
+            f'{[type(v).__name__ for v in got]}, not floats')

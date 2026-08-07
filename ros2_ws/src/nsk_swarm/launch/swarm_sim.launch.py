@@ -219,6 +219,12 @@ def generate_launch_description():
             # string.
             'obstacle_enabled': ParameterValue(
                 LaunchConfiguration('obstacle'), value_type=bool),
+            # Same cast, same reason as escape_distance in explore.launch.py:
+            # robot_node declares this one with a float default, and
+            # 'obstacle_stop_m:=1' would otherwise infer as the INT 1 and be
+            # refused at startup on a perfectly reasonable spelling.
+            'obstacle_stop_m': ParameterValue(
+                LaunchConfiguration('obstacle_stop_m'), value_type=float),
         }
 
     # ── Bridge topic specs ──────────────────────────────────────────────────
@@ -369,6 +375,25 @@ def generate_launch_description():
                         'boundary, which cannot see the interior maze walls, '
                         'and robots grind along them indefinitely. Set false '
                         'to reproduce runs recorded before it existed.',
+        ),
+        DeclareLaunchArgument(
+            'obstacle_stop_m',
+            default_value='0.6',
+            description='How close a forward lidar return has to be, in '
+                        'metres, before the wander driver steers away from '
+                        'it. Tunable because 0.6 is not a calibrated value: '
+                        'at walk_speed 0.15 m/s and walk_turn_max 0.5 rad/s a '
+                        'robot needs about 3 s to turn 90 deg and covers '
+                        '~0.45 m doing it, so 0.6 m leaves only ~0.15 m of '
+                        'margin against a perpendicular wall and NONE at an '
+                        'oblique angle. Observed 2026-08-07: at 0.6 all five '
+                        'robots still made wall contact, though they '
+                        'travelled between walls rather than staying pinned. '
+                        'Like escape_distance in explore.launch.py, an '
+                        'observation to be re-measured, not a calibrated '
+                        'value. The default is robot_node\'s own, so a '
+                        'command that does not set it reproduces the previous '
+                        'run exactly.',
         ),
         DeclareLaunchArgument(
             'rviz',
