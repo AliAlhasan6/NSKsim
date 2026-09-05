@@ -1,0 +1,112 @@
+# slam_toolbox parameters for OFFLINE per-robot mapping over experiments/bags/phaseB_run1.
+#
+# __ROBOT__ is substituted with the robot index (0..4) by run_offline_maps.sh.
+#
+# Why the key is a FLAT "slam_toolbox:" and not "robot_N: slam_toolbox:":
+#   Parameters match on the node's fully-qualified name. explore.launch.py runs
+#   the node namespaced as /robot_<id>/slam_toolbox, so it needs the nested key.
+#   Here we run ONE robot per replay with NO namespace, so the FQN is plain
+#   /slam_toolbox and the flat key is correct. Nesting it here would silently
+#   fall back to slam_toolbox's own defaults for every frame -- the exact bug
+#   the comment at explore.launch.py:165 warns about.
+#
+# The frames below are parameter VALUES, not namespaces, so they still carry the
+# robot_<id>/ prefix that the bag's /tf and /tf_static use.
+
+slam_toolbox:
+  ros__parameters:
+
+    # ── clock ────────────────────────────────────────────────────────────────
+    # The bag has NO /clock topic (ros2 bag info, 2026-09-05: 12 topics, none is
+    # /clock). It is synthesised by `ros2 bag play --clock`, which run_offline_maps.sh
+    # passes. Without that flag this node blocks forever waiting for time.
+    use_sim_time: true
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+    # No external lifecycle_manager in the offline setup; offline_slam.launch.py
+    # drives configure -> activate itself.
+    use_lifecycle_manager: false
+
+    # ── frames, from the bag's recorded TF tree ──────────────────────────────
+    #   robot_N/odom -> robot_N/base_footprint   (/tf,        ~4340 msgs each)
+    #   robot_N/base_footprint -> base_link -> base_scan  (/tf_static)
+    odom_frame: robot___ROBOT__/odom
+    base_frame: robot___ROBOT__/base_footprint
+    map_frame: robot___ROBOT__/map
+    scan_topic: /robot___ROBOT__/scan
+
+    # map_name defaults to the ABSOLUTE '/map', which ignores namespacing. We
+    # run unnamespaced and one robot at a time, so bare /map is what we want and
+    # is stated explicitly rather than left to the default.
+    map_name: /map
+
+    mode: mapping
+
+    # ── resolution ───────────────────────────────────────────────────────────
+    # 0.1 m, chosen 2026-09-05 to match experiments/analysis/bag_overlap.py's
+    # CELL so the SLAM grids and the published overlap figures are directly
+    # comparable. This value propagates into the B2 schema -- changing it later
+    # invalidates the B3 corpus. The July robot_0_mapping.yaml used 0.05.
+    resolution: 0.1
+
+    # Matches the bag's LaserScan.range_max and bag_overlap.py's MAX_RANGE.
+    max_laser_range: 3.5
+
+    # ── scan-matching cadence ────────────────────────────────────────────────
+    # Recorded paths are only 12.7-15.1 m long. At the stock 0.2 m that is ~65
+    # to 75 keyframes per robot; 0.1 m roughly doubles it. Offline we have the
+    # compute budget (sequential runs, no realtime constraint) and denser
+    # keyframes give loop closure more to work with -- which is the entire
+    # reason we chose SLAM over dead-reckoned ray-casting.
+    minimum_travel_distance: 0.1
+    minimum_travel_heading: 0.1
+
+    # ── loop closure ─────────────────────────────────────────────────────────
+    # This is the payload. Dead reckoning from the TurtleBot3 DiffDrive plugin
+    # accumulates yaw error (bag_overlap.py reports best-fit corrections up to
+    # 0.14 rad, ~0.5 m / 5 cells of point error at 3.5 m range). Loop closure is
+    # what removes it.
+    do_loop_closing: true
+    loop_search_maximum_distance: 3.0
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # ── correlation search windows ───────────────────────────────────────────
+    # Stock slam_toolbox values, kept explicit so a later tuning pass has a
+    # recorded starting point.
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # ── scan matcher ─────────────────────────────────────────────────────────
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_time_interval: 0.2
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000
+
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
+
+    # ── publishing ───────────────────────────────────────────────────────────
+    # The map is published on a timer. run_offline_maps.sh waits at least this
+    # long after replay ends before calling save_map.py.
+    map_update_interval: 1.0
+    transform_publish_period: 0.02
+    resolution_publish_period: 1.0
+
+    # Offline: we do not need the serialised pose graph, only the grid.
+    debug_logging: false
+    throttle_scans: 1

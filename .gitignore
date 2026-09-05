@@ -13,3 +13,5 @@ experiments/slam/*
 experiments/bags/
 frames_*.gv
 frames_*.pdf
+!experiments/slam/*.sh
+!experiments/slam/*.template
