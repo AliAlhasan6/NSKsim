@@ -14,6 +14,13 @@ Writes exactly one file: experiments/logs/bag_overlap_phaseB_run1.csv.
 
     source /opt/ros/jazzy/setup.bash
     python3 experiments/analysis/bag_overlap.py
+
+The ROS imports are function-scoped inside read_bag() rather than module-scoped
+so that the parts of this file which need no bag -- resolve_spawn_poses(),
+world_walls(), dist_to_nearest_wall() -- can be imported from a plain venv with
+no ROS on the path. They are the definition of "on a known wall" for this
+project, and a caller that reimplemented them would produce numbers that could
+not be compared against the ones this script reports.
 """
 
 from __future__ import annotations
@@ -27,12 +34,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-
-import rosbag2_py
-from nav_msgs.msg import Odometry
-from rclpy.serialization import deserialize_message
-from sensor_msgs.msg import LaserScan
-from tf2_msgs.msg import TFMessage
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BAG_DIR = REPO_ROOT / 'experiments' / 'bags' / 'phaseB_run1'
@@ -124,7 +125,16 @@ def read_bag():
     odom[n]  -> (N, 4) float array of (t, x, y, yaw), time-sorted
     scans[n] -> list of (t, angle_min, angle_increment, range_min, ranges)
     lidar_dxdy[n] -> (dx, dy) of base_scan in base_link
+
+    This is the only function here that touches ROS, so its imports live in it:
+    see the module docstring.
     """
+    import rosbag2_py
+    from nav_msgs.msg import Odometry
+    from rclpy.serialization import deserialize_message
+    from sensor_msgs.msg import LaserScan
+    from tf2_msgs.msg import TFMessage
+
     if not BAG_DIR.is_dir():
         die(f'bag not found: {BAG_DIR}')
 
