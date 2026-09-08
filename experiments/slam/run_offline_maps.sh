@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
-# Offline per-robot SLAM over experiments/bags/phaseB_run1.
-#
-# Produces five occupancy grids -- experiments/maps/phaseB_run1_robot<N>.{pgm,yaml}
-# -- one per robot, each built by slam_toolbox with loop closure rather than by
-# dead-reckoned ray-casting. These are the B2 schema's input.
-#
-# SEQUENTIAL BY DESIGN. Five concurrent slam_toolbox instances on a GTX 1050 Ti
-# laptop contend for CPU during replay and a lag in one silently degrades all
-# five. One robot per replay is 5 x ~110 s of replay plus overhead -- call it
-# ten to fifteen minutes total -- and a failure is isolated to one robot.
+# Offline per-robot SLAM over a replayed bag, one slam_toolbox per robot in
+# sequence. BAG picks the bag directory (default experiments/bags/phaseB_run1)
+# and RUN -- default: basename of BAG -- names every output, so maps, logs,
+# params and tf records from different bags never overwrite each other. RATE
+# scales replay speed; DUR_<N> truncates robot N's replay in seconds via
+# --playback-duration (unset means -1: play everything). Bags that carry live
+# slam_toolbox output, like b16, must first be stripped with
+# experiments/slam/strip_bag_for_offline_slam.py -- it removes the recorded
+# map->odom transforms that would fight the offline SLAM's -- producing e.g.
+# experiments/logs/b16/b16_slamin, which is then the BAG for this script.
 #
 #   source /opt/ros/jazzy/setup.bash
 #   cd ~/Desktop/NSKsim
-#   bash experiments/slam/run_offline_maps.sh              # all five
-#   bash experiments/slam/run_offline_maps.sh 3            # just robot_3
-#
-# Every run appends to experiments/logs/offline_slam_<robot>.log.
+#   BAG=experiments/logs/b16/b16_slamin DUR_1=2143 RATE=2.0 bash experiments/slam/run_offline_maps.sh 1
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-BAG="$REPO_ROOT/experiments/bags/phaseB_run1"
+BAG="${BAG:-$REPO_ROOT/experiments/bags/phaseB_run1}"
+RUN="${RUN:-$(basename "$BAG")}"
 TEMPLATE="$REPO_ROOT/experiments/slam/offline_mapping.yaml.template"
 LAUNCH="$REPO_ROOT/experiments/slam/offline_slam.launch.py"
 SAVER="$REPO_ROOT/experiments/slam/save_map.py"
@@ -63,6 +61,18 @@ if pgrep -af 'slam_toolbox|ros2 bag play' | grep -q .; then
   die "kill these first -- they will contaminate /map."
 fi
 
+# Clock source is measured, not assumed. use_sim_time:=true needs a /clock:
+# a stripped bag (b16_slamin) records its own, phaseB_run1 does not. --clock
+# is added only when the bag lacks one -- playing both would hand slam_toolbox
+# two competing clocks.
+if ros2 bag info "$BAG" | grep -q 'Topic: /clock '; then
+  CLOCK_ARGS=()
+  echo "bag publishes /clock -- replaying without --clock"
+else
+  CLOCK_ARGS=(--clock)
+  echo "bag has no /clock -- synthesising it with --clock"
+fi
+
 ROBOTS=("$@")
 if [[ ${#ROBOTS[@]} -eq 0 ]]; then
   ROBOTS=(0 1 2 3 4)
@@ -78,9 +88,9 @@ for N in "${ROBOTS[@]}"; do
   echo "  robot_$N"
   echo "════════════════════════════════════════════════════════════"
 
-  PARAMS="$LOGDIR/offline_mapping_robot_$N.yaml"
-  LOG="$LOGDIR/offline_slam_robot_$N.log"
-  OUT="$MAPDIR/phaseB_run1_robot$N"
+  PARAMS="$LOGDIR/offline_mapping_${RUN}_robot_$N.yaml"
+  LOG="$LOGDIR/offline_slam_${RUN}_robot_$N.log"
+  OUT="$MAPDIR/${RUN}_robot$N"
 
   # Params live in experiments/logs/, not /tmp -- /tmp is wiped on reboot and
   # these are the record of what produced each map.
@@ -113,10 +123,15 @@ for N in "${ROBOTS[@]}"; do
     continue
   fi
 
-  # --clock synthesises /clock, which the bag does NOT contain and which
-  # use_sim_time:true requires. Without it slam_toolbox blocks on time forever.
-  echo "[3/4] replaying bag at rate $RATE (~110 s of data)"
-  ros2 bag play "$BAG" --clock --rate "$RATE" >> "$LOG" 2>&1
+  # Only this robot's inputs are replayed; the other four robots' topics stay
+  # in the bag. DUR_<N> caps the replay so a bag can be cut per robot.
+  DUR_VAR="DUR_$N"
+  DUR="${!DUR_VAR:--1}"
+  echo "[3/4] replaying $RUN at rate $RATE, playback-duration $DUR"
+  ros2 bag play "$BAG" "${CLOCK_ARGS[@]}" --rate "$RATE" \
+      --playback-duration "$DUR" \
+      --topics /clock /tf /tf_static "/robot_$N/scan" "/robot_$N/odom" \
+      >> "$LOG" 2>&1
 
   echo "      settling ${SETTLE}s for the final map publish"
   sleep "$SETTLE"
@@ -127,8 +142,9 @@ for N in "${ROBOTS[@]}"; do
   # map in world coordinates: world = spawn o (map->odom)^-1 o map_origin o cell.
   # Omitting it cost a session of wrong on-wall figures (2026-09-05).
   timeout 5 ros2 run tf2_ros tf2_echo "robot_$N/map" "robot_$N/odom" \
-      --ros-args -p use_sim_time:=true > "$LOGDIR/map_to_odom_robot_$N.txt" 2>&1
-  head -8 "$LOGDIR/map_to_odom_robot_$N.txt"
+      --ros-args -p use_sim_time:=true \
+      > "$LOGDIR/map_to_odom_${RUN}_robot_$N.txt" 2>&1
+  head -8 "$LOGDIR/map_to_odom_${RUN}_robot_$N.txt"
   
   
   
@@ -199,7 +215,7 @@ echo
 echo "════════════════════════════════════════════════════════════"
 if [[ ${#FAILED[@]} -eq 0 ]]; then
   echo "  all requested robots mapped and verified"
-  ls -la "$MAPDIR"/phaseB_run1_robot*.pgm
+  ls -la "$MAPDIR/${RUN}_robot"*.pgm
   exit 0
 fi
 echo "  FAILURES:"
