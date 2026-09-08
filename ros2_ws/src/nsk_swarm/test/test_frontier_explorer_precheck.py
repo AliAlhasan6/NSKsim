@@ -22,6 +22,7 @@ verdict is exact rather than timing-dependent.
 
 import math
 import os
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -905,7 +906,10 @@ def make_loop_stub(selections, monkeypatch, costmaps=(None, None), grid=None,
 
     # Everything explore() leans on that isn't the defer logic under test.
     stub.waitUntilNav2Active = lambda localizer=None: None
-    stub._wait_for_nav2_servers_active = lambda: True
+    # Called with no arguments at boot and with an explicit server set by the
+    # rejected-dispatch recovery wait; `*a` accepts both, and the rejection
+    # tests below re-bind it to record WHICH set they were asked for.
+    stub._wait_for_nav2_servers_active = lambda *a: True
     stub._wait_for_first_map = lambda: True
     stub._wait_for_fresh_map = lambda seq: True
     stub._sleep = lambda s: None
@@ -1020,8 +1024,11 @@ def test_a_dispatched_goal_resets_the_defer_streak(monkeypatch):
     stub = make_loop_stub(script, monkeypatch)
 
     # Dispatch path stubs — only needed because this test actually sends goals.
+    # goToPose() must return True: the real one returns a bool, the loop reads
+    # it as accept/reject, and a None here is a REJECTION none of these tests
+    # mean to script — which re-selects the same script entry forever.
     stub._make_goal = lambda x, y: object()
-    stub.goToPose = lambda goal_msg: None
+    stub.goToPose = lambda goal_msg: True
     stub._supervise_goal = lambda n, xy: ('SUCCEEDED', (1.0, 1.0), 0.0,
                                           (0, '', None))
     stub._classifier = fx.OutcomeClassifier(fx.BLACKLIST_RADIUS)
@@ -1048,7 +1055,7 @@ def test_a_dispatched_goal_also_resets_the_truncation_flag(monkeypatch):
     stub = make_loop_stub(script, monkeypatch)
 
     stub._make_goal = lambda x, y: object()
-    stub.goToPose = lambda goal_msg: None
+    stub.goToPose = lambda goal_msg: True
     stub._supervise_goal = lambda n, xy: ('SUCCEEDED', (1.0, 1.0), 0.0,
                                           (0, '', None))
     stub._classifier = fx.OutcomeClassifier(fx.BLACKLIST_RADIUS)
@@ -1150,7 +1157,7 @@ def test_a_dispatched_goal_resets_the_start_blocked_streak(monkeypatch):
     stub = make_loop_stub(script, monkeypatch)
 
     stub._make_goal = lambda x, y: object()
-    stub.goToPose = lambda goal_msg: None
+    stub.goToPose = lambda goal_msg: True
     stub._supervise_goal = lambda n, xy: ('SUCCEEDED', (1.0, 1.0), 0.0,
                                           (0, '', None))
     stub._classifier = fx.OutcomeClassifier(fx.BLACKLIST_RADIUS)
@@ -1234,7 +1241,7 @@ def test_the_stack_health_stop_saves_a_map_too(tmp_path, monkeypatch):
     stub = dump_stub(monkeypatch, fake_grid(40, 40, ox=-2.0, oy=3.0),
                      script=[goal])
     stub._make_goal = lambda x, y: object()
-    stub.goToPose = lambda goal_msg: None
+    stub.goToPose = lambda goal_msg: True
     stub._supervise_goal = lambda n, xy: ('FAILED', (1.0, 1.0), 0.0,
                                           (0, '', None))
     stub._classifier = SimpleNamespace(
@@ -1545,14 +1552,17 @@ def test_an_inconclusive_start_probe_leaves_the_planners_verdict_standing():
 class Tripwire:
     """Any attribute access is a test failure, with the name in the message."""
 
-    def __init__(self, what):
+    ESCAPE_WHY = ('an escape is displacement, not evidence about any frontier, '
+                  'and must not be recorded as a goal outcome')
+
+    def __init__(self, what, why=ESCAPE_WHY):
         object.__setattr__(self, '_what', what)
+        object.__setattr__(self, '_why', why)
 
     def __getattr__(self, name):
         raise AssertionError(
-            f'the escape path reached {object.__getattribute__(self, "_what")}'
-            f'.{name} — an escape is displacement, not evidence about any '
-            f'frontier, and must not be recorded as a goal outcome')
+            f'reached {object.__getattribute__(self, "_what")}.{name} — '
+            f'{object.__getattribute__(self, "_why")}')
 
 
 def raw_costmap(fill=253, w=120, h=120, res=0.05, ox=-3.0, oy=-3.0):
@@ -1588,7 +1598,14 @@ def escape_stub(monkeypatch, script, raw_fill=253, slam_fill=-1,
     stub.dispatched = []          # every goal handed to Nav2, escape or not
     stub.supervised = []          # (goal_num, goal_xy, label) per supervision
     stub._make_goal = lambda x, y: ('goal', round(x, 3), round(y, 3))
-    stub.goToPose = lambda goal: stub.dispatched.append(goal)
+
+    def go_to_pose(goal):
+        # append() returns None, and None is a REJECTION to the dispatch guard.
+        # Every escape here is meant to be accepted, so return True explicitly.
+        stub.dispatched.append(goal)
+        return True
+
+    stub.goToPose = go_to_pose
     stub._retirements = Tripwire('_retirements')
     stub._classifier = Tripwire('_classifier')
 
@@ -1818,3 +1835,172 @@ def test_an_unreadable_pose_defers_instead_of_dispatching(tmp_path, monkeypatch)
     warns = [m for lvl, m in stub.logged if lvl == 'WARN']
     assert any('could not read the pose' in m and 'not dispatching' in m
                for m in warns), warns
+
+
+# ── a rejected dispatch is not a goal outcome ───────────────────────────────
+#
+# goToPose() returns False when the action server refuses the goal, and
+# robot_navigator does NOT reassign self.result_future on that path — the
+# PREVIOUS goal's future stays live and resolved. So isTaskComplete() returns
+# True on its first call and _supervise_goal hands back a STALE outcome, which
+# the classifier charges to a frontier that was never driven to.
+#
+# Measured in b16 (explore_robot1.log, goals #80-#89): ten rejections, ten END
+# lines reading sim=0.0s net=0.00m, three reachable frontiers blacklisted on
+# evidence from goals that never ran, and the run ended on
+# CONSEC_STACK_FAILURES. These tests pin that nothing downstream of the
+# dispatch can be reached when the dispatch did not happen.
+
+REJECT_SEL = (((0.0, 1.0), (0.0, 1.0), 10), True)
+
+
+def reject_stub(monkeypatch, script, rejections=1, ready=True, strict=True,
+                grid=None):
+    """A loop stub whose first `rejections` dispatches are refused by Nav2.
+
+    `strict` installs tripwires on everything the rejection path must not
+    reach. Tests that let a later dispatch succeed pass strict=False and get a
+    real classifier instead.
+    """
+    stub = make_loop_stub(script, monkeypatch, grid=grid)
+    stub.dispatched = []          # every goal handed to Nav2
+    stub.readiness = []           # the server set each recovery wait asked for
+    stub._make_goal = lambda x, y: ('goal', round(x, 3), round(y, 3))
+
+    def go_to_pose(goal):
+        stub.dispatched.append(goal)
+        return len(stub.dispatched) > rejections
+
+    stub.goToPose = go_to_pose
+
+    def wait_active(*servers):
+        stub.readiness.append(servers)
+        # The boot gate takes no argument and always passes here: `ready`
+        # models the stack failing to come BACK, which is a different event
+        # from never coming up, and only the recovery wait is asked about it.
+        return ready if servers else True
+
+    stub._wait_for_nav2_servers_active = wait_active
+
+    if strict:
+        def never_supervise(*a, **k):
+            raise AssertionError(
+                'a REJECTED dispatch reached _supervise_goal — the previous '
+                'goal\'s result_future is still live, so this reads a STALE '
+                'outcome and attributes it to a frontier that never ran')
+        stub._supervise_goal = never_supervise
+        stub._classifier = Tripwire(
+            '_classifier',
+            'a rejected dispatch is not a goal outcome: no counter may move '
+            'and no frontier may be judged by a goal that never ran')
+    else:
+        stub._supervise_goal = lambda n, xy: ('SUCCEEDED', (0.0, 1.0), 0.0,
+                                              (0, '', None))
+        stub._classifier = fx.OutcomeClassifier(fx.BLACKLIST_RADIUS)
+    return stub
+
+
+def end_lines(stub):
+    """The per-goal END lines — matched on their format token, not the word.
+
+    Filtering on a bare 'END' catches the rejection WARN, which says "goal #N
+    has no END line by construction": the message that PROVES the fix, caught
+    by the filter that asserts the fix worked. `goal #N END ` is the format the
+    line is written in and prose cannot produce it.
+    """
+    return [m for _lvl, m in stub.logged
+            if re.search(r'goal #\d+ END ', m)]
+
+
+def test_a_rejected_dispatch_records_no_outcome(monkeypatch):
+    # The whole defect in one assertion: the classifier is a tripwire, so any
+    # counter that moves fails the test by name.
+    stub = reject_stub(monkeypatch, [REJECT_SEL, (None, True)])
+
+    assert stub.explore() is True
+
+    assert stub.dispatched == [('goal', 0.0, 1.0)]
+    assert stub._blacklist == []
+
+
+def test_a_rejected_dispatch_writes_no_end_line(monkeypatch):
+    # An END line is how this defect READS AS DATA: ten of them in b16, each
+    # claiming an outcome for a goal that never left the explorer. The WARN
+    # that replaces it names the rejection so a future session greps it.
+    stub = reject_stub(monkeypatch, [REJECT_SEL, (None, True)])
+
+    stub.explore()
+
+    assert not end_lines(stub), stub.logged
+    warns = [m for lvl, m in stub.logged if lvl == 'WARN']
+    assert any('goal #1 dispatch REJECTED' in m for m in warns), warns
+    assert any('no END line by construction' in m for m in warns), warns
+
+
+def test_the_recovery_wait_covers_the_server_that_rejects(monkeypatch):
+    # bt_navigator owns the NavigateToPose action server, so it is the node
+    # that rejects — and in b16 it was inactive for ~55 s (wall 342.06-397.92
+    # on robot_1) while controller_server and planner_server both still
+    # reported 'active'. Waiting on the boot set alone would pass on the first
+    # poll and re-dispatch straight into another rejection.
+    stub = reject_stub(monkeypatch, [REJECT_SEL, (None, True)])
+
+    stub.explore()
+
+    # The boot gate (no argument, so the default set) then the recovery wait.
+    assert stub.readiness == [(), (fx.NAV2_GOAL_SERVERS,)]
+    assert 'bt_navigator' in fx.NAV2_GOAL_SERVERS
+    assert 'bt_navigator' not in fx.NAV2_REQUIRED_SERVERS
+
+
+def test_a_rejected_dispatch_frees_the_frontier_for_a_re_send(monkeypatch):
+    # _last_goal must be cleared, or the fix reintroduces its own damage by a
+    # second route: the same frontier is still the best one, it is re-selected
+    # inside RESEND_RADIUS, and because the classifier was correctly never
+    # told, is_retry_pending() is False and the re-send guard blacklists it for
+    # "re-selected without progress" — the identical wrongful retirement.
+    stub = reject_stub(monkeypatch, [REJECT_SEL, REJECT_SEL, (None, True)],
+                       strict=False)
+
+    assert stub.explore() is True
+
+    # Same point, dispatched twice: refused, then accepted.
+    assert stub.dispatched == [('goal', 0.0, 1.0)] * 2
+    assert stub._blacklist == []
+    assert not [m for _l, m in stub.logged if 're-selected without progress' in m]
+
+
+def test_the_goal_number_skips_rather_than_repeats(monkeypatch):
+    # goal_num is already spent when the rejection lands. A gap is legible —
+    # the `->` line for the skipped number sits directly above the WARN — where
+    # a reused number would make two dispatches indistinguishable from one.
+    stub = reject_stub(monkeypatch, [REJECT_SEL, REJECT_SEL, (None, True)],
+                       strict=False)
+
+    stub.explore()
+
+    sent = [m for _l, m in stub.logged if ' -> ' in m]
+    assert len(sent) == 2 and 'goal #1 ->' in sent[0] and 'goal #2 ->' in sent[1]
+    ends = end_lines(stub)
+    assert len(ends) == 1 and 'goal #2 END ' in ends[0], ends
+
+
+def test_a_stack_that_never_returns_ends_the_run_as_unhealthy(tmp_path,
+                                                              monkeypatch):
+    # The readiness wait timing out means the stack really is gone. End through
+    # the existing unhealthy exit so the map dump still happens — and say it is
+    # a mid-run outage, since the gate's own ERROR is worded for startup
+    # ("Refusing to explore"), which is false after a goal has been dispatched.
+    monkeypatch.setattr(fx, '_map_dump_dir', lambda: str(tmp_path))
+    stub = reject_stub(monkeypatch, [REJECT_SEL], ready=False,
+                       grid=fake_grid(60, 60, fill=0))
+
+    assert stub.explore() is False
+
+    errors = [m for lvl, m in stub.logged if lvl == 'ERROR']
+    assert any('mid-run stack outage' in m for m in errors), errors
+    assert any('not a claim about any frontier' in m for m in errors), errors
+    assert len(list(tmp_path.glob(f'*_{fx.EXIT_STACK_UNHEALTHY}.pgm'))) == 1
+    # Still not a goal outcome, even on the way out.
+    assert not end_lines(stub), stub.logged
+    assert stub._blacklist == []
