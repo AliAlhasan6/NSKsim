@@ -68,16 +68,17 @@ def die(msg: str) -> None:
 
 # ─────────────────────────── step 1: spawn poses ────────────────────────────
 
-def resolve_spawn_poses() -> list[tuple[float, float]]:
-    """Parse DOT_POSES out of the launch file *as it was at BAG_ERA_REV*.
+def resolve_spawn_poses(rev: str = BAG_ERA_REV) -> list[tuple[float, float]]:
+    """Parse DOT_POSES out of the launch file *as it was at ``rev``*.
 
-    Returns five (x, y) world offsets. Yaw is deliberately not returned: see
-    below.
+    Returns five (x, y) world offsets. Yaw is deliberately not returned -- and
+    never applied: if the launch file at ``rev`` passes a yaw ('-Y') to the
+    ros_gz_sim spawn, this dies rather than pretend the yaw-0 assumption holds.
     """
-    target = f'{BAG_ERA_REV}:{LAUNCH_REL}'
+    target = f'{rev}:{LAUNCH_REL}'
     searched = [
         f'git show {target}   (from {REPO_ROOT})',
-        f'{REPO_ROOT / LAUNCH_REL}   (HEAD -- WRONG for this bag, see BAG_ERA_REV)',
+        f'{REPO_ROOT / LAUNCH_REL}   (HEAD -- WRONG for a run recorded at {rev})',
     ]
 
     try:
@@ -108,12 +109,25 @@ def resolve_spawn_poses() -> list[tuple[float, float]]:
         die(f'DOT_POSES in {target!r} has {len(table)} entries, need {NUM_ROBOTS}.\n'
             'Searched:\n  ' + '\n  '.join(searched))
 
-    # The third column is dropped on purpose. At BAG_ERA_REV the spawn action
-    # passes ros_gz_sim `create` only `-x -y -z` and binds the yaw to an unused
-    # `_yaw`, so Gazebo spawned every robot at yaw 0 and each odom frame is
-    # axis-aligned with the world. Confirmed empirically: applying the table's
-    # yaw collapses the wall fit (robot_1 45.1% -> 0.3%, robot_4 81.4% -> 1.2%).
-    # Spawn composition is therefore a pure translation.
+    # The third column is dropped on purpose, and that this is safe is checked
+    # per rev rather than assumed: the spawn action must pass ros_gz_sim
+    # `create` only `-x -y -z` (no '-Y'), so Gazebo spawns every robot at yaw 0
+    # and each odom frame is axis-aligned with the world. Confirmed empirically
+    # at BAG_ERA_REV: applying the table's yaw collapses the wall fit
+    # (robot_1 45.1% -> 0.3%, robot_4 81.4% -> 1.2%). Spawn composition is
+    # therefore a pure translation.
+    spawn_args = re.search(
+        r"executable=['\"]create['\"].*?arguments=\[(.*?)\]", src, re.S)
+    if not spawn_args:
+        die(f'could not locate the ros_gz_sim create spawn arguments in '
+            f'{target!r}, so the yaw-0 spawn assumption cannot be verified.\n'
+            'Searched:\n  ' + '\n  '.join(searched))
+    if re.search(r"['\"]-Y['\"]", spawn_args.group(1)):
+        die(f"the launch file at {rev!r} passes a yaw ('-Y') to the ros_gz_sim "
+            'spawn, so the yaw-0 assumption does not hold for that run. A spawn '
+            'yaw is never applied here; every composition built on these poses '
+            'would be wrong.')
+
     return [(float(x), float(y)) for x, y, _yaw in table[:NUM_ROBOTS]]
 
 

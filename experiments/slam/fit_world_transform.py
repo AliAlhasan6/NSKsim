@@ -18,7 +18,7 @@ well-fitting maps, this says so rather than promoting the nearest miss.
 Pure numpy / scipy / PyYAML / PIL -- no rclpy, no rosbag2_py, no ROS at all.
 Runs inside the venv:
 
-    venv/bin/python experiments/slam/fit_world_transform.py
+    venv/bin/python experiments/slam/fit_world_transform.py [--run RUN] [--spawn-rev REV]
 
 The wall geometry and the on-wall scorer are imported from
 experiments/analysis/bag_overlap.py, never reimplemented. A second scorer would
@@ -54,6 +54,7 @@ sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'analysis'))
 # this scores 0) and the numbers below would no longer be comparable to the
 # 7.4/1.5/12.8/2.9/40.8% and 96.4% baselines that motivated this script.
 from bag_overlap import (  # noqa: E402
+    BAG_ERA_REV,
     NUM_ROBOTS,
     ON_WALL_TOL,
     die,
@@ -63,9 +64,11 @@ from bag_overlap import (  # noqa: E402
 )
 
 MAPS_DIR = REPO_ROOT / 'experiments' / 'maps'
-LOGS_DIR = REPO_ROOT / 'experiments' / 'logs'   # inputs: map_to_odom_robot_N.txt
+LOGS_DIR = REPO_ROOT / 'experiments' / 'logs'   # inputs: map_to_odom_{RUN}_robot_N.txt
 OUT_DIR = LOGS_DIR                              # outputs: the JSON and the PNGs
-MAP_STEM = 'phaseB_run1_robot'
+DEFAULT_RUN = 'phaseB_run1'
+RUN = DEFAULT_RUN                # both rebound from --run in main()
+MAP_STEM = f'{DEFAULT_RUN}_robot'
 
 # ── coarse search ────────────────────────────────────────────────────────────
 COARSE_CELL = 0.1       # m, lattice for the FFT correlation
@@ -155,14 +158,18 @@ def rel(p: Path) -> str:
 
 # ─────────────────────────────── inputs ─────────────────────────────────────
 
-def load_map(n: int) -> dict:
+def load_map(n: int, stem: str | None = None) -> dict:
     """Occupied cells plus every YAML field the placement depends on.
 
     resolution is read, never assumed: these maps carry 0.10000000149011612,
     not 0.1, and the difference is a third of a cell across an 88-cell map.
+    stem defaults to MAP_STEM (i.e. the --run being fitted); the self-check
+    passes the phaseB_run1 stem explicitly because its expected figures belong
+    to that map.
     """
-    pgm = MAPS_DIR / f'{MAP_STEM}{n}.pgm'
-    meta_path = MAPS_DIR / f'{MAP_STEM}{n}.yaml'
+    stem = MAP_STEM if stem is None else stem
+    pgm = MAPS_DIR / f'{stem}{n}.pgm'
+    meta_path = MAPS_DIR / f'{stem}{n}.yaml'
     for p in (pgm, meta_path):
         if not p.is_file():
             die(f'map input not found: {p}')
@@ -186,6 +193,7 @@ def load_map(n: int) -> dict:
     return {
         'robot': n,
         'pgm': pgm,
+        'yaml': meta_path,
         'md5': hashlib.md5(pgm.read_bytes()).hexdigest(),
         'height': int(img.shape[0]),
         'width': int(img.shape[1]),
@@ -216,17 +224,26 @@ def cell_points(m: dict, convention: str) -> np.ndarray:
     return np.column_stack([x, y])
 
 
-def load_map_to_odom(n: int) -> tuple[float, float, float]:
-    """(x, y, yaw) of the map->odom transform logged by tf2_echo.
+def load_map_to_odom(n: int) -> tuple[tuple[float, float, float], Path]:
+    """((x, y, yaw), resolved path) of the map->odom transform from tf2_echo.
 
     The files repeat the same sample several times. Every block is checked
     rather than trusting the first: a file whose blocks disagree would mean the
     transform was still moving when it was captured, and a single number would
     not describe it.
     """
-    path = LOGS_DIR / f'map_to_odom_robot_{n}.txt'
+    path = LOGS_DIR / f'map_to_odom_{RUN}_robot_{n}.txt'
     if not path.is_file():
-        die(f'map->odom log not found: {path}')
+        # Only the default run may fall back to the legacy pre-RUN filename;
+        # other runs never wrote one, and falling back would silently read
+        # phaseB data into a different run's fit.
+        legacy = LOGS_DIR / f'map_to_odom_robot_{n}.txt'
+        if RUN == DEFAULT_RUN and legacy.is_file():
+            path = legacy
+        elif RUN == DEFAULT_RUN:
+            die(f'map->odom log not found: {path} (nor legacy {legacy})')
+        else:
+            die(f'map->odom log not found: {path}')
     text = path.read_text()
 
     trans = re.findall(r'Translation: \[\s*(-?[\d.]+),\s*(-?[\d.]+),', text)
@@ -240,7 +257,7 @@ def load_map_to_odom(n: int) -> tuple[float, float, float]:
         die(f'{path.name} holds {len(blocks)} differing map->odom samples; the '
             'transform was not settled, so no single value describes it')
 
-    return float(trans[0][0]), float(trans[0][1]), float(yaws[0])
+    return (float(trans[0][0]), float(trans[0][1]), float(yaws[0])), path
 
 
 # ───────────────────────── placement parameterisation ───────────────────────
@@ -589,7 +606,10 @@ def plateau_span(pts, c, rects, best, floor) -> tuple[float, float]:
 
 
 def self_check(mask, wx0, wy0, rects) -> dict:
-    m = load_map(CHECK_ROBOT)
+    # Always the phaseB_run1 map, whatever --run says: CHECK_SCORE/CHECK_THETA
+    # are remembered figures for that map, and checking any other run's map
+    # against them would fail for reasons that say nothing about the port.
+    m = load_map(CHECK_ROBOT, stem=f'{DEFAULT_RUN}_robot')
     pts = cell_points(m, CHECK_CONVENTION)
     c = pts.mean(axis=0)
     thetas = np.arange(-CHECK_THETA_LIMIT, CHECK_THETA_LIMIT + 1e-9, THETA_STEP)
@@ -648,13 +668,27 @@ def self_check(mask, wx0, wy0, rects) -> dict:
 # ────────────────────────────────── main ────────────────────────────────────
 
 def main() -> None:
+    global RUN, MAP_STEM
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--convention', choices=['A', 'B', 'both'], default='both',
                     help='row convention to fit (default both -- the comparison '
                          'needs both to be meaningful)')
     ap.add_argument('--robot', type=int, action='append',
                     help='restrict to robot N (repeatable; default all five)')
+    ap.add_argument('--run', default=DEFAULT_RUN,
+                    help='offline-SLAM run name: maps are experiments/maps/'
+                         '<RUN>_robot<N>.* and map->odom logs are experiments/'
+                         'logs/map_to_odom_<RUN>_robot_<N>.txt '
+                         '(default %(default)s)')
+    ap.add_argument('--spawn-rev', default=BAG_ERA_REV,
+                    help='git rev whose launch-file DOT_POSES gives the spawn '
+                         'poses for this run (default %(default)s, the phaseB '
+                         'bag era)')
     args = ap.parse_args()
+
+    RUN = args.run
+    MAP_STEM = f'{RUN}_robot'
 
     conventions = ['A', 'B'] if args.convention == 'both' else [args.convention]
     robots = sorted(set(args.robot)) if args.robot else list(range(NUM_ROBOTS))
@@ -671,13 +705,15 @@ def main() -> None:
     # ── self-check first: nothing else runs if the scorer port is broken ──
     check = self_check(mask, wx0, wy0, rects)
 
-    # world_T_odom. bag_overlap's parser reads the bag-era DOT_POSES and drops
-    # the table's yaw: at that revision the spawn action passed ros_gz_sim only
-    # -x -y -z, so Gazebo spawned every robot at yaw 0. That is recorded there
-    # as an empirical finding (applying the yaw collapsed robot_1 45.1% -> 0.3%),
-    # not an assumption, so world_T_odom is a pure translation.
-    spawn = resolve_spawn_poses()
-    print('world_T_odom (pure translation, spawn yaw 0 -- see bag_overlap.py):')
+    # world_T_odom. bag_overlap's parser reads DOT_POSES at --spawn-rev and
+    # drops the table's yaw. That is only sound while the spawn action passes
+    # ros_gz_sim just -x -y -z; resolve_spawn_poses() verifies that at the
+    # requested rev and dies if the launch file passes '-Y'. At BAG_ERA_REV it
+    # is also an empirical finding (applying the yaw collapsed robot_1
+    # 45.1% -> 0.3%), so world_T_odom is a pure translation.
+    spawn = resolve_spawn_poses(args.spawn_rev)
+    print(f'world_T_odom (pure translation, spawn yaw 0 -- '
+          f'DOT_POSES @ {args.spawn_rev}):')
     for n in robots:
         print(f'  robot_{n}: x={spawn[n][0]:+.3f}  y={spawn[n][1]:+.3f}')
 
@@ -689,13 +725,16 @@ def main() -> None:
     results, png_paths = {}, {}
     for n in robots:
         m = load_map(n)
-        mto = load_map_to_odom(n)
+        mto, mto_path = load_map_to_odom(n)
         print(f'robot_{n}: {m["width"]}x{m["height"]} cells, {m["n_occupied"]} occupied, '
               f'res={m["resolution"]!r}, md5={m["md5"][:12]}...')
-        print(f'  map_T_odom: x={mto[0]:+.3f} y={mto[1]:+.3f} yaw={math.degrees(mto[2]):+.2f} deg')
+        print(f'  map_T_odom: x={mto[0]:+.3f} y={mto[1]:+.3f} yaw={math.degrees(mto[2]):+.2f} deg '
+              f'({rel(mto_path)})')
 
         entry = {
             'pgm': m['pgm'].name, 'pgm_md5': m['md5'],
+            'pgm_path': rel(m['pgm']), 'yaml_path': rel(m['yaml']),
+            'map_to_odom_path': rel(mto_path),
             'width': m['width'], 'height': m['height'],
             'n_occupied': m['n_occupied'],
             'resolution': m['resolution'], 'origin': m['origin'],
@@ -731,7 +770,7 @@ def main() -> None:
                 best_overall = (conv, refined[0])
 
         conv, fit = best_overall
-        png = OUT_DIR / f'world_fit_robot{n}_{stamp}.png'
+        png = OUT_DIR / f'world_fit_{RUN}_robot{n}_{stamp}.png'
         render(m, conv, fit, rects, png)
         png_paths[n] = png
         entry['best_free_fit'] = {'convention': conv, **fit}
@@ -743,6 +782,8 @@ def main() -> None:
 
     out = {
         'generated_utc': iso,
+        'run': RUN,
+        'spawn_rev': args.spawn_rev,
         'scorer': {
             'source': 'experiments/analysis/bag_overlap.py',
             'function': 'dist_to_nearest_wall',
@@ -751,7 +792,8 @@ def main() -> None:
         },
         'spawn_poses': {f'robot_{n}': {'x': spawn[n][0], 'y': spawn[n][1], 'yaw_rad': 0.0}
                         for n in range(NUM_ROBOTS)},
-        'spawn_source': 'bag_overlap.resolve_spawn_poses() -- bag-era DOT_POSES, yaw not applied',
+        'spawn_source': f'bag_overlap.resolve_spawn_poses({args.spawn_rev!r}) '
+                        f'-- DOT_POSES @ {args.spawn_rev}, yaw not applied',
         'coarse': {'cell_m': COARSE_CELL, 'theta_step_deg': THETA_STEP,
                    'theta_range_deg': [-180.0, 180.0], 'n_peaks': N_PEAKS,
                    'nms_radius_m': NMS_RADIUS},
@@ -766,7 +808,7 @@ def main() -> None:
         'verdict': verdict,
         'robots': {f'robot_{n}': results[n] for n in robots},
     }
-    json_path = OUT_DIR / f'world_fit_{stamp}.json'
+    json_path = OUT_DIR / f'world_fit_{RUN}_{stamp}.json'
     json_path.write_text(json.dumps(out, indent=2, sort_keys=False))
     print(f'wrote {rel(json_path)}')
     for n in robots:

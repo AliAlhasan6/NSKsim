@@ -124,12 +124,19 @@ for N in "${ROBOTS[@]}"; do
   fi
 
   # Only this robot's inputs are replayed; the other four robots' topics stay
-  # in the bag. DUR_<N> caps the replay so a bag can be cut per robot.
+  # in the bag. START_<N> and DUR_<N> cut the replay so a bag can be windowed
+  # per robot.
   DUR_VAR="DUR_$N"
   DUR="${!DUR_VAR:--1}"
-  echo "[3/4] replaying $RUN at rate $RATE, playback-duration $DUR"
+  START_VAR="START_$N"
+  START="${!START_VAR:-0}"
+  echo "[3/4] replaying $RUN at rate $RATE, start-offset $START, playback-duration $DUR"
+
+  # START_<N> is kept for completeness but /tf_static sits at bag time 0 and
+  # --start-offset skips it; cut segments with strip_bag_for_offline_slam.py
+  # --start/--duration instead, which re-timestamps /tf_static.
   ros2 bag play "$BAG" "${CLOCK_ARGS[@]}" --rate "$RATE" \
-      --playback-duration "$DUR" \
+      --start-offset "$START" --playback-duration "$DUR" \
       --topics /clock /tf /tf_static "/robot_$N/scan" "/robot_$N/odom" \
       >> "$LOG" 2>&1
 

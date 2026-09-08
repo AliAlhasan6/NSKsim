@@ -12,13 +12,19 @@ Keeps:  /clock, /tf_static, /robot_N/scan, /robot_N/odom, and /tf with every
         transform whose child_frame_id ends in '/odom' removed.
 Drops:  /robot_N/map, /robot_N/map_metadata, /kg_share, /nsk/convergence.
 
-Timestamps and message order are untouched. Truncation is deliberately NOT
-done here -- it stays a --playback-duration decision in the runner, where the
-cut is visible in the log of every map produced.
+Timestamps and message order are untouched unless --start is given.
+
+--start S (bag seconds from the first kept message) writes a SEGMENT: every
+message before S is skipped, except /tf_static, whose receive timestamps are
+moved to S so the static transforms are present when the segment begins.
+Added 2026-09-08: `ros2 bag play --start-offset` skips /tf_static at bag
+time 0, and without base_scan->base_footprint slam_toolbox's scan filter
+drops every message; a one-second pre-play of /tf_static did not deliver
+either. --duration D stops the segment D bag seconds after S.
 
 Usage:
-    python3 strip_bag_for_offline_slam.py SRC_BAG_DIR DST_BAG_DIR
-Expected: one full pass over the bag, roughly the cost of tf_corrected_extents.
+    python3 strip_bag_for_offline_slam.py SRC_BAG_DIR DST_BAG_DIR [--start S] [--duration D]
+Expected: one pass over the bag, roughly the cost of tf_corrected_extents.
 """
 import argparse
 import os
@@ -41,7 +47,14 @@ def main() -> int:
                     help="drop /tf transforms whose child_frame_id ends with this")
     ap.add_argument("--progress", type=int, default=250_000,
                     help="print progress every N messages read")
+    ap.add_argument("--start", type=float, default=None,
+                    help="segment start, bag seconds from the first kept message; "
+                         "/tf_static is re-timestamped to this point")
+    ap.add_argument("--duration", type=float, default=None,
+                    help="segment length in bag seconds (requires --start)")
     args = ap.parse_args()
+    if args.duration is not None and args.start is None:
+        ap.error("--duration requires --start")
 
     if os.path.exists(args.dst):
         print(f"refusing to overwrite existing bag: {args.dst}", file=sys.stderr)
@@ -74,12 +87,40 @@ def main() -> int:
     tf_rewritten = 0
     tf_emptied = 0
     total = 0
+    skipped_before_start = 0
+    statics_moved = 0
+    bag_t0 = None                                # ns, first kept message
+    cut_start = None                             # ns
+    cut_end = None                               # ns
+    static_buffer = []                           # /tf_static seen before start
     t0 = time.monotonic()
 
     while reader.has_next():
         topic, data, stamp = reader.read_next()
         total += 1
         read[topic] += 1
+
+        if bag_t0 is None:
+            bag_t0 = stamp
+            if args.start is not None:
+                cut_start = bag_t0 + int(args.start * 1e9)
+                if args.duration is not None:
+                    cut_end = cut_start + int(args.duration * 1e9)
+
+        if cut_start is not None:
+            if stamp < cut_start:
+                if topic == "/tf_static":
+                    static_buffer.append(data)
+                skipped_before_start += 1
+                continue
+            if static_buffer:                    # first message at/after start
+                for sdata in static_buffer:
+                    writer.write("/tf_static", sdata, cut_start)
+                    written["/tf_static"] += 1
+                    statics_moved += 1
+                static_buffer = []
+            if cut_end is not None and stamp > cut_end:
+                break
 
         if topic == "/tf":
             msg = deserialize_message(data, TFMessage)
@@ -112,6 +153,14 @@ def main() -> int:
     el = time.monotonic() - t0
 
     print(f"\ndone: {total} messages read in {el:.0f} s -> {args.dst}")
+    if cut_start is not None:
+        print(f"segment: start {args.start:g} s"
+              + (f", duration {args.duration:g} s" if args.duration is not None else "")
+              + f"; skipped {skipped_before_start} messages before start; "
+              f"{statics_moved} /tf_static messages moved to the start")
+        if statics_moved == 0:
+            print("  WARNING: no /tf_static was seen before the start -- the "
+                  "segment has no static transforms")
     print("\nper topic (read -> written):")
     for name in sorted(read):
         print(f"  {name:<24}{read[name]:>9} -> {written[name]:>9}")
