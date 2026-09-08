@@ -109,6 +109,19 @@ BLACKLIST_RADIUS = 0.4  # m; a new centroid within this of a blacklisted goal is
 # reject/abort a goal when they are not up yet (see the module docstring).
 NAV2_REQUIRED_SERVERS = ('controller_server', 'planner_server')
 
+# The set the MID-RUN recovery wait uses, after a goal was rejected outright.
+# It carries one more node, and the difference is the whole reason that wait can
+# work: bt_navigator owns the NavigateToPose action server, so it is the node
+# that REJECTS ("Action server is inactive. Rejecting the goal."), and a
+# lifecycle bounce takes it down FIRST and brings it back LAST. Measured in b16,
+# robot_1: bt_navigator deactivated at wall 342.06 and the rejections began at
+# 342.71, but controller_server was not deactivated until 397.92 — for ~55 s
+# both servers above reported 'active' while every goal was being thrown away.
+# Waiting on that pair alone would pass on the first poll and re-dispatch into
+# another rejection. bt_navigator is absent from the boot set only because
+# waitUntilNav2Active() already gates on it there; here nothing else does.
+NAV2_GOAL_SERVERS = NAV2_REQUIRED_SERVERS + ('bt_navigator',)
+
 # ── goal gating ─────────────────────────────────────────────────────────────
 # The robot only maps new area if it physically MOVES. A frontier centroid sits
 # on the free side of the known/unknown boundary, so it can land right next to
@@ -1900,10 +1913,19 @@ class FrontierExplorer(BasicNavigator):
         by construction, unlike a fixed launch-time delay.
 
         Returns True when all are active, False on timeout (NAV2_READY_TIMEOUT
-        wall seconds) — at which point the caller must NOT enter the goal loop.
-        Wall clock throughout: this runs before exploration begins, so there is
-        no goal progress to judge and a wedged stack must not be able to park
-        the gate forever on a sim clock that isn't advancing.
+        wall seconds) — at which point the caller must NOT dispatch goals.
+
+        Called from TWO places, and its messages are worded for the first: the
+        boot gate below the Nav2 wait, and the recovery wait after a goal was
+        rejected mid-run (which passes NAV2_GOAL_SERVERS, not the default set).
+        The timeout ERROR says "Refusing to explore", which reads wrong on the
+        second path — so that caller logs its own ERROR naming the mid-run case
+        rather than leaving the startup wording to speak for it.
+
+        Wall clock throughout, and on both paths for the same reason: a wedged
+        stack must not be able to park this forever on a sim clock that isn't
+        advancing, and there is no goal progress to judge while no goal is
+        running.
         """
         start = time.monotonic()
         pending = list(servers)
@@ -2812,7 +2834,75 @@ class FrontierExplorer(BasicNavigator):
             # Remember the map version now so we can wait for a NEWER one afterward.
             _, seq_before = self.sensor.get_map()
 
-            self.goToPose(self._make_goal(gx, gy))
+            # A REJECTED dispatch is not a goal outcome, and everything below
+            # this branch would record it as one.
+            #
+            # goToPose() returns False when the action server refused the goal
+            # — bt_navigator exists but is not active, which is what a mid-run
+            # lifecycle bounce looks like from here. Its own wait_for_server()
+            # cannot catch that: an INACTIVE server still exists. Nothing ran,
+            # so there is no result to read; worse, robot_navigator does not
+            # reassign self.result_future on rejection, so the PREVIOUS goal's
+            # future is still live and resolved — isTaskComplete() returns True
+            # on its first call and _supervise_goal hands back that goal's
+            # outcome, which the classifier then charges to THIS frontier.
+            #
+            # Measured in b16 (explore_robot1.log, goals #80-#89): ten
+            # rejections, ten END lines reading sim=0.0s net=0.00m, three
+            # reachable frontiers blacklisted on evidence from goals that were
+            # never dispatched, and the run ended on CONSEC_STACK_FAILURES. The
+            # stale read is the defect, not the FAILED it happened to carry: had
+            # #79 succeeded, the same ten would have read SUCCEEDED with
+            # net=0.00m, which the classifier treats as WORLD evidence and
+            # retires immediately.
+            #
+            # So supervise nothing, classify nothing, and write no `goal #N END`
+            # line — logging one is precisely how this defect reads as data to
+            # the next session.
+            if not self.goToPose(self._make_goal(gx, gy)):
+                self.warn(
+                    f'[robot_{self.robot_id}] goal #{goal_num} dispatch REJECTED '
+                    f'by Nav2 at ({gx:.2f}, {gy:.2f}) — the action server is not '
+                    f'active. NOTHING ran: this is not a goal outcome, no '
+                    f'frontier evidence was recorded, no counter moved, and '
+                    f'goal #{goal_num} has no END line by construction. Waiting '
+                    f'for the stack, then re-selecting.')
+                # The number is spent and the next dispatch takes the one after
+                # it. A gap is legible — the `->` line for this number is
+                # directly above the WARN — where a reused number would make two
+                # dispatches indistinguishable from one in the log.
+                #
+                # _last_goal must be cleared or this fix reintroduces its own
+                # damage by a second route: the same frontier is still the best
+                # one, it gets re-selected inside RESEND_RADIUS, and because the
+                # classifier was correctly never told, is_retry_pending() is
+                # False and the re-send guard blacklists it for "re-selected
+                # without progress" — the identical wrongful retirement.
+                self._last_goal = None
+                if not self._wait_for_nav2_servers_active(NAV2_GOAL_SERVERS):
+                    # The gate's own ERROR is worded for startup ("Refusing to
+                    # explore"), which is false after 80 goals. Say what this
+                    # actually is before ending the run.
+                    self.error(
+                        f'[robot_{self.robot_id}] Nav2 did not come back within '
+                        f'{NAV2_READY_TIMEOUT:.0f}s wall after goal #{goal_num} '
+                        f'was rejected — this is a mid-run stack outage, not a '
+                        f'boot failure, and not a claim about any frontier. '
+                        f'{len(self._blacklist)} frontiers were retired before '
+                        f'it; none were retired by it.')
+                    # Same exit as a stack-failure streak, so the map dump still
+                    # happens on the way out.
+                    self._dump_termination_diagnostics(
+                        EXIT_STACK_UNHEALTHY, (rx, ry))
+                    return False
+                # The floor the bottom of the loop applies, applied here too: a
+                # rejection whose wait clears immediately must not be able to
+                # drive re-selection at dispatch speed.
+                elapsed = time.monotonic() - dispatch_t
+                if elapsed < MIN_GOAL_PERIOD:
+                    self._sleep(MIN_GOAL_PERIOD - elapsed)
+                continue
+
             outcome, end_xy, window_move, (err_code, err_msg, recheck_code) = \
                 self._supervise_goal(goal_num, (gx, gy))
 
