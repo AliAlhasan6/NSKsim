@@ -87,8 +87,9 @@ DOT_POSES = [
 def make_namespaced_burger_sdf(robot_id: int) -> str:
     """Rewrite the stock burger SDF's plugin/sensor topics and frames into
     the robot_N namespace and return the path of a tempfile holding the
-    result. Geometry, inertia, joints, and sensor parameters are untouched;
-    each replaced string occurs exactly once in the stock model.
+    result, plus append a PosePublisher for ground truth. Geometry, inertia,
+    joints, and sensor parameters are untouched; each replaced string occurs
+    exactly once in the stock model.
 
     Called at launch EXECUTE time via LazyRobotAsset, never while the launch
     description is being built — see that class.
@@ -111,6 +112,28 @@ def make_namespaced_burger_sdf(robot_id: int) -> str:
         ('<topic>imu</topic>', f'<topic>/{ns}/imu</topic>'),
         ('<topic>joint_states</topic>',
          f'<topic>/{ns}/joint_states</topic>'),
+        # B1.8 ground truth: Gazebo's per-world pose topics carry no entity
+        # names (verified 2026-09-10 — every child_frame_id came through empty
+        # on both /world/knowledge_world/pose/info and .../dynamic_pose/info),
+        # so a pose there cannot be attributed to a robot. PosePublisher
+        # publishes on a per-model topic instead, where the topic name IS the
+        # attribution: the spawn passes -name robot_N, so this plugin lands on
+        # /model/robot_N/pose. update_frequency is the recorded ground-truth
+        # rate. Unlike every pair above this one APPENDS rather than rewrites;
+        # it is anchored on the stock model's single closing tag (line 406).
+        ('</model>',
+         """    <plugin filename="gz-sim-pose-publisher-system"
+            name="gz::sim::systems::PosePublisher">
+      <publish_link_pose>false</publish_link_pose>
+      <publish_collision_pose>false</publish_collision_pose>
+      <publish_visual_pose>false</publish_visual_pose>
+      <publish_nested_model_pose>false</publish_nested_model_pose>
+      <publish_model_pose>true</publish_model_pose>
+      <use_pose_vector_msg>false</use_pose_vector_msg>
+      <static_publisher>false</static_publisher>
+      <update_frequency>20</update_frequency>
+    </plugin>
+  </model>"""),
     ]:
         sdf = sdf.replace(old, new)
     out = tempfile.NamedTemporaryFile(
@@ -237,6 +260,15 @@ def generate_launch_description():
             # side and ROS consumes it (Phase B). '[' is the input-only
             # delimiter, unlike the bidirectional '@...@' used above.
             f'/robot_{n}/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+            # B1.8 ground truth, gz→ROS only. The gz name is kept verbatim on
+            # the ROS side: parameter_bridge's '@' spec names ONE topic for
+            # both ends, and /model/robot_N/pose is already unambiguous — it
+            # is the attribution (see the PosePublisher pair in
+            # make_namespaced_burger_sdf). use_pose_vector_msg is false there,
+            # so the wire type is a single gz.msgs.Pose, not Pose_V; taking it
+            # as PoseStamped keeps the sim timestamp that a bare Pose drops.
+            f'/model/robot_{n}/pose'
+            '@geometry_msgs/msg/PoseStamped[gz.msgs.Pose',
         ]
 
     # All 5 DiffDrive plugins publish their dynamic odom→base_footprint

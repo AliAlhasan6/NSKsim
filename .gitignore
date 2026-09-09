@@ -15,3 +15,8 @@ frames_*.gv
 frames_*.pdf
 !experiments/slam/*.sh
 !experiments/slam/*.template
+
+# colcon output when invoked from the repo root (see B1.8 handoff)
+/build/
+/install/
+/log/
