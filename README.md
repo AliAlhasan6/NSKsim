@@ -2,8 +2,22 @@
 
 [![CI](https://github.com/AliAlhasan6/NSKsim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AliAlhasan6/NSKsim/actions/workflows/ci.yml)
 
-![NSKsim v1.1.0 — five TurtleBot3 burgers sharing knowledge in the maze world](docs/nsksim_tb3_gazebo.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/nsksim_overview_dark.svg">
+  <img alt="NSKsim capability overview: platform, autonomous exploration, five concurrent Nav2+SLAM stacks, offline mapping pipeline, and the open map-fit problem" src="docs/nsksim_overview_light.svg">
+</picture>
 
+**Two layers, at different stages.** The *knowledge layer* — compressed
+knowledge-graph embeddings shared between robots — is complete and shipped as
+v1.1.0, and currently operates on FB15k-237 ego-graphs. The *perception layer*
+shown above has been under construction since July: SLAM, Nav2, frontier
+exploration, and an offline pipeline that turns a recorded run into one occupancy
+grid per robot. Joining the two — replacing Freebase facts with
+environment-derived knowledge graphs — is the next milestone.
+
+## The knowledge layer
+
+![NSKsim v1.1.0 — five TurtleBot3 burgers sharing knowledge in the maze world](docs/nsksim_tb3_gazebo.png)
 
 A multi-robot simulation in which five differential-drive robots share **compressed
 knowledge-graph embeddings** instead of raw data. Each robot holds a local knowledge
@@ -17,7 +31,7 @@ engine node. The pipeline itself (models, training, checkpoint) lives in a separ
 NSK research repo — this repo is the robotics integration, its test suite, and the
 experiment logs.
 
-## Architecture
+### Architecture
 
 ![NSKsim architecture](docs/nsksim_pipeline.png)
 
@@ -64,7 +78,7 @@ experiment logs.
   0.5 — because the merger's compressed-graph encoder proved out-of-distribution on
   live compressed graphs.
 
-## Engineering highlights
+### Engineering highlights
 
 **Typed service interfaces.** `nsk_swarm_interfaces` defines `Compress`, `Merge`,
 and `SimilarityQuery` as proper `.srv` types. Variable-shape tensors (node features,
@@ -115,7 +129,7 @@ the executor — the test asserts the registry survives construction.
 `ros:jazzy` container (CPU-only torch from pip), gated on `colcon test-result`.
 See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
-## Research findings: pair-cluster fragmentation
+### Research findings: pair-cluster fragmentation
 
 ![Convergence — RViz similarity graph, with live inter-robot links](docs/nsksim_tb3_rviz.png)
 
