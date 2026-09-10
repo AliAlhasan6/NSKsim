@@ -357,6 +357,19 @@ def generate_launch_description():
 
     rviz_group = OpaqueFunction(function=_rviz_actions)
 
+    # Gazebo, gated the same way, and for a second reason: a substitution
+    # cannot express "this argv element is absent". A PythonExpression that
+    # evaluates to '' still passes an empty argument through to gz sim, which
+    # would stop the default GUI path being the argv every earlier run used.
+    # Building the list here keeps that path byte-identical to the pre-headless
+    # one, so 'headless defaults off and reproduces exactly' stays true.
+    def _gz_sim_actions(context):
+        if LaunchConfiguration('headless').perform(context).lower() in ('true', '1'):
+            return [ExecuteProcess(cmd=['gz', 'sim', '-s', '-r', world_file],
+                                   output='screen')]
+        return [ExecuteProcess(cmd=['gz', 'sim', '-r', world_file],
+                               output='screen')]
+
     return LaunchDescription([
 
         # ── 0. Venv on PYTHONPATH for the Python nodes ───────────────────────
@@ -440,6 +453,14 @@ def generate_launch_description():
                         'during a timed run.',
         ),
         DeclareLaunchArgument(
+            'headless',
+            default_value='false',
+            description='Run Gazebo server-only, no GUI. Off by default so '
+                        'earlier runs reproduce exactly. The GUI costs roughly '
+                        '25% of one core and about 7 points of load; ban it '
+                        'for timed and recorded runs, as rviz already is.',
+        ),
+        DeclareLaunchArgument(
             'wander',
             default_value='false',
             description='Enable the legacy dot-era wander driver on every '
@@ -449,10 +470,7 @@ def generate_launch_description():
         ),
 
         # ── 1. Gazebo Harmonic ───────────────────────────────────────────────
-        ExecuteProcess(
-            cmd=['gz', 'sim', '-r', world_file],
-            output='screen',
-        ),
+        OpaqueFunction(function=_gz_sim_actions),
 
         # ── 1b. Spawn TurtleBot3 burgers at the recorded dot x/y, yaw 0 ─────
         # (2 s; zero yaw keeps the odom frame axis-aligned with the world —
