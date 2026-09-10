@@ -38,7 +38,11 @@ def main():
     ap.add_argument("--stamp-min", type=float, default=None, help="sim stamp lower bound")
     ap.add_argument("--stamp-max", type=float, default=None, help="sim stamp upper bound")
     ap.add_argument("--search-deg", type=float, default=20.0,
-                    help="matcher angular search half-width to compare against")
+                    help="matcher angular search half-width to compare against; "
+                         "the 20.0 default is slam_toolbox's "
+                         "coarse_search_angle_offset, 0.349 rad, pinned in "
+                         "experiments/nav/slam_robot*.yaml and "
+                         "experiments/slam/offline_mapping.yaml.template")
     args = ap.parse_args()
 
     want = {(f"robot_{n}/odom", f"robot_{n}/base_footprint"): n for n in args.robots}
