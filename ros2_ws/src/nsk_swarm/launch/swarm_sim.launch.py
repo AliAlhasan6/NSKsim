@@ -269,6 +269,16 @@ def generate_launch_description():
             # as PoseStamped keeps the sim timestamp that a bare Pose drops.
             f'/model/robot_{n}/pose'
             '@geometry_msgs/msg/PoseStamped[gz.msgs.Pose',
+            # Wheel joint state, gz→ROS only. JointStatePublisher in the
+            # burger SDF publishes gz.msgs.Model (a Model envelope carrying
+            # per-joint axis1 position and velocity), already namespaced to
+            # /robot_N/joint_states by make_namespaced_burger_sdf. The bridge
+            # registers Model→JointState; verified live 2026-09-11, the bridge
+            # logging "Creating GZ->ROS Bridge: [/robot_0/joint_states
+            # (gz.msgs.Model) -> ... (sensor_msgs/msg/JointState)]". Needed to
+            # separate wheel rotation from body rotation in the B1.8 analysis.
+            f'/robot_{n}/joint_states'
+            '@sensor_msgs/msg/JointState[gz.msgs.Model',
         ]
 
     # All 5 DiffDrive plugins publish their dynamic odom→base_footprint
