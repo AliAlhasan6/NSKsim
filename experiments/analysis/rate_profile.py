@@ -15,6 +15,13 @@ v2 adds the three things v1's output made necessary:
 
 v1's rate table, windows and reproduction check are unchanged.
 
+v3 adds two per-sample exports for steady_gate.py -- _odomgrid.csv (odometry
+at its own stamps, yaw and planar position, the only stream the steady-motion
+mask may be built from) and _truthgrid.csv (truth at its own stamps with
+odometry interpolated onto them). See export_grids() for why the second
+resamples the opposite way round from the tables here. _samples.csv is
+unchanged; rest_anchors.py reads it.
+
 SIGN CONVENTION, stated once and used everywhere:
   angles are signed, positive counter-clockwise; excess = d_odom - d_truth.
   With a net-negative (clockwise) run, a NEGATIVE excess means odometry
@@ -160,6 +167,67 @@ def increments(t_truth, y_truth, t_odom, y_odom):
     t_mid = 0.5 * (t[:-1] + t[1:])
     good = dt > 0.0
     return t_mid[good], dt[good], d_truth[good], d_odom[good]
+
+
+def export_grids(outdir, base, t_tr, y_tr, x_tr, yp_tr, t_od, y_od, x_od,
+                 yp_od, verbose=True):
+    """Write the two per-sample views steady_gate.py consumes.
+
+    Both are derived from the SAME clean() output as every table above, so
+    there is one definition of each series in this repo and it lives here.
+
+    ODOM GRID -- odometry at its own 50 Hz stamps, nothing interpolated. This
+    is the only stream steady_gate.py is allowed to build its mask from, and
+    50 Hz is what makes its 5-sample median filter a 100 ms window.
+
+    TRUTH GRID -- truth at its own 16.6-20 Hz stamps, with odometry linearly
+    interpolated onto them. This is the reverse of the resampling the tables
+    above use, and deliberately so: increments summed over a window telescope
+    to the difference of the endpoints, so whichever stream is interpolated
+    carries all the endpoint error. Putting it on odometry leaves the
+    reference exact, and odometry is the stream that is sampled 2.5x faster,
+    so its interpolation spans 20 ms rather than 50-60 ms.
+
+    Yaw is unwrapped radians out of clean(), written here in degrees. The two
+    streams do NOT share a yaw origin -- odom is pinned to the spawn pose and
+    truth to the world origin -- so only DIFFERENCES within a stream mean
+    anything. Same for x and y.
+
+    Neither view extrapolates: each is clipped to the span the other covers,
+    and what that dropped is printed.
+    """
+    lo_tr, hi_tr = t_tr[0], t_tr[-1]
+    lo_od, hi_od = t_od[0], t_od[-1]
+
+    sel_od = (t_od >= lo_tr) & (t_od <= hi_tr)
+    sel_tr = (t_tr >= lo_od) & (t_tr <= hi_od)
+    if int(np.sum(sel_od)) < 3 or int(np.sum(sel_tr)) < 3:
+        sys.exit("ABORT: the odom and truth spans overlap in fewer than 3 "
+                 "samples; there is nothing to resample onto")
+
+    path = os.path.join(outdir, base + "_odomgrid.csv")
+    with open(path, "w") as fh:
+        fh.write("t_sim,yaw_odom_deg,x_odom_m,y_odom_m\n")
+        for t, yaw, x, y in zip(t_od[sel_od], np.degrees(y_od[sel_od]),
+                                x_od[sel_od], yp_od[sel_od]):
+            fh.write("%.4f,%.6f,%.6f,%.6f\n" % (t, yaw, x, y))
+
+    t_q = t_tr[sel_tr]
+    path = os.path.join(outdir, base + "_truthgrid.csv")
+    with open(path, "w") as fh:
+        fh.write("t_sim,yaw_truth_deg,x_truth_m,y_truth_m,"
+                 "yaw_odom_deg,x_odom_m,y_odom_m\n")
+        cols = (t_q, np.degrees(y_tr[sel_tr]), x_tr[sel_tr], yp_tr[sel_tr],
+                np.degrees(np.interp(t_q, t_od, y_od)),
+                np.interp(t_q, t_od, x_od), np.interp(t_q, t_od, yp_od))
+        for row in zip(*cols):
+            fh.write("%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n" % row)
+
+    if verbose:
+        print("  odom grid  %d of %d odom samples inside the truth span"
+              % (int(np.sum(sel_od)), t_od.size))
+        print("  truth grid %d of %d truth samples inside the odom span"
+              % (int(np.sum(sel_tr)), t_tr.size))
 
 
 def truth_speed_at(t_tr, x, y, t_query):
@@ -341,7 +409,7 @@ def analyse_robot(bag, series, robot, args, outdir, tag):
     odom_topic = "/robot_%d/odom" % robot
 
     t_tr, y_tr, x_tr, yp_tr = clean(*series[truth_topic])
-    t_od, y_od, _, _ = clean(*series[odom_topic])
+    t_od, y_od, x_od, yp_od = clean(*series[odom_topic])
 
     print("\n" + "=" * 70)
     print("%s  robot_%d" % (os.path.basename(bag.rstrip("/")), robot))
@@ -442,7 +510,10 @@ def analyse_robot(bag, series, robot, args, outdir, tag):
                 fh.write("%.4f,%.5f,%.6f,%.6f,%.6f,%.4f,%.5f\n"
                          % (t_mid[i], dt[i], d_truth[i], d_odom[i],
                             d_odom[i] - d_truth[i], rate[i], speed[i]))
-        print("\nwrote %s_{rate,speed,samples}.csv to %s" % (base, outdir))
+        export_grids(outdir, base, t_tr, y_tr, x_tr, yp_tr,
+                     t_od, y_od, x_od, yp_od)
+        print("\nwrote %s_{rate,speed,samples,odomgrid,truthgrid}.csv to %s"
+              % (base, outdir))
 
 
 def main():
