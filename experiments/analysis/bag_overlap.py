@@ -131,6 +131,102 @@ def resolve_spawn_poses(rev: str = BAG_ERA_REV) -> list[tuple[float, float]]:
     return [(float(x), float(y)) for x, y, _yaw in table[:NUM_ROBOTS]]
 
 
+# ───────────────── step 1b: corroborate the revision against a bag ──────────
+#
+# resolve_spawn_poses() will happily return a table from the wrong era. The
+# default BAG_ERA_REV is a 3.8 m ring; everything recorded after e864ae7
+# (2026-07-25) is a 0.9 m pentagon, and the two put robot_0 3.15 m apart. A
+# parked robot's ground-truth pose IS its spawn pose, so any robot that never
+# moved pins the revision exactly.
+
+STATIC_EPS_M = 0.01   # total displacement below which a robot counts as parked
+SPAWN_TOL_M = 0.05
+SPAWN_TOL_DEG = 0.5
+
+
+def read_first_truth_poses(bag) -> tuple[dict, dict]:
+    """First ground-truth pose and furthest excursion per robot.
+
+    Returns (first_pose, max_disp): first_pose[n] -> (x, y, yaw), and
+    max_disp[n] -> the largest distance from that first pose over the bag.
+    Robots without a /model/robot_N/pose topic are simply absent.
+
+    Like read_bag(), this is a ROS-touching function, so its imports live in
+    it: see the module docstring.
+    """
+    import rosbag2_py
+    from geometry_msgs.msg import PoseStamped
+    from rclpy.serialization import deserialize_message
+
+    bag = Path(bag)
+    if not bag.is_dir():
+        die(f'bag not found: {bag}')
+
+    reader = rosbag2_py.SequentialReader()
+    reader.open(
+        rosbag2_py.StorageOptions(uri=str(bag), storage_id='mcap'),
+        rosbag2_py.ConverterOptions('', ''),
+    )
+    available = {t.name for t in reader.get_all_topics_and_types()}
+    wanted = [f'/model/robot_{n}/pose' for n in range(NUM_ROBOTS)
+              if f'/model/robot_{n}/pose' in available]
+    if not wanted:
+        die(f'bag {bag.name} carries no /model/robot_N/pose topic, so the '
+            f'spawn revision cannot be corroborated against it. Bags recorded '
+            f'before 662abe2 (2026-09-10) have no ground truth.')
+    reader.set_filter(rosbag2_py.StorageFilter(topics=wanted))
+
+    first_pose: dict[int, tuple[float, float, float]] = {}
+    max_disp: dict[int, float] = {}
+    while reader.has_next():
+        topic, data, _recv = reader.read_next()
+        n = int(re.fullmatch(r'/model/robot_(\d)/pose', topic).group(1))
+        msg = deserialize_message(data, PoseStamped)
+        p, q = msg.pose.position, msg.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        if n not in first_pose:
+            first_pose[n] = (p.x, p.y, yaw)
+            max_disp[n] = 0.0
+        d = math.hypot(p.x - first_pose[n][0], p.y - first_pose[n][1])
+        if d > max_disp[n]:
+            max_disp[n] = d
+    return first_pose, max_disp
+
+
+def check_spawn_against_truth(first_pose, max_disp, spawn,
+                              rev) -> tuple[bool, list[str], int]:
+    """Do the parked robots sit on this DOT_POSES table?
+
+    Pure: no I/O, no bag, so both the fitter and the truth-pose rewriter can
+    share one implementation. Returns (ok, report_lines, n_parked); ok is
+    False only on a genuine mismatch, so a bag where nothing is parked returns
+    (True, ..., 0) and leaves the "inconclusive" policy to the caller.
+    """
+    lines, parked, bad = [], 0, 0
+    for n in sorted(first_pose):
+        x, y, yaw = first_pose[n]
+        disp = max_disp[n]
+        if disp >= STATIC_EPS_M:
+            lines.append(f'  robot_{n}: moved {disp:7.3f} m -- not a witness')
+            continue
+        parked += 1
+        dx = math.hypot(x - spawn[n][0], y - spawn[n][1])
+        dyaw = abs(math.degrees((yaw + math.pi) % (2 * math.pi) - math.pi))
+        ok = dx <= SPAWN_TOL_M and dyaw <= SPAWN_TOL_DEG
+        bad += not ok
+        lines.append(
+            f'  robot_{n}: parked ({disp:.4f} m), truth ({x:+.3f}, {y:+.3f}) vs '
+            f'DOT_POSES ({spawn[n][0]:+.3f}, {spawn[n][1]:+.3f}) -- '
+            f'{dx * 1000:.1f} mm, {dyaw:.3f} deg  {"ok" if ok else "MISMATCH"}')
+    if bad:
+        lines.append(f'  {bad} parked robot(s) do not match DOT_POSES @ {rev}: '
+                     f'the spawn table is from the wrong era for this bag.')
+    elif parked:
+        lines.append(f'  ok -- {parked} parked robot(s) corroborate {rev}')
+    return bad == 0, lines, parked
+
+
 # ────────────────────────────── step 2: read ────────────────────────────────
 
 def read_bag():

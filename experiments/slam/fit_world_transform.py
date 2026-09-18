@@ -57,8 +57,10 @@ from bag_overlap import (  # noqa: E402
     BAG_ERA_REV,
     NUM_ROBOTS,
     ON_WALL_TOL,
+    check_spawn_against_truth,
     die,
     dist_to_nearest_wall,
+    read_first_truth_poses,
     resolve_spawn_poses,
     world_walls,
 )
@@ -685,6 +687,12 @@ def main() -> None:
                     help='git rev whose launch-file DOT_POSES gives the spawn '
                          'poses for this run (default %(default)s, the phaseB '
                          'bag era)')
+    ap.add_argument('--bag',
+                    help='bag this run was mapped from. Used only to '
+                         'corroborate --spawn-rev against robots that never '
+                         'moved; without it the spawn table is unverified. '
+                         'Reading a bag needs the ROS environment, so this is '
+                         'the one flag that does not run from a bare venv')
     args = ap.parse_args()
 
     RUN = args.run
@@ -716,6 +724,29 @@ def main() -> None:
           f'DOT_POSES @ {args.spawn_rev}):')
     for n in robots:
         print(f'  robot_{n}: x={spawn[n][0]:+.3f}  y={spawn[n][1]:+.3f}')
+
+    # The free fit never sees these poses -- it searches the full correlation
+    # at every theta -- so a wrong table cannot move a score. It moves the
+    # analytic candidates instead, and the eras are 3.15 m apart against an
+    # AGREE_XY_M of 0.25, so every candidate misses and the run reports
+    # UNRESOLVED: a frame-chain bug that was never there. Hence this gate.
+    spawn_checked = False
+    if args.bag:
+        first_pose, max_disp = read_first_truth_poses(args.bag)
+        ok, lines, parked = check_spawn_against_truth(
+            first_pose, max_disp, spawn, args.spawn_rev)
+        print(f'\nspawn-rev corroboration against {rel(Path(args.bag))}:')
+        for line in lines:
+            print(line)
+        if not ok:
+            die(f'the spawn table at {args.spawn_rev} does not describe '
+                f'{args.bag}. Re-run with the revision that does.')
+        if not parked:
+            print('  no robot was parked, so the revision stays unverified')
+        spawn_checked = bool(parked)
+    else:
+        print('\n  spawn table UNVERIFIED -- pass --bag to corroborate it '
+              'against the parked robots')
 
     print(f'\nwall mask: {mask.shape[1]} x {mask.shape[0]} cells @ {COARSE_CELL} m, '
           f'origin ({wx0:.1f}, {wy0:.1f}), {int(mask.sum())} on-wall cells')
@@ -794,6 +825,8 @@ def main() -> None:
                         for n in range(NUM_ROBOTS)},
         'spawn_source': f'bag_overlap.resolve_spawn_poses({args.spawn_rev!r}) '
                         f'-- DOT_POSES @ {args.spawn_rev}, yaw not applied',
+        'spawn_rev_corroborated': spawn_checked,
+        'spawn_rev_corroborated_against': args.bag,
         'coarse': {'cell_m': COARSE_CELL, 'theta_step_deg': THETA_STEP,
                    'theta_range_deg': [-180.0, 180.0], 'n_peaks': N_PEAKS,
                    'nms_radius_m': NMS_RADIUS},
