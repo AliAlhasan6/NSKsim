@@ -10,9 +10,14 @@
 # map->odom transforms that would fight the offline SLAM's -- producing e.g.
 # experiments/logs/b16/b16_slamin, which is then the BAG for this script.
 #
+# SCAN_MATCHING=false turns slam_toolbox into a known-pose mapper; only use it
+# on a bag whose odom->base_footprint is ground truth (rewrite_odom_from_truth.py).
+#
 #   source /opt/ros/jazzy/setup.bash
 #   cd ~/Desktop/NSKsim
 #   BAG=experiments/logs/b16/b16_slamin DUR_1=2143 RATE=2.0 bash experiments/slam/run_offline_maps.sh 1
+#   BAG=experiments/logs/b18/b18r2_truth_slamin RUN=b18r2_truth RATE=2.0 \
+#     SCAN_MATCHING=false bash experiments/slam/run_offline_maps.sh 0
 
 set -uo pipefail
 
@@ -35,6 +40,16 @@ RATE="${RATE:-1.0}"
 # and the final loop-closure pass needs a moment beyond that.
 SETTLE="${SETTLE:-8}"
 
+# slam_toolbox's use_scan_matching. Default true -- the generated params are
+# then byte-identical to every run before this switch existed.
+#
+# With it false slam_toolbox never calls MatchScan: each scan keeps the pose it
+# was handed, map->odom stays identity, and the pose graph is never built, so
+# do_loop_closing has no effect whatever it says. That makes this a
+# deterministic known-pose mapper, which is only meaningful when the bag's
+# odom->base_footprint IS ground truth -- see rewrite_odom_from_truth.py.
+SCAN_MATCHING="${SCAN_MATCHING:-true}"
+
 mkdir -p "$MAPDIR" "$LOGDIR"
 
 die() { echo -e "\nFATAL: $*\n" >&2; exit 1; }
@@ -45,6 +60,9 @@ die() { echo -e "\nFATAL: $*\n" >&2; exit 1; }
 [[ -f "$TEMPLATE" ]] || die "params template not found: $TEMPLATE"
 [[ -f "$LAUNCH"   ]] || die "launch file not found: $LAUNCH"
 [[ -f "$SAVER"    ]] || die "save_map.py not found: $SAVER"
+
+[[ "$SCAN_MATCHING" == "true" || "$SCAN_MATCHING" == "false" ]] || \
+  die "SCAN_MATCHING must be exactly 'true' or 'false', got: $SCAN_MATCHING"
 
 command -v ros2 >/dev/null 2>&1 || \
   die "ros2 is not on PATH. Run: source /opt/ros/jazzy/setup.bash"
@@ -94,8 +112,11 @@ for N in "${ROBOTS[@]}"; do
 
   # Params live in experiments/logs/, not /tmp -- /tmp is wiped on reboot and
   # these are the record of what produced each map.
-  sed "s/__ROBOT__/$N/g" "$TEMPLATE" > "$PARAMS"
+  sed -e "s/__ROBOT__/$N/g" -e "s/__SCAN_MATCHING__/$SCAN_MATCHING/g" \
+      "$TEMPLATE" > "$PARAMS"
   grep -q "robot_$N/odom" "$PARAMS" || die "substitution failed in $PARAMS"
+  grep -q "use_scan_matching: $SCAN_MATCHING" "$PARAMS" || \
+    die "scan-matching substitution failed in $PARAMS"
 
   rm -f "$OUT.pgm" "$OUT.yaml"
 
