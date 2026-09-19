@@ -198,38 +198,76 @@ def test_a_real_turn_is_still_caught_when_tilted():
 
 STRIP_T0 = BAG_START          # first kept message; /clock usually wins
 BUDGET = 2400.0
+CLOCK_STEP_SIM = 0.01         # 100 Hz, as these runs publish it
 
 
-def budget_case(remaining, offset=55.72, strip_t0=STRIP_T0, budget=BUDGET):
-    """A bag whose first command is `offset` in and which then runs on."""
+def clocks(sim_seconds, rtf, start_recv=BAG_START, start_sim=0.0,
+           step=CLOCK_STEP_SIM):
+    """/clock as (receive_s, sim_s), advancing `step` of sim per message.
+
+    rtf is sim seconds per wall second, so a message costs step/rtf of
+    receive time. rtf=1.0 makes the two clocks agree; rtf=0.5 makes the bag
+    twice as long as the simulation it carries.
+    """
+    n = int(round(sim_seconds / step)) + 1
+    return [(start_recv + i * step / rtf, start_sim + i * step)
+            for i in range(n)]
+
+
+def budget_case(sim_available, rtf=1.0, offset=55.72, strip_t0=STRIP_T0,
+                budget=BUDGET):
+    """A bag whose first command lands `offset` in, on a clock boundary.
+
+    The command is placed exactly on a /clock receive time so sim_start is
+    that message's value and the arithmetic below is exact.
+    """
     t_cmd = strip_t0 + offset
-    return checker.check_budget(strip_t0, t_cmd + remaining, t_cmd, budget)
+    series = clocks(sim_available, rtf, start_recv=t_cmd, start_sim=1000.0)
+    bag_end = series[-1][0]
+    return checker.check_budget(strip_t0, bag_end, t_cmd, budget, series)
 
 
-def test_remaining_above_budget_passes():
-    ok, lines, offset = budget_case(BUDGET + 1.0)
+# ── the budget is in SIM seconds, so --duration tracks RTF ───────────────────
+
+def test_rtf_one_gives_duration_equal_to_the_budget():
+    ok, lines, offset = budget_case(BUDGET + 1.0, rtf=1.0)
     assert ok, '\n'.join(lines)
     assert offset == pytest.approx(55.72)
+    assert any('--start 55.720 --duration 2400.000' in ln for ln in lines)
+    assert any('mean RTF over window' in ln and '1.0000' in ln for ln in lines)
 
 
-def test_remaining_equal_to_budget_passes():
-    """The boundary is inclusive: exactly the budget is enough."""
-    ok, lines, _ = budget_case(BUDGET)
+def test_rtf_half_gives_twice_the_bag_seconds():
+    """The same 2400 s of simulation, bought with 4800 s of recording.
+
+    This is the whole point of the change: a window fixed in bag seconds
+    would have carried only half the simulation here.
+    """
+    ok, lines, _ = budget_case(BUDGET + 1.0, rtf=0.5)
     assert ok, '\n'.join(lines)
+    assert any('--start 55.720 --duration 4800.000' in ln for ln in lines)
+    assert any('mean RTF over window' in ln and '0.5000' in ln for ln in lines)
 
 
-def test_remaining_below_budget_fails():
-    ok, lines, _ = budget_case(BUDGET - 1.0)
+def test_sim_span_is_the_budget_at_either_rtf():
+    for rtf in (1.0, 0.5):
+        _ok, lines, _ = budget_case(BUDGET + 1.0, rtf=rtf)
+        span = [ln for ln in lines if 'sim span of window' in ln][0]
+        assert '2400.000' in span, span
+
+
+def test_clock_ending_short_of_the_budget_fails():
+    ok, lines, offset = budget_case(BUDGET - 1.0, rtf=1.0)
     assert not ok
-    assert any('usable after it' in ln and 'FAIL' in ln for ln in lines)
-    assert any('short by' in ln for ln in lines)
+    assert offset == pytest.approx(55.72)
+    assert any('never advances' in ln for ln in lines)
+    assert not any('--start' in ln for ln in lines)
 
 
-def test_pass_prints_strip_arguments():
-    """On PASS the operator should not have to compute anything."""
-    ok, lines, _ = budget_case(BUDGET + 10.0, offset=55.72)
-    assert ok
-    assert any('--start 55.72 --duration 2400' in ln for ln in lines)
+def test_clock_ending_exactly_at_the_budget_passes():
+    """Inclusive boundary: the clock that reaches the budget is enough."""
+    ok, lines, _ = budget_case(BUDGET, rtf=1.0)
+    assert ok, '\n'.join(lines)
 
 
 def test_fail_prints_no_strip_arguments():
@@ -246,19 +284,67 @@ def test_offset_is_measured_from_the_first_kept_message():
     has a kept-message reference LATER than its own start, and the offset must
     shrink by exactly that gap or --start would overshoot the first command.
     """
-    skew = 2.0
     ok, _lines, offset = budget_case(BUDGET + 1.0, offset=55.72,
-                                     strip_t0=BAG_START + skew)
+                                     strip_t0=BAG_START + 2.0)
     assert ok
     assert offset == pytest.approx(55.72)
 
 
 def test_no_command_fails_the_budget():
-    ok, lines, offset = checker.check_budget(STRIP_T0, STRIP_T0 + 3000.0,
-                                             None, BUDGET)
+    ok, lines, offset = checker.check_budget(
+        STRIP_T0, STRIP_T0 + 3000.0, None, BUDGET, clocks(3000.0, 1.0))
     assert not ok
     assert offset is None
     assert any('nothing to replay' in ln for ln in lines)
+
+
+def test_no_clock_before_the_command_fails():
+    """sim_start is undefined, so the window cannot be placed."""
+    t_cmd = STRIP_T0 + 10.0
+    late = clocks(100.0, 1.0, start_recv=t_cmd + 1.0)
+    ok, lines, _ = checker.check_budget(STRIP_T0, t_cmd + 200.0, t_cmd,
+                                        BUDGET, late)
+    assert not ok
+    assert any('never advances' in ln for ln in lines)
+
+
+# ── sim_window(), the mapping itself ─────────────────────────────────────────
+
+def test_sim_time_is_the_latest_clock_at_or_before_the_event():
+    series = [(100.0, 10.0), (101.0, 11.0), (102.0, 12.0), (103.0, 13.0)]
+    # command at 101.5 -> sim_start is 11.0, the 101.0 message, not 12.0
+    sim_start, t_end, sim_end = checker.sim_window(series, 101.5, 1.0)
+    assert sim_start == pytest.approx(11.0)
+    assert sim_end == pytest.approx(12.0)      # first value >= 11.0 + 1.0
+    assert t_end == pytest.approx(102.0)
+
+
+def test_a_clock_exactly_at_the_event_counts():
+    """'at or before' is inclusive."""
+    series = [(100.0, 10.0), (101.0, 11.0), (102.0, 12.0)]
+    sim_start, _, _ = checker.sim_window(series, 101.0, 1.0)
+    assert sim_start == pytest.approx(11.0)
+
+
+def test_sim_window_returns_none_when_the_budget_is_never_reached():
+    series = [(100.0, 10.0), (101.0, 11.0)]
+    assert checker.sim_window(series, 100.0, 50.0) is None
+
+
+def test_overshoot_beyond_the_slack_fails():
+    """A coarse or gappy /clock must not pass as if it hit the budget.
+
+    One 5 s jump across the boundary overshoots by 4 s, far past the 0.1 s
+    one clock step would cost.
+    """
+    t_cmd = STRIP_T0
+    series = [(t_cmd, 0.0), (t_cmd + 1.0, BUDGET + 4.0)]
+    ok, lines, _ = checker.check_budget(STRIP_T0, t_cmd + 10.0, t_cmd,
+                                        BUDGET, series)
+    assert not ok
+    assert any('sim span of window' in ln and 'FAIL' in ln for ln in lines)
+    assert any('coarse or has a gap' in ln for ln in lines)
+    assert not any('--start' in ln for ln in lines)
 
 
 def test_strip_keep_set_matches_the_strip_script():

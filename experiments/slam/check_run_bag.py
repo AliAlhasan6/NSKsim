@@ -88,7 +88,21 @@ PROLOGUE_MIN_POSES = 50
 # is the robot sitting at spawn. 2400 s is the exploring the B2 maps need per
 # robot. --budget overrides it for a rehearsal, where the point is the
 # procedure rather than the coverage.
+#
+# SIM seconds, not bag seconds. Bag timestamps are receive times on the wall
+# clock (b2maps_e0's zero is 1789835891293813784 ns, 19:38:11 MSK, and its
+# 5959.76 s duration is wall time), Twist carries no header, and RTF differs
+# between runs -- so the same number of bag seconds buys a different amount of
+# simulation each time. /clock is the only record in the bag of how much
+# simulation happened; C4 closes its window on that.
 BUDGET_S = 2400.0
+
+# How far past the budget the window may land. The window ends at the first
+# /clock whose value clears the budget, so the overshoot is at most one clock
+# step: 100 Hz in these runs, i.e. ~10 ms. Anything beyond 0.1 s means /clock
+# is coarser than expected or has a gap across the boundary, and the span is
+# then not the budget it claims to be.
+SIM_SPAN_SLACK_S = 0.1
 
 
 def expected_topics(k: int) -> list[str]:
@@ -161,6 +175,30 @@ def strip_reference_time(bag: Path) -> float | None:
         return None
     _topic, _data, ns = reader.read_next()
     return ns / 1e9
+
+
+def read_clock_series(bag: Path):
+    """Yield (receive_s, sim_s) for every /clock message, in read order.
+
+    A generator so sim_window() can stop the moment the budget is reached
+    rather than deserialising the rest of a 5959 s bag.
+    """
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from rosgraph_msgs.msg import Clock
+
+    reader = rosbag2_py.SequentialReader()
+    reader.open(
+        rosbag2_py.StorageOptions(uri=str(bag), storage_id='mcap'),
+        rosbag2_py.ConverterOptions('', ''),
+    )
+    if '/clock' not in {t.name for t in reader.get_all_topics_and_types()}:
+        return
+    reader.set_filter(rosbag2_py.StorageFilter(topics=['/clock']))
+    while reader.has_next():
+        _topic, data, recv_ns = reader.read_next()
+        c = deserialize_message(data, Clock).clock
+        yield recv_ns / 1e9, c.sec + c.nanosec / 1e9
 
 
 def read_prologue_series(bag: Path, k: int) -> tuple[list, list]:
@@ -267,15 +305,54 @@ def check_prologue(bag_start: float, cmds, poses, spawn_xy) -> tuple[bool, list]
     return ok, lines
 
 
+def sim_window(clocks, t_cmd: float, budget: float):
+    """Where BUDGET_S seconds of SIM time after t_cmd end, in receive time.
+
+    `clocks` is an iterable of (receive_s, sim_s) in read order. The sim time
+    of an event is the latest /clock value received at or before it, so
+    sim_start is the last clock at or before the command, and the window ends
+    at the RECEIVE time of the first clock whose VALUE has advanced a full
+    budget past that.
+
+    Returns (sim_start, t_end, sim_end), or None if the bag runs out of clock
+    before the budget is reached, or if no clock preceded the command.
+    """
+    sim_start = None
+    target = None
+    for recv, sim in clocks:
+        if recv <= t_cmd:
+            sim_start = sim              # latest so far wins
+            continue
+        if sim_start is None:
+            return None                  # command precedes every /clock
+        if target is None:
+            target = sim_start + budget
+        if sim >= target:
+            return sim_start, recv, sim
+    return None
+
+
 def check_budget(strip_t0: float, bag_end: float, t_cmd: float | None,
-                 budget: float) -> tuple[bool, list, float | None]:
+                 budget: float, clocks=()) -> tuple[bool, list, float | None]:
     """C4, pure so it can be tested without a bag.
 
-    Returns (ok, report lines, offset). The offset is in
+    The budget is SIM seconds, not bag seconds. Bag timestamps are the
+    recorder's receive times on the wall clock -- Twist carries no header, so
+    there is nothing else to stamp a command with -- and RTF varies between
+    runs and within one. A window measured in bag seconds would therefore
+    cover a different amount of simulation in every run, which is not a
+    stopping rule. /clock is the only thing in the bag that says how much
+    simulation has actually happened, so the window is closed on it and then
+    converted back to bag seconds for the strip script.
+
+    Returns (ok, report lines, offset). The offset stays in
     strip_bag_for_offline_slam.py's convention -- seconds from the first
     message that script would keep -- so it can be handed straight to its
-    --start. Everything before it is the robot sitting at spawn, which is
-    exactly what the offline replay should skip.
+    --start. --duration is the window's BAG span, because that is what the
+    strip script's --duration means (its help, line 53: "segment length in bag
+    seconds"), and its window is closed at both ends: `stamp < cut_start`
+    skips and `stamp > cut_end` breaks, so the clock message that reaches the
+    budget is inside the cut.
     """
     lines = []
     if t_cmd is None:
@@ -284,22 +361,41 @@ def check_budget(strip_t0: float, bag_end: float, t_cmd: float | None,
         return False, lines, None
 
     offset = t_cmd - strip_t0
-    remaining = bag_end - t_cmd
-    ok = remaining >= budget
-
-    lines.append(f'  first nonzero command at {offset:.2f} s '
+    lines.append(f'  first nonzero command at {offset:.3f} s '
                  '(strip convention: from the first kept message)')
-    lines.append(f'  bag ends              {bag_end - strip_t0:.2f} s')
-    lines.append(f'  usable after it       {remaining:8.2f} s  (need >= '
-                 f'{budget:.0f})  {_verdict(ok)}')
-    if ok:
-        lines.append('  strip this segment with:')
-        lines.append(f'    --start {offset:.2f} --duration {budget:.0f}')
-    else:
-        lines.append(f'  short by {budget - remaining:.2f} s. The run stopped '
-                     'too early to map from; record a longer one rather than '
-                     'lowering the budget.')
-    return ok, lines, offset
+
+    found = sim_window(clocks, t_cmd, budget)
+    if found is None:
+        lines.append(f'  /clock never advances {budget:.0f} s of SIM time '
+                     'after that command')
+        lines.append(f'  bag ends {bag_end - t_cmd:.3f} s later in receive '
+                     'time, which was not enough')
+        lines.append(f'  usable sim after it    short of {budget:.0f}  FAIL')
+        lines.append('  the run stopped too early to map from; record a '
+                     'longer one rather than lowering the budget.')
+        return False, lines, offset
+
+    sim_start, t_end, sim_end = found
+    duration = t_end - t_cmd
+    sim_span = sim_end - sim_start
+    rtf = sim_span / duration if duration > 0 else float('nan')
+    tight = budget <= sim_span < budget + SIM_SPAN_SLACK_S
+
+    lines.append(f'  sim at that command   {sim_start:.3f} s')
+    lines.append(f'  sim span of window    {sim_span:8.3f} s  (need >= '
+                 f'{budget:.0f} and < {budget + SIM_SPAN_SLACK_S:.1f})  '
+                 f'{_verdict(tight)}')
+    lines.append(f'  bag span of window    {duration:8.3f} s')
+    lines.append(f'  mean RTF over window  {rtf:8.4f}')
+    if not tight:
+        lines.append('  the window overshoots the budget by more than one '
+                     '/clock step, so /clock is coarse or has a gap here. '
+                     'Read it before cutting.')
+        return False, lines, offset
+
+    lines.append('  strip this segment with:')
+    lines.append(f'    --start {offset:.3f} --duration {duration:.3f}')
+    return True, lines, offset
 
 
 def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
@@ -417,10 +513,12 @@ def main() -> int:
         print(f'  -> {"PASS" if ok else "FAIL"}\n')
 
     # ── C4 BUDGET ──
-    print(f'C4 BUDGET -- at least {args.budget:.0f} s of bag after robot_{k} '
-          'was first commanded')
-    if counts.get(cmd_topic, 0) == 0:
-        print(f'  {cmd_topic} missing (C1), so the replay start is unknown')
+    print(f'C4 BUDGET -- at least {args.budget:.0f} s of SIM time after '
+          f'robot_{k} was first commanded')
+    if counts.get(cmd_topic, 0) == 0 or counts.get('/clock', 0) == 0:
+        absent = [t for t in (cmd_topic, '/clock') if counts.get(t, 0) == 0]
+        print(f'  {", ".join(absent)} missing (C1), so the sim-time window '
+              'cannot be placed')
         print('  -> NOT EVALUATED\n')
         results['C4'] = None
     else:
@@ -438,7 +536,8 @@ def main() -> int:
                       "the bag's first message, so this offset is NOT the "
                       "same as C3's prologue length")
             ok, lines, _offset = check_budget(
-                strip_t0, bag_end, first_nonzero_cmd(cmds), args.budget)
+                strip_t0, bag_end, first_nonzero_cmd(cmds), args.budget,
+                read_clock_series(bag))
             for line in lines:
                 print(line)
             results['C4'] = ok
