@@ -1,6 +1,7 @@
 # SPEC — truth-pose replay (known-pose mapping probe)
 
-Entry point: `HANDOFF_2026-09-18_two_layer_known_pose_mapping.md` §5.
+Entry point: §5 of
+`docs/handoffs/HANDOFF_2026-09-18_two_layer_known_pose_mapping.md`.
 Goal: map robot_0 of `b18_run2` from real scans placed at ground-truth poses,
 and decide whether that removes the rotated wall copies.
 
@@ -338,10 +339,10 @@ fit.
 
 ## 4.1 Results — the 2×2, run 2026-09-19
 
-Taken from `HANDOFF_2026-09-19_known_pose_2x2.md` §5, not re-derived here. All
-four arms use the same scans and the same fitter, with `--spawn-rev 08617b2
---bag b18_run2` corroborated by all four parked robots. Fit scores are
-convention A. Consoles and fits are in
+Taken from §5 of `docs/handoffs/HANDOFF_2026-09-19_known_pose_2x2.md`, not
+re-derived here. All four arms use the same scans and the same fitter, with
+`--spawn-rev 08617b2 --bag b18_run2` corroborated by all four parked robots.
+Fit scores are convention A. Consoles and fits are in
 `experiments/logs/b18/arm{A,B,C,D}_{console,fit}.txt`.
 
 | Arm | Poses | Matcher | Fit | Peaks 2–5 | map→odom | Occupied (grid) | Drops |
