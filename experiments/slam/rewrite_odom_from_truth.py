@@ -2,12 +2,18 @@
 """Rewrite a bag's odom->base_footprint TF from Gazebo ground-truth poses.
 
 Why this exists (2026-09-18, the two-layer known-pose probe):
-  b18_run2's robot_0 map shows the same walls in two or three copies rotated
-  10-40 degrees about a common point. The hypothesis is that accumulated
-  odometric drift feeds the scan matcher. This script builds the bag that
-  tests it: the real scans, placed at ground truth instead of at odometry.
-  Replayed through slam_toolbox with use_scan_matching:false, that is a
-  deterministic known-pose mapper -- no matcher, no loop closure.
+  b18_run2's robot_0 map, built on odometry, does not describe the world: it
+  fits the known walls at 21.9%, which is noise level, and its map->odom ends
+  4.76 m and +44.35 degrees from identity (arm A, 2026-09-19). Nobody has
+  inspected that map's image, so how it fails -- rotated copies of the walls,
+  or some other way -- is not known here. The duplicated walls are b16's
+  finding, not this bag's.
+
+  The hypothesis is that accumulated odometric drift feeds the scan matcher.
+  This script builds the bag that tests it: the real scans, placed at ground
+  truth instead of at odometry. Replayed through slam_toolbox with
+  use_scan_matching:false, that is a deterministic known-pose mapper -- no
+  matcher, no loop closure.
 
 What it does:
   Removes every robot_N/odom -> robot_N/base_footprint transform from /tf and
