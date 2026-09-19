@@ -44,9 +44,21 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from PIL import Image, ImageDraw
-from scipy.ndimage import maximum_filter
-from scipy.signal import fftconvolve
+
+# PIL and scipy are imported inside the three functions that use them --
+# load_map, coarse_search and render -- not here. CI imports this module only
+# to reach placements_coincide() and merge_groups() for the merge tests
+# (test_fit_world_transform.py), and its ros:jazzy container has neither
+# library: nothing in ros-core, navigation2, nav2-bringup or slam-toolbox
+# pulls python3-pil or python3-scipy, and the pip installs in ci.yml name
+# scipy only as an extra (torch_geometric[full], networkx[default]). A
+# module-level import of either is therefore a COLLECTION error that takes
+# the whole nsk_swarm suite down, not just these tests -- which is what
+# happened on 03d666c. numpy and yaml stay here: both are present in that
+# container, and every function in this file needs numpy anyway.
+#
+# Same convention bag_overlap.py already uses for rosbag2_py and the ROS
+# message types (bag_overlap.py:157, 242).
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'analysis'))
@@ -194,6 +206,8 @@ def load_map(n: int, stem: str | None = None) -> dict:
     passes the phaseB_run1 stem explicitly because its expected figures belong
     to that map.
     """
+    from PIL import Image
+
     stem = MAP_STEM if stem is None else stem
     pgm = MAPS_DIR / f'{stem}{n}.pgm'
     meta_path = MAPS_DIR / f'{stem}{n}.yaml'
@@ -380,6 +394,9 @@ def coarse_search(pts, c, mask, wx0, wy0, thetas) -> tuple[list[dict], dict]:
     COARSE_CELL -- so they seed the refinement and are never reported as
     results.
     """
+    from scipy.ndimage import maximum_filter
+    from scipy.signal import fftconvolve
+
     mask_f = mask.astype(np.float64)
     mh, mw = mask.shape
     nms_cells = int(round(NMS_RADIUS / COARSE_CELL))
@@ -597,6 +614,8 @@ def render(m: dict, convention: str, fit: dict, rects, out_path: Path) -> None:
     robot_2 (good map, wrong placement) and robot_3 (genuinely broken).
     Drawn with PIL to stay inside this script's dependency list.
     """
+    from PIL import Image, ImageDraw
+
     x0 = min(r[0] for r in rects) - MASK_MARGIN
     x1 = max(r[1] for r in rects) + MASK_MARGIN
     y0 = min(r[2] for r in rects) - MASK_MARGIN
