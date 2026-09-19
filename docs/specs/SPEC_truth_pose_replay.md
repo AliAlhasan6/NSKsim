@@ -7,6 +7,9 @@ and decide whether that removes the rotated wall copies.
 Status 2026-09-18: Parts 1 and 2 built. Part 3 is a run, not a change, and is
 not done here.
 
+Status 2026-09-19: Part 3 run, all four arms, `b18_run2` robot_0 only. Results
+and the one missed prediction are in §4.1.
+
 ---
 
 ## 0. Source facts behind this spec
@@ -290,7 +293,7 @@ dx −4.450, dy +0.442, and convention B 34.1 % at θ +91.20, unchanged.
 
 ---
 
-## 4. Part 3 — three arms on `b18_run2`, robot_0 only (Ali runs)
+## 4. Part 3 — four arms on `b18_run2`, robot_0 only (Ali runs)
 
 Pass `--spawn-rev 08617b2` to both `rewrite_odom_from_truth.py` and
 `fit_world_transform.py`, and `--bag` to the fitter so the table is
@@ -305,8 +308,13 @@ this matters more than usual — though a 60 ms period still sits well inside
 | Arm | Bag | Matching | Prediction |
 |---|---|---|---|
 | A control | original | on | Fails the 80 % floor, with rotated copies |
-| B locked layer | truth | off | Clears 80 %; fitted world pose equals `truth_anchor.txt` within one map cell and 0.5° |
+| B locked layer | truth | off | Clears 80 %; fitted world pose equals `truth_anchor.txt` within one map cell and 0.5° — **MISSED**, §4.1 |
 | C matcher on truth | truth | on | Optional. Shows whether the matcher disturbs correct poses |
+| D odometry, matching off | original | off | `map → odom` identity; flat peaks below the floor; more occupied cells than A's 2304 |
+
+Arm D completes the 2×2 (poses × matcher) and was added on 2026-09-19, after
+A–C had run. Its prediction above was written before it was run, as all four
+were.
 
 Run a ~120 s slice of arm B first (`DUR_0`) and confirm a non-empty PGM before
 committing to a full replay — that is the cheap test of the §0 claim that
@@ -325,6 +333,57 @@ fit.
 - A passes → `b18_run2` does not show the defect and cannot test the fix.
   Read the peak profile, not only the score. This branch is now unlikely:
   robot_0 carries 121° of odometry error at bag t=0 (§1.2).
+
+---
+
+## 4.1 Results — the 2×2, run 2026-09-19
+
+Taken from `HANDOFF_2026-09-19_known_pose_2x2.md` §5, not re-derived here. All
+four arms use the same scans and the same fitter, with `--spawn-rev 08617b2
+--bag b18_run2` corroborated by all four parked robots. Fit scores are
+convention A. Consoles and fits are in
+`experiments/logs/b18/arm{A,B,C,D}_{console,fit}.txt`.
+
+| Arm | Poses | Matcher | Fit | Peaks 2–5 | map→odom | Occupied (grid) | Drops |
+|---|---|---|---|---|---|---|---|
+| B | truth | off | **96.1 %** | 96.1 67.8 67.8 62.7 | identity | 515 (106×97) | 1 |
+| C | truth | on | 76.1 % | 76.1 51.1 51.1 46.0 | 0.98 m, +0.44° | 548 (105×94) | 1 |
+| A | odometry | on | 21.9 % | 21.9 21.8 21.7 20.9 | 4.76 m, +44.35° | 2304 (218×161) | 0 |
+| D | odometry | off | 14.4 % | 14.4 14.4 14.3 13.9 | identity | 6009 (189×203) | 0 |
+
+In B, peaks 1 and 2 tie because the world's 180° twin fits equally well. The
+truth anchor decides between them.
+
+The branch taken is the first in "Reading the result" above: A fails, B clears
+the floor. The three predictions about scores and peak shape held. The fourth,
+about the anchor, did not.
+
+**Arm B's anchor prediction MISSED.** §4 predicted the fitted world pose would
+land within one map cell (0.10 m) and 0.5° of spawn. Measured against peak 2 —
+the peak the spawn placement actually lands on — it was **1.00° and 0.12 m**
+(dx 0.106, dy 0.054). Both bounds were exceeded.
+
+The substitute criterion that was reported instead, **"the spawn placement
+scores level with the best fit (96.1 %)"**, was chosen **after** seeing the
+result. It is recorded here as **post hoc** and carries none of the weight of a
+prediction. What can be said without hindsight is that the 0.5° bound was set
+without checking what this fitter resolves: its own self-check already treats a
+1.5° difference along the score plateau as "reported, not gated". Rerunning B
+would not change this — with matching off the arm is deterministic up to one
+dropped scan, and the gap is in the fitter, not the map.
+
+Two further readings, both n = 1 on one robot and one run:
+
+- **The matcher is not neutral.** On perfect poses it costs 20 points (C
+  against B) and drifts `map → odom` by 0.98 m. That is a second reason, beyond
+  determinism, to run the locked layer with matching off.
+- **The odometry arms cannot be ranked by score.** Below the 80 % floor the
+  fitter is largely fitting the map's own noise. Occupied cells rank them
+  instead: 6009 in D and 2304 in A, against about 530 in the truth arms.
+
+B's remaining 3.9 % off-wall is unexplained. The four parked peers appear in
+the scans but not in the wall mask, which would make them part of the open
+perception layer rather than a defect — but that is a guess, not a measurement.
 
 ---
 
@@ -364,5 +423,6 @@ Discovery reads the TF and pose topics only — 792,017 messages in ~34 s.
   the bag has no `/clock` (`b18_run2` has 193,131) and cites "~4340 msgs each"
   for `odom → base_footprint` (96,522 here). Cosmetic; left alone so the
   byte-for-byte guarantee of §3 stays checkable against the b16-era files.
-- `SPEC_b2_steady_gate.md` is still owed to `docs/specs/` (handoff §7). This
-  document is the first file in that directory.
+- `SPEC_b2_steady_gate.md` was owed to `docs/specs/` (handoff §7) and landed in
+  the preceding commit, recovered from the chat it was written in. This
+  document was the first file in that directory; it is now the second.
