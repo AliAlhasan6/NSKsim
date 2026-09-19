@@ -15,6 +15,10 @@ reference any analytic candidate could be expected to reproduce; those robots
 are printed as diagnostics instead. If no candidate agrees even on the
 well-fitting maps, this says so rather than promoting the nearest miss.
 
+Candidates that land on the same placement are merged before the verdict is
+formed (see MERGE_XY_M), so one placement reached two ways cannot report itself
+as an ambiguity between two.
+
 Pure numpy / scipy / PyYAML / PIL -- no rclpy, no rosbag2_py, no ROS at all.
 Runs inside the venv:
 
@@ -96,6 +100,27 @@ REFINE_XY_STEP = 0.02
 # metres under every candidate).
 AGREE_THETA_DEG = 1.0
 AGREE_XY_M = 0.25
+
+# ── coincident candidates ────────────────────────────────────────────────────
+# The two directions are different compositions but not always different
+# PLACEMENTS. world_T_odom o map_T_odom and world_T_odom o inverse(map_T_odom)
+# land on the same spot whenever map_T_odom is its own inverse. Identity is the
+# common case -- every run with the matcher off has it -- but it is NOT the
+# only one: any involution does it, a 180 deg rotation included. So the test is
+# on the resulting placement, never on "map->odom is identity".
+#
+# Counting one placement twice made it two winners, and the verdict came out
+# AMBIGUOUS explaining that the world is too symmetric to separate them. That
+# explanation was false: there was one placement, not two the wall overlap
+# could not tell apart. Coincident candidates are therefore merged before the
+# verdict is formed.
+#
+# Half a map cell and 0.1 deg. This is a duplicate test, not an agreement test,
+# so it is far tighter than AGREE_XY_M above: candidates that coincide do so to
+# floating-point noise, while distinct ones are nowhere near (arm C's two
+# directions differ by 0.98 m and 0.44 deg, twenty cells away).
+MERGE_XY_M = 0.05        # half of COARSE_CELL
+MERGE_THETA_DEG = 0.1
 
 # ── which maps the verdict is allowed to rest on ─────────────────────────────
 # A map that does not fit the world at all has a free fit that is fitting its
@@ -517,6 +542,36 @@ def agrees(cand: dict, fit: dict) -> bool:
     return misfit(cand, fit) <= 1.0
 
 
+def placements_coincide(a: dict, b: dict) -> bool:
+    """Whether two candidates land on the same placement.
+
+    Asked of the placement itself, so it catches every transform that is its
+    own inverse rather than only the identity that prompted it.
+    """
+    return (abs(wrap_deg(a['theta'] - b['theta'])) <= MERGE_THETA_DEG
+            and abs(a['dx'] - b['dx']) <= MERGE_XY_M
+            and abs(a['dy'] - b['dy']) <= MERGE_XY_M)
+
+
+def merge_groups(cands: list[dict]) -> list[list[str]]:
+    """Candidate labels grouped by the placement they land on.
+
+    A group of more than one is the same answer reached two ways, and must be
+    counted once. Grouping is by first match; with two candidates per
+    convention a chain cannot arise, and at this tolerance one would mean they
+    were all coincident anyway.
+    """
+    groups: list[list[int]] = []
+    for i, cand in enumerate(cands):
+        for g in groups:
+            if placements_coincide(cands[g[0]], cand):
+                g.append(i)
+                break
+        else:
+            groups.append([i])
+    return [[cands[i]['label'] for i in g] for g in groups]
+
+
 def best_match(cand: dict, peaks: list[dict]) -> dict:
     """Which of the free fit's peaks the candidate actually lands on.
 
@@ -789,9 +844,14 @@ def main() -> None:
                 cand['delta_dy_m'] = ddy
                 cand['agrees_with_optimum'] = agrees(cand, refined[0])
                 cand['best_match'] = best_match(cand, refined)
+            groups = merge_groups(cands)
+            for cand in cands:
+                g = next(g for g in groups if cand['label'] in g)
+                cand['coincides_with'] = [lb for lb in g if lb != cand['label']]
             entry['conventions'][conv] = {
                 'refined_peaks': refined,
                 'analytic_candidates': cands,
+                'merged_groups': groups,
                 'search_bounds': bounds,
             }
             print(f'  convention {conv}: free fit {100 * refined[0]["score"]:5.1f}% at '
@@ -906,16 +966,55 @@ def report(results, robots, conventions) -> dict:
             print(f'     robot_{n} at {100 * best_free(n):.1f}%')
         rows(diagnostic)
 
+    def candidate(n, conv, label):
+        return next(c for c in results[n]['conventions'][conv]['analytic_candidates']
+                    if c['label'] == label)
+
+    # ── coincident candidates, merged before the verdict is formed ──
+    merges = [(n, conv, g)
+              for n in robots for conv in conventions
+              for g in results[n]['conventions'][conv]['merged_groups']
+              if len(g) > 1]
+    if merges:
+        print(f'-- coincident candidates merged (within {MERGE_XY_M} m and '
+              f'{MERGE_THETA_DEG} deg) --')
+        print('   The two directions are different compositions but not different')
+        print('   placements here: map_T_odom is its own inverse, so composing with')
+        print('   either lands on the same spot. That is one placement reached two')
+        print('   ways, not two placements the wall overlap cannot separate, so it')
+        print('   is counted once below.')
+        for n, conv, g in merges:
+            first = candidate(n, conv, g[0])
+            joined = ' = '.join(lb.replace('world_T_odom o ', '') for lb in g)
+            print(f'     robot_{n} convention {conv}: {joined}')
+            print(f'       at theta={first["theta"]:+.2f} dx={first["dx"]:+.3f} '
+                  f'dy={first["dy"]:+.3f}')
+        print()
+
     # ── the verdict, on the gating maps only ──
     labels = ['world_T_odom o map_T_odom', 'world_T_odom o inverse(map_T_odom)']
-    winners = []
+    winners: list[tuple[str, list[str]]] = []
     for conv in conventions:
+        agreed = []
         for label in labels:
             hits = [any(c['label'] == label and c['best_match']['agrees']
                         for c in results[n]['conventions'][conv]['analytic_candidates'])
                     for n in gating]
             if hits and all(hits):
-                winners.append((conv, label))
+                agreed.append(label)
+        # Two directions collapse into one winner only when they coincide for
+        # EVERY gating robot. Coinciding for one and not another is a real
+        # ambiguity across maps and is left standing.
+        for label in agreed:
+            for w_conv, labs in winners:
+                if w_conv == conv and all(
+                        placements_coincide(candidate(n, conv, labs[0]),
+                                            candidate(n, conv, label))
+                        for n in gating):
+                    labs.append(label)
+                    break
+            else:
+                winners.append((conv, [label]))
 
     gate_names = ', '.join(f'robot_{n}' for n in gating)
     tol = f'{AGREE_THETA_DEG} deg and {AGREE_XY_M} m'
@@ -924,8 +1023,14 @@ def report(results, robots, conventions) -> dict:
         print(f'NO VERDICT: no map clears the {100 * WELL_FIT_FLOOR:.0f}% free-fit floor, so')
         print('  there is nothing to test a candidate against.')
     elif len(winners) == 1:
-        conv, label = winners[0]
-        print(f'RESOLVED: convention {conv}, {label}')
+        conv, labs = winners[0]
+        print(f'RESOLVED: convention {conv}, {labs[0]}')
+        for lb in labs[1:]:
+            print(f'  = {lb}')
+        if len(labs) > 1:
+            print('  MERGED: map_T_odom coincides with its own inverse here, so these')
+            print('  are one placement, not two answers. This run does not')
+            print('  discriminate the direction, and does not need to.')
         print(f'  agrees with its own free fit to within {tol} for the well-fitting')
         print(f'  maps ({gate_names}).')
     elif not winners:
@@ -937,16 +1042,28 @@ def report(results, robots, conventions) -> dict:
         print('  Read the PNGs before theorising.')
     else:
         print(f'AMBIGUOUS: {len(winners)} candidates agree for {gate_names}:')
-        for conv, label in winners:
-            print(f'  convention {conv}, {label}')
+        for conv, labs in winners:
+            print(f'  convention {conv}, {" = ".join(labs)}')
         print('  The world geometry is symmetric enough that these are not')
         print('  distinguishable by wall overlap alone.')
+        if any(len(labs) > 1 for _, labs in winners):
+            print('  Coincident candidates were already merged above, so these are')
+            print('  distinct placements rather than one counted twice.')
     print('=' * 100)
     print()
 
     return {
         'resolved': len(winners) == 1,
-        'winners': [{'convention': c, 'direction': lb} for c, lb in winners],
+        # False whenever the single winner is a merged pair: the placement is
+        # settled, which direction produced it is not, and this run had no way
+        # to tell because both produced it.
+        'direction_discriminated': bool(len(winners) == 1
+                                        and len(winners[0][1]) == 1),
+        'winners': [{'convention': c, 'direction': labs[0], 'directions': labs}
+                    for c, labs in winners],
+        'merged_candidates': [{'robot': f'robot_{n}', 'convention': conv,
+                               'directions': g} for n, conv, g in merges],
+        'merge_tolerance': {'xy_m': MERGE_XY_M, 'theta_deg': MERGE_THETA_DEG},
         'gating_robots': [f'robot_{n}' for n in gating],
         'diagnostic_robots': [f'robot_{n}' for n in diagnostic],
         'well_fit_floor': WELL_FIT_FLOOR,
