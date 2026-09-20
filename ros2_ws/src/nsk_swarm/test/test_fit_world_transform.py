@@ -151,3 +151,113 @@ def test_phase_b_run1_style_transforms_never_merge():
              placement(INVERSE, -105.98, -2.118, 3.413)]
     assert not placements_coincide(*cands)
     assert len(merge_groups(cands)) == 2
+
+
+# ── Layer 2 — the candidate gate, and the peak list it is read against ───────
+# The verdict used to compare (theta, dx, dy) against the nearest of five
+# coarse peaks at 1 deg and 0.25 m. Two faults made that unachievable rather
+# than strict: the peak list could be missing the very placement under test
+# (translation-space NMS deletes a 180 deg twin that needs the same
+# translation), and 1 deg is finer than the on-wall objective resolves, which
+# the self-check already documents about itself as a plateau.
+#
+# So a candidate is now judged on its own score: within CANDIDATE_SCORE_TOL of
+# the best FREE fit, and at or above WELL_FIT_FLOOR. Angle, offset, peak rank
+# and plateau are reported and never gated.
+
+candidate_gate = fitter.candidate_gate
+free_optimum = fitter.free_optimum
+coarse_search = fitter.coarse_search
+
+
+def test_a_candidate_level_with_the_best_free_fit_passes():
+    """b2maps_e0t_kp and b2maps_e0_kp: the spawn candidate scores EXACTLY what
+    the free fit scores, to the last float digit. That must resolve.
+    """
+    g = candidate_gate(0.9554973821989529, 0.9554973821989529)
+    assert g['pass'] is True
+    assert g['score_gap'] == 0.0
+
+
+def test_a_candidate_five_points_below_the_best_does_not_resolve():
+    """The case the score gate must not wave through: a candidate on a map
+    that fits the world well, but landing somewhere materially worse than the
+    free search found. 5 pp is five times the tolerance.
+    """
+    g = candidate_gate(0.905, 0.955)
+    assert g['pass'] is False
+    assert g['within_tol'] is False
+    assert g['clears_floor'] is True       # the failure is the gap, not the floor
+    assert g['score_gap'] == pytest.approx(-0.05)
+
+
+def test_the_tolerance_edge_is_inclusive_and_one_step_past_it_is_not():
+    """Exactly one tolerance below the best still passes.
+
+    Written against the arithmetic edge on purpose: 0.955 - 0.01 is not
+    representable, so the gate carries 1e-9 of slack -- the same slack the
+    self-check puts on its plateau bounds. Without it the edge would reject on
+    float representation rather than on the criterion.
+    """
+    tol = fitter.CANDIDATE_SCORE_TOL
+    best = 0.955
+    assert candidate_gate(best - tol, best)['pass'] is True
+    assert candidate_gate(best - tol - 1e-6, best)['pass'] is False
+
+
+def test_matching_a_bad_free_fit_is_not_a_pass():
+    """b18_run2 arm A: the odometry map free-fits at 21.9%, so a candidate
+    that matches it matches noise. The floor is what stops that being called
+    agreement, and it is why the gate is two conditions rather than one.
+    """
+    g = candidate_gate(0.219, 0.219)
+    assert g['within_tol'] is True
+    assert g['clears_floor'] is False
+    assert g['pass'] is False
+
+
+def test_a_candidate_above_the_best_passes():
+    """Seeded refinement can land the candidate a hair ABOVE the free search's
+    lattice-quantised optimum. A positive gap is agreement, not a failure.
+    """
+    assert candidate_gate(0.962, 0.955)['pass'] is True
+
+
+def test_the_free_optimum_ignores_seeded_peaks():
+    """The reference for both the gate and the reported deltas must be what
+    the FREE search found. Measuring a candidate against its own seeded
+    placement would be measuring it against itself.
+    """
+    peaks = [{'score': 0.99, 'seeded': True, 'theta': 0.0, 'dx': 0.0, 'dy': 0.0},
+             {'score': 0.95, 'seeded': False, 'theta': 1.0, 'dx': 0.0, 'dy': 0.0},
+             {'score': 0.90, 'seeded': False, 'theta': 2.0, 'dx': 0.0, 'dy': 0.0}]
+    assert free_optimum(peaks)['score'] == 0.95
+
+
+def test_a_seed_survives_the_translation_nms_that_deleted_the_twin():
+    """The b2maps_e0t_kp failure, in miniature.
+
+    The map's best placement and its 180 deg twin sit 0.307 m apart in
+    translation -- inside NMS_RADIUS -- so the greedy suppression drops the
+    twin and the candidate is then matched against something metres away. A
+    seeded placement must come through that suppression untouched.
+    """
+    import numpy as np
+
+    rects = [(-1.0, 1.0, -0.05, 0.05)]
+    mask, wx0, wy0 = fitter.build_wall_mask(rects)
+    pts = np.array([[-0.5, 0.0], [0.0, 0.0], [0.5, 0.0]])
+    c = pts.mean(axis=0)
+    seed = {'theta': 180.0, 'dx': 0.30, 'dy': 0.0}
+
+    plain, _ = coarse_search(pts, c, mask, wx0, wy0, np.array([0.0, 180.0]))
+    seeded, _ = coarse_search(pts, c, mask, wx0, wy0, np.array([0.0, 180.0]),
+                              seeds=[seed])
+
+    assert all(p['seeded'] is False for p in plain)
+    kept = [p for p in seeded if p['seeded']]
+    assert len(kept) == 1
+    assert (kept[0]['theta'], kept[0]['dx'], kept[0]['dy']) == (180.0, 0.30, 0.0)
+    # and the free search's own peaks are exactly what they were without it
+    assert [(p['theta'], p['dx'], p['dy']) for p in seeded if not p['seeded']] \
+        == [(p['theta'], p['dx'], p['dy']) for p in plain]

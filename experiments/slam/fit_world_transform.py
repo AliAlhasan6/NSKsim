@@ -172,6 +172,39 @@ PLATEAU_STEP = 0.1       # deg
 PLATEAU_XY = 0.30        # m, dx/dy re-optimised at each angle along the walk
 PLATEAU_MAX = 45.0       # deg, walk no further than the search itself went
 
+# ── how an analytic candidate is judged ──────────────────────────────────────
+# By its own score against the best free fit, at CHECK_SCORE_TOL -- the rule
+# the self-check above already applies to itself, for the same reason.
+#
+# The rule it replaces compared (theta, dx, dy) against the nearest of five
+# peaks at AGREE_THETA_DEG = 1.0 deg. Two things made that unachievable rather
+# than strict:
+#
+#   The peak list can be missing the answer. coarse_search suppresses in
+#   TRANSLATION only (deliberately, so five peaks are five places rather than
+#   one place at five angles), so a 180 deg twin that needs the SAME
+#   translation is deleted as a duplicate. On b2maps_e0t_kp the spawn
+#   candidate sat 0.307 m from peak 1 -- inside NMS_RADIUS -- and its twin
+#   never entered the list; misfit() then matched it to peak 5, 86.9 deg and
+#   9.13 m away, because misfit takes the MAX of the normalised deltas and
+#   1 deg of angle outweighs metres of translation. Seeding the candidate
+#   placements into the peak list before NMS fixes the list; the gate below
+#   fixes what is asked of it.
+#
+#   A 1 deg gate is finer than this objective resolves. On b2maps_e0_kp the
+#   candidate landed 0.036 m and 0.071 m from a peak scoring EXACTLY what the
+#   best free fit scores, and failed on 1.4 deg of angle -- while the free
+#   fit's own optimum sits 1.4 deg from truth. The self-check documents this
+#   as a plateau: one occupied cell is a few tenths of a percentage point, so
+#   a range of angles scores within noise of each other.
+#
+# So: a candidate passes when it scores within CHECK_SCORE_TOL of the best
+# free fit AND clears the same WELL_FIT_FLOOR the free fit must clear. The
+# angle, the offset, the peak it lands on and the plateau it sits on are all
+# still computed and printed -- they are how a passing candidate is read --
+# but none of them decides the verdict.
+CANDIDATE_SCORE_TOL = CHECK_SCORE_TOL
+
 # PNG rendering
 PX_PER_M = 40
 
@@ -379,7 +412,8 @@ def build_wall_mask(rects) -> tuple[np.ndarray, float, float]:
     return (d < ON_WALL_TOL).reshape(gy.shape), float(xs[0]), float(ys[0])
 
 
-def coarse_search(pts, c, mask, wx0, wy0, thetas) -> tuple[list[dict], dict]:
+def coarse_search(pts, c, mask, wx0, wy0, thetas,
+                  seeds=()) -> tuple[list[dict], dict]:
     """Score every (dx, dy) at every theta by cross-correlation.
 
     Brute-forcing this pose space point-by-point is hours. Instead, for each
@@ -458,9 +492,23 @@ def coarse_search(pts, c, mask, wx0, wy0, thetas) -> tuple[list[dict], dict]:
     for sc, th, dx, dy in cand:
         if any(math.hypot(dx - p['dx'], dy - p['dy']) < NMS_RADIUS for p in peaks):
             continue
-        peaks.append({'theta': th, 'dx': dx, 'dy': dy, 'coarse_score': sc})
+        peaks.append({'theta': th, 'dx': dx, 'dy': dy, 'coarse_score': sc,
+                      'seeded': False})
         if len(peaks) == N_PEAKS:
             break
+
+    # Seeded placements, appended AFTER the NMS and exempt from it. They are
+    # the analytic candidates' own placements, and the whole point is that the
+    # suppression above can delete exactly these: a 180 deg twin needs the same
+    # translation as the peak it twins, so NMS reads it as a duplicate
+    # location. Appended rather than inserted, and never allowed to suppress a
+    # correlation peak, so the free search's own five answers are untouched --
+    # 'seeded' marks them, and the free-fit optimum is taken from the
+    # unseeded ones.
+    for s in seeds:
+        peaks.append({'theta': float(s['theta']), 'dx': float(s['dx']),
+                      'dy': float(s['dy']), 'coarse_score': None,
+                      'seeded': True})
 
     bounds = {
         'theta_deg': [float(min(thetas)), float(max(thetas))],
@@ -505,14 +553,53 @@ def refine(pts, c, peak, rects) -> dict:
     best['coarse_theta'] = peak['theta']
     best['coarse_dx'] = peak['dx']
     best['coarse_dy'] = peak['dy']
+    # A seeded peak is refined exactly like any other -- the refinement is what
+    # turns "the candidate's placement" into "the local optimum beside it",
+    # which is what makes the reported offset mean something.
+    best['seeded'] = bool(peak.get('seeded', False))
     return best
 
 
-def free_fit(pts, c, mask, wx0, wy0, rects, thetas):
-    peaks, bounds = coarse_search(pts, c, mask, wx0, wy0, thetas)
+def free_fit(pts, c, mask, wx0, wy0, rects, thetas, seeds=()):
+    peaks, bounds = coarse_search(pts, c, mask, wx0, wy0, thetas, seeds)
     refined = sorted((refine(pts, c, p, rects) for p in peaks),
                      key=lambda r: -r['score'])
     return refined, bounds
+
+
+def free_optimum(refined: list[dict]) -> dict:
+    """The best peak the FREE search found, ignoring any seeded ones.
+
+    The reference for both the gate and the reported deltas. A seeded peak is
+    the candidate's own placement, so measuring the candidate against it would
+    be measuring it against itself.
+    """
+    return next(p for p in refined if not p.get('seeded'))
+
+
+def candidate_gate(cand_score: float, best_free_score: float,
+                   tol: float = CANDIDATE_SCORE_TOL,
+                   floor: float = WELL_FIT_FLOOR) -> dict:
+    """Whether a candidate passes, judged on its own score. Pure.
+
+    Two conditions, both about the score alone: it must be within `tol` of
+    what the free search achieved on the same map, and it must clear the same
+    floor the free fit has to clear for the map to gate anything at all. The
+    second is not redundant -- a map whose free fit is 40% has a best the
+    candidate could match while neither is a fit of the world.
+    """
+    # 1e-9 of slack, the same the self-check uses on its plateau bounds: a
+    # score exactly one tolerance below the best differs from -tol by float
+    # representation alone (0.945 - 0.955 is -0.010000000000000009), and an
+    # edge that rejects on that is not the edge it claims to be.
+    gap = cand_score - best_free_score
+    return {
+        'score': cand_score, 'best_free_score': best_free_score,
+        'score_gap': gap, 'tol': tol, 'floor': floor,
+        'within_tol': bool(gap >= -tol - 1e-9),
+        'clears_floor': bool(cand_score >= floor - 1e-9),
+        'pass': bool(gap >= -tol - 1e-9 and cand_score >= floor - 1e-9),
+    }
 
 
 # ───────────────────────── the four analytic candidates ─────────────────────
@@ -854,15 +941,25 @@ def main() -> None:
         for conv in conventions:
             pts = cell_points(m, conv)
             c = pts.mean(axis=0)
-            refined, bounds = free_fit(pts, c, mask, wx0, wy0, rects, thetas)
+            # Candidates first: their placements are seeded into the peak list
+            # so the free search cannot suppress the very placement being
+            # tested (see coarse_search).
             cands = analytic_candidates(m, conv, spawn[n], mto, rects)
+            refined, bounds = free_fit(pts, c, mask, wx0, wy0, rects, thetas,
+                                       seeds=cands)
+            optimum = free_optimum(refined)
             for cand in cands:
-                dth, ddx, ddy = deltas(cand, refined[0])
+                dth, ddx, ddy = deltas(cand, optimum)
                 cand['delta_theta_deg'] = dth
                 cand['delta_dx_m'] = ddx
                 cand['delta_dy_m'] = ddy
-                cand['agrees_with_optimum'] = agrees(cand, refined[0])
+                cand['agrees_with_optimum'] = agrees(cand, optimum)
                 cand['best_match'] = best_match(cand, refined)
+                # The verdict rests on this and nothing else above it.
+                cand['gate'] = candidate_gate(cand['score'], optimum['score'])
+                cand['plateau_deg'] = list(plateau_span(
+                    pts, c, rects, cand,
+                    optimum['score'] - CANDIDATE_SCORE_TOL))
             groups = merge_groups(cands)
             for cand in cands:
                 g = next(g for g in groups if cand['label'] in g)
@@ -873,11 +970,11 @@ def main() -> None:
                 'merged_groups': groups,
                 'search_bounds': bounds,
             }
-            print(f'  convention {conv}: free fit {100 * refined[0]["score"]:5.1f}% at '
-                  f'theta={refined[0]["theta"]:+7.2f} dx={refined[0]["dx"]:+6.3f} '
-                  f'dy={refined[0]["dy"]:+6.3f}')
-            if best_overall is None or refined[0]['score'] > best_overall[1]['score']:
-                best_overall = (conv, refined[0])
+            print(f'  convention {conv}: free fit {100 * optimum["score"]:5.1f}% at '
+                  f'theta={optimum["theta"]:+7.2f} dx={optimum["dx"]:+6.3f} '
+                  f'dy={optimum["dy"]:+6.3f}')
+            if best_overall is None or optimum['score'] > best_overall[1]['score']:
+                best_overall = (conv, optimum)
 
         conv, fit = best_overall
         png = OUT_DIR / f'world_fit_{RUN}_robot{n}_{stamp}.png'
@@ -915,7 +1012,13 @@ def main() -> None:
         'agreement_thresholds': {'theta_deg': AGREE_THETA_DEG, 'xy_m': AGREE_XY_M,
                                  'xy_note': 'above the 0.1 m coarse lattice, which '
                                             'made sub-cell agreement unreachable',
+                                 'note': 'REPORTED ONLY since the candidate gate '
+                                         'moved to the score; see verdict.gate',
                                  'well_fit_floor': WELL_FIT_FLOOR},
+        'candidate_gate': {'score_tol': CANDIDATE_SCORE_TOL,
+                           'well_fit_floor': WELL_FIT_FLOOR,
+                           'seeded_peaks': 'analytic placements are added to '
+                                           'the peak list before NMS'},
         'self_check': check,
         'verdict': verdict,
         'robots': {f'robot_{n}': results[n] for n in robots},
@@ -943,17 +1046,20 @@ def report(results, robots, conventions) -> dict:
     print()
     print('=' * 100)
     print('analytic candidates vs the free fit for the same convention')
-    print('  left block: deltas against the optimum (peak 1). right block: against')
-    print('  whichever of the five peaks the candidate actually lands on -- peak 1')
-    print('  and its 180 deg symmetry twin routinely tie, so peak 1 alone is not a')
-    print('  safe reference. Agreement is judged on the right block.')
-    print(f'{"":>9}{"conv":>6}{"direction":>21}{"on-wall":>9}'
+    print('  GATED on the candidate\'s own on-wall score: within '
+          f'{100 * CANDIDATE_SCORE_TOL:.0f} pp of the best free')
+    print(f'  fit AND at or above the {100 * WELL_FIT_FLOOR:.0f}% floor. '
+          'Everything else here is reported,')
+    print('  never gated: dtheta/ddx/ddy against the free optimum, the peak the')
+    print('  candidate lands on (seeded placements included, so its own local')
+    print('  optimum is in the list), and the angular plateau it sits on.')
+    print(f'{"":>9}{"conv":>6}{"direction":>21}{"on-wall":>9}{"gap":>7}'
           f'{"dtheta":>9}{"ddx":>8}{"ddy":>8} |'
-          f'{"pk":>4}{"dtheta":>9}{"ddx":>8}{"ddy":>8}  agree')
+          f'{"pk":>4}{"dtheta":>9}{"ddx":>8}{"ddy":>8}{"plateau":>16}  pass')
 
     def best_free(n):
-        return max(results[n]['conventions'][c]['refined_peaks'][0]['score']
-                   for c in conventions)
+        return max(free_optimum(results[n]['conventions'][c]['refined_peaks'])
+                   ['score'] for c in conventions)
 
     gating = [n for n in robots if best_free(n) >= WELL_FIT_FLOOR]
     diagnostic = [n for n in robots if n not in gating]
@@ -964,12 +1070,15 @@ def report(results, robots, conventions) -> dict:
                 for cand in results[n]['conventions'][conv]['analytic_candidates']:
                     label = cand['label'].replace('world_T_odom o ', '')
                     bm = cand['best_match']
+                    g = cand['gate']
+                    lo, hi = cand['plateau_deg']
                     print(f'  robot_{n}{conv:>6}{label:>21}{100 * cand["score"]:8.1f}%'
+                          f'{100 * g["score_gap"]:+7.1f}'
                           f'{cand["delta_theta_deg"]:9.2f}{cand["delta_dx_m"]:8.3f}'
                           f'{cand["delta_dy_m"]:8.3f} |{bm["peak_rank"]:>4}'
                           f'{bm["delta_theta_deg"]:9.2f}{bm["delta_dx_m"]:8.3f}'
-                          f'{bm["delta_dy_m"]:8.3f}  '
-                          f'{"YES" if bm["agrees"] else "no"}')
+                          f'{bm["delta_dy_m"]:8.3f}{f"{lo:+.1f}..{hi:+.1f}":>16}  '
+                          f'{"YES" if g["pass"] else "no"}')
             print()
 
     print(f'\n-- gating the verdict: free fit >= {100 * WELL_FIT_FLOOR:.0f}% --')
@@ -1016,7 +1125,7 @@ def report(results, robots, conventions) -> dict:
     for conv in conventions:
         agreed = []
         for label in labels:
-            hits = [any(c['label'] == label and c['best_match']['agrees']
+            hits = [any(c['label'] == label and c['gate']['pass']
                         for c in results[n]['conventions'][conv]['analytic_candidates'])
                     for n in gating]
             if hits and all(hits):
@@ -1036,7 +1145,8 @@ def report(results, robots, conventions) -> dict:
                 winners.append((conv, [label]))
 
     gate_names = ', '.join(f'robot_{n}' for n in gating)
-    tol = f'{AGREE_THETA_DEG} deg and {AGREE_XY_M} m'
+    tol = (f'{100 * CANDIDATE_SCORE_TOL:.0f} pp of the best free fit, at or '
+           f'above {100 * WELL_FIT_FLOOR:.0f}%')
     print('=' * 100)
     if not gating:
         print(f'NO VERDICT: no map clears the {100 * WELL_FIT_FLOOR:.0f}% free-fit floor, so')
@@ -1050,11 +1160,11 @@ def report(results, robots, conventions) -> dict:
             print('  MERGED: map_T_odom coincides with its own inverse here, so these')
             print('  are one placement, not two answers. This run does not')
             print('  discriminate the direction, and does not need to.')
-        print(f'  agrees with its own free fit to within {tol} for the well-fitting')
+        print(f'  scores within {tol} for the well-fitting')
         print(f'  maps ({gate_names}).')
     elif not winners:
-        print('UNRESOLVED: none of the four analytic candidates agrees with its own')
-        print(f'  free fit to within {tol}, even restricted to the well-fitting maps')
+        print('UNRESOLVED: no analytic candidate scores within')
+        print(f'  {tol}, even restricted to the well-fitting maps')
         print(f'  ({gate_names}). The closest candidates are NOT reported as an answer --')
         print('  the composition is wrong in some way this script does not cover (a')
         print('  further frame in the chain, or a non-rigid discrepancy).')
@@ -1072,6 +1182,15 @@ def report(results, robots, conventions) -> dict:
     print()
 
     return {
+        'gate': {
+            'rule': 'candidate on-wall score within score_tol of the best '
+                    'free fit, and at or above well_fit_floor',
+            'score_tol': CANDIDATE_SCORE_TOL,
+            'well_fit_floor': WELL_FIT_FLOOR,
+            'reported_not_gated': ['delta_theta_deg', 'delta_dx_m',
+                                   'delta_dy_m', 'best_match', 'plateau_deg',
+                                   'agrees_with_optimum'],
+        },
         'resolved': len(winners) == 1,
         # False whenever the single winner is a merged pair: the placement is
         # settled, which direction produced it is not, and this run had no way
