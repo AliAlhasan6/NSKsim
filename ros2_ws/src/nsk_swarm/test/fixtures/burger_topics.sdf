@@ -1,0 +1,56 @@
+<?xml version="1.0" ?>
+<!--
+  A stand-in for turtlebot3_gazebo's turtlebot3_burger/model.sdf, carrying one
+  of each element make_namespaced_burger_sdf() rewrites and nothing else.
+
+  It exists so the replacement list stays covered where the stock model is not
+  installed — CI leaves turtlebot3_gazebo out on purpose. Geometry, inertia,
+  joints and sensor parameters are absent: the rewrite never touches them, and
+  a fixture that copied them would only invite someone to trust it as a model.
+
+  Each target string appears EXACTLY ONCE, which is the property the rewrite
+  relies on (str.replace with no count replaces every occurrence, so a second
+  copy of any of these would silently change two places). The fixture test
+  asserts that count as well as the rewrite.
+
+  This is not a substitute for testing against the real upstream file: the
+  stock model can drift — a renamed element, or a fixed <odom_publisher_
+  frequency> spelling — and only the two @needs_burger tests can see that.
+-->
+<sdf version="1.7">
+  <model name="turtlebot3_burger_topics_fixture">
+    <plugin filename="gz-sim-diff-drive-system"
+            name="gz::sim::systems::DiffDrive">
+      <topic>cmd_vel</topic>
+      <odom_topic>odom</odom_topic>
+      <tf_topic>/tf</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+      <odom_publisher_frequency>30</odom_publisher_frequency>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <topic>joint_states</topic>
+    </plugin>
+
+    <link name="base_scan">
+      <sensor name="gpu_lidar" type="gpu_lidar">
+        <topic>scan</topic>
+        <gz_frame_id>base_scan</gz_frame_id>
+        <lidar>
+          <range>
+            <min>0.120000</min>
+            <max>3.5</max>
+          </range>
+        </lidar>
+      </sensor>
+    </link>
+
+    <link name="imu_link">
+      <sensor name="imu" type="imu">
+        <topic>imu</topic>
+      </sensor>
+    </link>
+  </model>
+</sdf>

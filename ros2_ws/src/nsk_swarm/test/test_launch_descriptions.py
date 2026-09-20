@@ -649,9 +649,23 @@ TRUTH_ODOM = ('nsk_swarm', 'truth_odom_tf')
 # walk the tree do not, which is the whole point of LazyRobotAsset.
 BURGER_SDF_PRESENT = os.path.isfile(
     '/opt/ros/jazzy/share/turtlebot3_gazebo/models/turtlebot3_burger/model.sdf')
+# NOT coupled to REQUIRE_NAV2, unlike the Nav2 gates above. That coupling says
+# "in strict mode a missing dependency must fail rather than skip", which is
+# right for Nav2 — CI installs it on purpose — and wrong for TurtleBot3, which
+# CI leaves out on purpose (see .github/workflows/ci.yml). With the coupling
+# these two tests RAN on a machine with no stock model and died on
+# FileNotFoundError, which says nothing about the launch file. The replacement
+# list stays covered there by the fixture test below.
 needs_burger = pytest.mark.skipif(
-    not BURGER_SDF_PRESENT and not REQUIRE_NAV2,
-    reason='turtlebot3_gazebo not installed — nothing to rewrite')
+    not BURGER_SDF_PRESENT,
+    reason='turtlebot3_gazebo not installed — no stock model to rewrite')
+
+# A stand-in for the stock model carrying one of each element the rewrite
+# touches, so the replacement list is exercised wherever this suite runs. It
+# is NOT a substitute for the two tests above: those check the rewrite against
+# the real upstream file, which is the thing that can drift.
+FIXTURE_SDF = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'fixtures', 'burger_topics.sdf')
 
 
 def test_swarm_sim_declares_truth_odom_robots_defaulting_empty():
@@ -767,6 +781,70 @@ def test_the_flag_moves_diffdrives_transform_off_the_bridged_tf():
     assert differing == [('      <tf_topic>/tf</tf_topic>',
                           '      <tf_topic>/robot_0/tf_wheel</tf_topic>')]
     assert '<odom_topic>/robot_0/odom</odom_topic>' in '\n'.join(flagged)
+
+
+def test_the_replacement_list_rewrites_every_element_it_names(monkeypatch):
+    """The rewrite, against a fixture, so it is covered without turtlebot3.
+
+    Every pair in make_namespaced_burger_sdf's list must (a) find its target
+    and (b) leave no bare copy behind. A pair whose target string disappeared
+    upstream would otherwise be a silent no-op: str.replace does not complain
+    when it matches nothing, and the robot would come up publishing on the
+    un-namespaced topic, which is exactly the class of fault this rewrite
+    exists to prevent.
+    """
+    module = load('swarm_sim.launch.py')
+    source = open(FIXTURE_SDF).read()
+    for target in ('<topic>cmd_vel</topic>', '<odom_topic>odom</odom_topic>',
+                   '<tf_topic>/tf</tf_topic>', '<frame_id>odom</frame_id>',
+                   '<child_frame_id>base_footprint</child_frame_id>',
+                   '<topic>scan</topic>', '<gz_frame_id>base_scan</gz_frame_id>',
+                   '<topic>imu</topic>', '<topic>joint_states</topic>',
+                   '</model>'):
+        assert source.count(target) == 1, f'fixture: {target}'
+
+    monkeypatch.setattr(module, 'TURTLEBOT3_BURGER_SDF', FIXTURE_SDF)
+    with open(module.make_namespaced_burger_sdf(2)) as f:
+        out = f.read()
+
+    for was in ('<topic>cmd_vel</topic>', '<odom_topic>odom</odom_topic>',
+                '<frame_id>odom</frame_id>',
+                '<child_frame_id>base_footprint</child_frame_id>',
+                '<topic>scan</topic>', '<gz_frame_id>base_scan</gz_frame_id>',
+                '<topic>imu</topic>', '<topic>joint_states</topic>'):
+        assert was not in out, f'left un-namespaced: {was}'
+    for now in ('<topic>/robot_2/cmd_vel</topic>',
+                '<odom_topic>/robot_2/odom</odom_topic>',
+                '<frame_id>robot_2/odom</frame_id>',
+                '<child_frame_id>robot_2/base_footprint</child_frame_id>',
+                '<topic>/robot_2/scan</topic>',
+                '<gz_frame_id>robot_2/base_scan</gz_frame_id>',
+                '<topic>/robot_2/imu</topic>',
+                '<topic>/robot_2/joint_states</topic>'):
+        assert now in out, f'not rewritten: {now}'
+
+    # The append, and the rate the whole ground-truth layer is timed by.
+    assert out.count('gz::sim::systems::PosePublisher') == 1
+    assert '<update_frequency>20</update_frequency>' in out
+    assert '<publish_model_pose>true</publish_model_pose>' in out
+    assert out.rstrip().endswith('</sdf>')
+
+
+def test_the_fixture_rewrite_moves_only_the_tf_topic_under_the_flag(
+        monkeypatch):
+    """Same one-line difference as the stock model, checked without it."""
+    module = load('swarm_sim.launch.py')
+    monkeypatch.setattr(module, 'TURTLEBOT3_BURGER_SDF', FIXTURE_SDF)
+    with open(module.make_namespaced_burger_sdf(2)) as f:
+        base = f.read().splitlines()
+    with open(module.make_namespaced_burger_sdf(2, truth_odom=True)) as f:
+        flagged = f.read().splitlines()
+
+    differing = [(a, b) for a, b in zip(base, flagged) if a != b]
+    assert len(base) == len(flagged)
+    assert differing == [('      <tf_topic>/tf</tf_topic>',
+                          '      <tf_topic>/robot_2/tf_wheel</tf_topic>')]
+    assert '<odom_topic>/robot_2/odom</odom_topic>' in '\n'.join(flagged)
 
 
 # ── online scan matching (explore.launch.py scan_matching) ───────────────────

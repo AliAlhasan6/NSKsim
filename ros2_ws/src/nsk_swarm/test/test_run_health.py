@@ -20,6 +20,7 @@ decoration.
 Finds the module by walking up to experiments/analysis/, the convention
 test_check_cut_reference.py uses.
 """
+import functools
 import importlib.util
 import math
 import re
@@ -42,6 +43,42 @@ def _load():
 
 
 rh = _load()
+
+# ── the stock TurtleBot3 model, and what to do without it ────────────────────
+# run_health reads three numbers out of files: the lidar range and the two
+# DiffDrive frequencies from the stock burger SDF, and the PosePublisher rate
+# from this repo's launch file. The burger SDF belongs to turtlebot3_gazebo,
+# which CI deliberately does NOT install (.github/workflows/ci.yml explains
+# why), and run_health dies rather than defaulting when a file it needs is
+# missing -- correctly, for a measurement rig.
+#
+# So the criteria below are written against LITERALS, and the reading of the
+# files is one gated test per file that the literal is still what the file
+# says. A missing turtlebot3 then skips three tests instead of taking the
+# whole module down at import, which is what run 35506940347 did: a
+# module-level rate_facts() call turned an absent optional package into
+# "1 test, 1 error, collection failure" for the entire nsk_swarm suite.
+BURGER_SDF_PRESENT = rh.BURGER_SDF.is_file()
+needs_burger = pytest.mark.skipif(
+    not BURGER_SDF_PRESENT,
+    reason=f'{rh.BURGER_SDF} not installed -- the stock model is what these '
+           'tests read')
+
+LIDAR_MAX_M = 3.5        # burger LDS-01 <range><max>, model.sdf:153
+TRUTH_HZ = 20.0          # PosePublisher <update_frequency>, swarm_sim.launch.py
+DIFFDRIVE_HZ = 50.0      # the gz-sim DiffDrive default; see rate_facts()
+
+
+@functools.lru_cache(maxsize=1)
+def facts():
+    """rate_facts(), read once, and only inside a test that needs it.
+
+    Lazy on purpose: at module scope this is an import-time file read, and a
+    file read that can sys.exit() at import time is a collection failure for
+    every test in the module, including the ones that never touch a file.
+    """
+    return rh.rate_facts()
+
 
 # Real lines from experiments/logs/b2maps/b2maps_e0_explore.log, and synthetic
 # ones in the same shape for the warnings e0 never produced.
@@ -232,46 +269,57 @@ def test_the_e0_closest_approach_fails_the_criterion():
     e0's nearest point to the perimeter was (-6.053, +3.487), 3.897 m from
     wall_west's inner face at x = -9.95, against a 3.50 m lidar range.
     """
-    reach, _line = rh.lidar_max_range()
     d = rh.closest_approach([(-6.053, 3.487)], rh.boundary_rects())
 
     assert d == pytest.approx(3.897, abs=1e-3)
-    assert d > reach
+    assert d > LIDAR_MAX_M
 
 
 def test_a_trajectory_that_does_reach_the_boundary_passes():
-    reach, _line = rh.lidar_max_range()
     # Same path, plus one sample 3.0 m from the west wall's inner face.
     d = rh.closest_approach([(-6.053, 3.487), (-6.95, 0.0)],
                             rh.boundary_rects())
 
     assert d == pytest.approx(3.0, abs=1e-6)
-    assert d <= reach
+    assert d <= LIDAR_MAX_M
 
 
 # ── the constants are read, not retyped ──────────────────────────────────────
+# These are the gated tests: each asserts that a literal used above is still
+# what the file it comes from says. Skipped without turtlebot3_gazebo, which
+# means the criteria keep running there and only their provenance goes
+# unchecked.
 
+@needs_burger
 def test_the_lidar_range_comes_from_the_burger_sdf():
     reach, line = rh.lidar_max_range()
-    assert reach == pytest.approx(3.5)
+    assert reach == pytest.approx(LIDAR_MAX_M)
     assert line == 153
 
 
+@needs_burger
 def test_the_transform_rates_come_from_the_files_that_set_them():
-    """Values and source FILES, not source lines.
+    """Values and source FILES, not source lines, and the literals above.
+
+    This is the one test that ties TRUTH_HZ and DIFFDRIVE_HZ to the files
+    they came from; every other use of them is a literal, so that a missing
+    turtlebot3_gazebo costs this check alone.
+
 
     The burger SDF is a fixed upstream install, so its line numbers are worth
     pinning above -- a ROS update that moves them should be seen. swarm_sim's
     own line number moves whenever the launch file is edited, and pinning it
     would only ever report that someone added a comment.
     """
-    facts = rh.rate_facts()
-    assert facts['truth_hz'] == pytest.approx(20.0)
-    assert facts['diffdrive_src'].endswith('model.sdf:394')
+    f = facts()
+    assert f['truth_hz'] == pytest.approx(TRUTH_HZ)
+    assert f['diffdrive_hz'] == pytest.approx(DIFFDRIVE_HZ)
+    assert f['diffdrive_src'].endswith('model.sdf:394')
     assert re.fullmatch(r'ros2_ws/src/nsk_swarm/launch/swarm_sim\.launch\.py:\d+',
-                        facts['truth_src']), facts['truth_src']
+                        f['truth_src']), f['truth_src']
 
 
+@needs_burger
 def test_the_burger_sdfs_diffdrive_frequency_is_inert():
     """The 30 on model.sdf:394 has never taken effect.
 
@@ -289,23 +337,24 @@ def test_the_burger_sdfs_diffdrive_frequency_is_inert():
     reported rate becomes whatever the model then asks for -- which is the
     intent, not a breakage.
     """
-    facts = rh.rate_facts()
-    assert facts['diffdrive_nominal_hz'] == pytest.approx(30.0)
-    assert facts['diffdrive_ignored'] is True
-    assert facts['diffdrive_hz'] == pytest.approx(50.0)
-    assert facts['diffdrive_hz'] == pytest.approx(rh.DIFFDRIVE_DEFAULT_HZ)
+    f = facts()
+    assert f['diffdrive_nominal_hz'] == pytest.approx(30.0)
+    assert f['diffdrive_ignored'] is True
+    assert f['diffdrive_hz'] == pytest.approx(DIFFDRIVE_HZ)
+    assert f['diffdrive_hz'] == pytest.approx(rh.DIFFDRIVE_DEFAULT_HZ)
 
 
+@needs_burger
 def test_the_measured_e0_odom_rate_matches_the_effective_not_the_nominal():
     """Arithmetic on b2maps_e0's own recorded counts, so the claim above is
     checked rather than asserted.
     """
-    facts = rh.rate_facts()
+    f = facts()
     odom_messages, sim_span_s = 290035, 5801.1
 
     measured = odom_messages / sim_span_s
-    assert measured == pytest.approx(facts['diffdrive_hz'], abs=0.1)
-    assert measured != pytest.approx(facts['diffdrive_nominal_hz'], abs=1.0)
+    assert measured == pytest.approx(f['diffdrive_hz'], abs=0.1)
+    assert measured != pytest.approx(f['diffdrive_nominal_hz'], abs=1.0)
 
 
 # ── R4/R5: the transform is the truth, the wheel is still the wheel ──────────
@@ -401,13 +450,12 @@ def test_a_missing_wheel_stream_fails_r5():
 
 
 # ── R2: the frame pair's rate names its owner ────────────────────────────────
-# The rates are not retyped here either: FACTS comes from the same files the
-# script reads, so a launch file edited to a different PosePublisher frequency
-# moves the test with the criterion.
+# FACTS is the literal pair, in the shape report_tf_rates consumes, so these
+# tests need no file at all; test_the_transform_rates_come_from_the_files_that
+# _set_them is what keeps the literals honest against the real sources.
 
-FACTS = rh.rate_facts()
-TRUTH_HZ = FACTS['truth_hz']            # 20, swarm_sim.launch.py
-DIFFDRIVE_HZ = FACTS['diffdrive_hz']    # 50, the gz-sim plugin default
+FACTS = {'truth_hz': TRUTH_HZ, 'diffdrive_hz': DIFFDRIVE_HZ,
+         'truth_src': 'ros2_ws/src/nsk_swarm/launch/swarm_sim.launch.py:163'}
 BAG_SIM_SPAN = 200.0
 
 # (messages, transforms) as b2maps_rehearsal3 actually carries them: 19797 of
