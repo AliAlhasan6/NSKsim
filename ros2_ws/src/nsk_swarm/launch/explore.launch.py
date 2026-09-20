@@ -148,6 +148,25 @@ def generate_launch_description():
                     'not a calibrated value, which is why it is a launch '
                     'argument. 0 disables the escape.')
 
+    declare_scan_matching = DeclareLaunchArgument(
+        'scan_matching', default_value='true',
+        description='slam_toolbox use_scan_matching. Default true is the '
+                    'value slam_robotN.yaml already carries, so a command '
+                    'that does not set it reproduces its previous rung '
+                    'exactly. false turns slam_toolbox into a known-pose '
+                    'mapper: MatchScan is never called, each scan keeps the '
+                    'pose it was handed, map->odom stays identity, and the '
+                    'pose graph is never built — so do_loop_closing has no '
+                    'effect whatever the YAML says, TryCloseLoop sitting '
+                    'inside the same branch. ONLY meaningful when the poses '
+                    'are already correct, i.e. with swarm_sim.launch.py '
+                    'truth_odom_robots:=[<id>]; on wheel odometry it removes '
+                    'the only thing correcting the drift. Measured on '
+                    'b18_run2 robot_0 offline (HANDOFF_2026-09-19 §5): with '
+                    'truth poses the matcher COSTS 20 points of world fit '
+                    '(96.1% off against 76.1% on) and invents 0.98 m of '
+                    'map->odom drift that the poses do not have. n=1.')
+
     declare_rviz = DeclareLaunchArgument(
         'rviz', default_value='false',
         description='Launch an RViz preconfigured for robot_<id> (Fixed Frame '
@@ -205,7 +224,21 @@ def generate_launch_description():
         parameters=[namespaced_slam_params,
                     {'use_lifecycle_manager': False,
                      'use_sim_time': True,
-                     'map_name': ['/robot_', robot_id, '/map']}],
+                     'map_name': ['/robot_', robot_id, '/map'],
+                     # Overridden HERE rather than through RewrittenYaml's
+                     # param_rewrites: a later dict wins over an earlier
+                     # params file, so this needs no second rewrite pass and
+                     # leaves slam_robotN.yaml on disk untouched — that file
+                     # stays the run-of-record default, and the override is
+                     # visible in the launch command instead of hidden in a
+                     # rewritten temp file. value_type=bool for the same
+                     # reason reachability_precheck needs it: without the
+                     # cast 'scan_matching:=0' infers as the INT 0, which
+                     # rclpy will not accept for a bool parameter, and the
+                     # node would die at startup on a reasonable spelling.
+                     'use_scan_matching': ParameterValue(
+                         LaunchConfiguration('scan_matching'),
+                         value_type=bool)}],
         output='screen',
     )
 
@@ -341,6 +374,7 @@ def generate_launch_description():
         declare_nav2,
         declare_precheck,
         declare_escape_distance,
+        declare_scan_matching,
         declare_rviz,
         slam_node,
         slam_configure,

@@ -767,3 +767,33 @@ def test_the_flag_moves_diffdrives_transform_off_the_bridged_tf():
     assert differing == [('      <tf_topic>/tf</tf_topic>',
                           '      <tf_topic>/robot_0/tf_wheel</tf_topic>')]
     assert '<odom_topic>/robot_0/odom</odom_topic>' in '\n'.join(flagged)
+
+
+# ── online scan matching (explore.launch.py scan_matching) ───────────────────
+
+def test_explore_declares_scan_matching_defaulting_true():
+    # true is the value slam_robotN.yaml already carries, so the default
+    # reproduces every earlier rung exactly.
+    ld = build('explore.launch.py')
+    assert declared_defaults(ld)['scan_matching'] == 'true'
+
+
+def test_scan_matching_reaches_slam_toolbox_as_a_bool():
+    got = node_parameters('explore.launch.py', 'async_slam_toolbox_node',
+                          'use_scan_matching')
+    assert got == [True], f'default resolved to {got!r}'
+
+    off = node_parameters('explore.launch.py', 'async_slam_toolbox_node',
+                          'use_scan_matching', scan_matching='false')
+    assert off == [False], f'scan_matching:=false resolved to {off!r}'
+
+
+def test_numeric_scan_matching_spellings_stay_bools():
+    # Same cast, same reason as reachability_precheck: launch_ros infers '0'
+    # as the INT 0, and slam_toolbox declares use_scan_matching as a bool, so
+    # without value_type=bool the node would refuse to start on a spelling
+    # that looks entirely reasonable at the command line.
+    for raw, expected in (('1', True), ('0', False)):
+        got = node_parameters('explore.launch.py', 'async_slam_toolbox_node',
+                              'use_scan_matching', scan_matching=raw)
+        assert got == [expected], f'scan_matching:={raw} resolved to {got!r}'
