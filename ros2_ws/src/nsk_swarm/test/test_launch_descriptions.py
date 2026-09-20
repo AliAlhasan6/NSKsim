@@ -415,6 +415,64 @@ def test_explore_does_not_launch_rviz_by_default():
     assert RVIZ not in nodes(resolved(ld))
 
 
+def node_parameters(filename, executable, name, **arguments):
+    """Evaluate one parameter on every Node running `executable`, as launch
+    would. Returns a list, one entry per matching node, in tree order.
+
+    Command-line `arguments` land in the context first and the declared defaults
+    fill in the rest (same sequence as `resolved`), then the ParameterValue is
+    evaluated against it — which is what applies its `value_type` cast.
+    OpaqueFunctions are expanded against that SAME context, so nodes that only
+    exist for some argument values (swarm_sim's truth_odom_tf) are reachable.
+
+    Two launch_ros details this has to work around, both of which silently
+    return a WRONG answer rather than raising:
+
+    1. The parameter names in a Node's dict block are not strings. Node.__init__
+       runs normalize_parameters() at construction, and normalize_parameter_dict
+       rewrites every key through normalize_to_list_of_substitutions and stores
+       it as a tuple of TextSubstitution. So `name in block` is false for every
+       parameter on every Node; the keys have to be performed before comparing.
+
+    2. ParameterValue.evaluate() caches into __evaluated_parameter_value, and
+       the .value property then returns that cached SCALAR instead of the
+       original substitution — so a second evaluate() on the same object
+       re-evaluates a plain bool and hands back the FIRST answer whatever the
+       new context says. Hence the build per call: each one gets untouched
+       ParameterValue objects, which is also what a real `ros2 launch` does.
+       Sharing one description across calls makes every spelling resolve to
+       whatever the first one did.
+    """
+    launch_description = build(filename)
+
+    context = LaunchContext()
+    context.launch_configurations.update(arguments)
+    for entity in launch_description.entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+
+    expanded = []
+    for entity in launch_description.entities:
+        if isinstance(entity, OpaqueFunction):
+            expanded += entity.execute(context) or []
+        else:
+            expanded.append(entity)
+
+    found = []
+    for node in _walk(LaunchDescription(expanded)):
+        if not isinstance(node, Node) or node.node_executable != executable:
+            continue
+        for block in node._Node__parameters:
+            if not isinstance(block, dict):
+                continue
+            for key, value in block.items():
+                if perform_substitutions(context, list(key)) != name:
+                    continue
+                found.append(value.evaluate(context)
+                             if hasattr(value, 'evaluate') else value)
+    return found
+
+
 def explorer_parameter(name, **arguments):
     """Evaluate one parameter on the frontier_explorer node, as launch would.
 
@@ -580,3 +638,132 @@ def test_integer_obstacle_stop_spellings_stay_floats():
         assert all(isinstance(v, float) for v in got), (
             f'obstacle_stop_m:={raw} gave '
             f'{[type(v).__name__ for v in got]}, not floats')
+
+
+# ── truth odometry (swarm_sim.launch.py truth_odom_robots) ───────────────────
+
+TRUTH_ODOM = ('nsk_swarm', 'truth_odom_tf')
+
+# make_namespaced_burger_sdf reads the stock TurtleBot3 model off disk. The
+# tests that call it directly therefore need that package; the ones that only
+# walk the tree do not, which is the whole point of LazyRobotAsset.
+BURGER_SDF_PRESENT = os.path.isfile(
+    '/opt/ros/jazzy/share/turtlebot3_gazebo/models/turtlebot3_burger/model.sdf')
+needs_burger = pytest.mark.skipif(
+    not BURGER_SDF_PRESENT and not REQUIRE_NAV2,
+    reason='turtlebot3_gazebo not installed — nothing to rewrite')
+
+
+def test_swarm_sim_declares_truth_odom_robots_defaulting_empty():
+    # The A/B variable for the whole known-pose change. Every run recorded
+    # before it existed has to reproduce exactly, so a command that does not
+    # name it must behave as though the flag were not there.
+    ld = build('swarm_sim.launch.py')
+    assert declared_defaults(ld)['truth_odom_robots'] == '[]'
+
+
+def test_swarm_sim_launches_no_truth_odom_node_by_default():
+    # Absent from the tree, not merely condition-suppressed — the same gate
+    # shape as rviz, so "a default boot runs no such node" is a statement the
+    # tree itself can be asked about.
+    ld = build('swarm_sim.launch.py')
+    assert TRUTH_ODOM not in nodes(resolved(ld))
+
+
+def test_truth_odom_launches_one_node_per_listed_robot():
+    ld = build('swarm_sim.launch.py')
+
+    one = nodes(resolved(ld, truth_odom_robots='[0]'))
+    assert one.count(TRUTH_ODOM) == 1
+
+    two = nodes(resolved(ld, truth_odom_robots='[0, 3]'))
+    assert two.count(TRUTH_ODOM) == 2
+
+
+def test_the_truth_odom_node_is_staged_behind_a_timer():
+    # It needs the bridge (3 s) to be forwarding /model/robot_N/pose before it
+    # has an input at all; starting it with the description would give it a
+    # subscription to a topic nobody publishes yet.
+    ld = build('swarm_sim.launch.py')
+    assert TRUTH_ODOM in delayed(resolved(ld, truth_odom_robots='[0]'))
+
+
+def test_the_truth_odom_node_gets_its_own_robots_spawn_as_the_anchor():
+    # The anchor decides where every map built from the run is placed, and a
+    # wrong one does not crash: it shifts the map by a constant and the fitter
+    # reports a score for a map metres from where the robot was. So the node
+    # must receive ITS OWN spawn, not robot_0's and not (0, 0).
+    #
+    # DOT_POSES[3] is (-0.53, -0.73); with two robots listed the values must
+    # arrive per node rather than one repeated pair.
+    xs = node_parameters('swarm_sim.launch.py', 'truth_odom_tf', 'spawn_x',
+                         truth_odom_robots='[0, 3]')
+    ys = node_parameters('swarm_sim.launch.py', 'truth_odom_tf', 'spawn_y',
+                         truth_odom_robots='[0, 3]')
+    ids = node_parameters('swarm_sim.launch.py', 'truth_odom_tf', 'robot_id',
+                          truth_odom_robots='[0, 3]')
+
+    assert ids == [0, 3]
+    assert xs == [pytest.approx(0.86), pytest.approx(-0.53)]
+    assert ys == [pytest.approx(0.28), pytest.approx(-0.73)]
+
+
+def test_the_truth_odom_node_runs_on_sim_time():
+    # It restamps nothing — it copies the pose's own sim-time stamp — but every
+    # consumer of the transform is a use_sim_time node, and a wall-clock node
+    # in that chain is the kind of thing that only shows up as dropped scans.
+    flags = node_parameters('swarm_sim.launch.py', 'truth_odom_tf',
+                            'use_sim_time', truth_odom_robots='[0]')
+    assert flags == [True]
+
+
+@pytest.mark.parametrize('spelling, expected', [
+    ('[]', []), ('[0]', [0]), ('[0, 3]', [0, 3]), ('0', [0]),
+    ('[3, 0, 3]', [0, 3]), ('', []), ('  [1]  ', [1]),
+])
+def test_parse_robot_ids_accepts_the_reasonable_spellings(spelling, expected):
+    module = load('swarm_sim.launch.py')
+    assert module.parse_robot_ids(spelling, 'truth_odom_robots') == expected
+
+
+@pytest.mark.parametrize('spelling', ['[5]', '[-1]', '[0', 'zero', "['0']"])
+def test_parse_robot_ids_refuses_anything_else(spelling):
+    # Loudly. Treating an unparseable value as "no robots" would turn a typo
+    # into a full 40-minute run recorded in the wrong mode, discoverable only
+    # afterwards from the bag.
+    module = load('swarm_sim.launch.py')
+    with pytest.raises(RuntimeError):
+        module.parse_robot_ids(spelling, 'truth_odom_robots')
+
+
+@needs_burger
+def test_the_default_sdf_does_not_mention_the_truth_odom_change():
+    # Byte-identity against HEAD is checked outside pytest (it needs git);
+    # what this pins is that the default path runs the SAME replacement list it
+    # always did, so nothing can drift into it unnoticed.
+    module = load('swarm_sim.launch.py')
+    for n in range(5):
+        with open(module.make_namespaced_burger_sdf(n)) as f:
+            sdf = f.read()
+        assert '<tf_topic>/tf</tf_topic>' in sdf
+        assert 'tf_wheel' not in sdf
+
+
+@needs_burger
+def test_the_flag_moves_diffdrives_transform_off_the_bridged_tf():
+    # Exactly one line differs, and it is the one that stops DiffDrive
+    # claiming robot_N/odom -> robot_N/base_footprint on the shared /tf.
+    # /robot_N/odom must be untouched: the wheel odometry keeps its topic, its
+    # rate and its meaning, which is what leaves record_run.sh, check_run_bag.py
+    # and the strip keep set alone.
+    module = load('swarm_sim.launch.py')
+    with open(module.make_namespaced_burger_sdf(0)) as f:
+        base = f.read().splitlines()
+    with open(module.make_namespaced_burger_sdf(0, truth_odom=True)) as f:
+        flagged = f.read().splitlines()
+
+    assert len(base) == len(flagged)
+    differing = [(a, b) for a, b in zip(base, flagged) if a != b]
+    assert differing == [('      <tf_topic>/tf</tf_topic>',
+                          '      <tf_topic>/robot_0/tf_wheel</tf_topic>')]
+    assert '<odom_topic>/robot_0/odom</odom_topic>' in '\n'.join(flagged)

@@ -12,6 +12,8 @@ Launches:
   3b. Per-robot robot_state_publisher: static base_footprint→base_link→
      base_scan chain to /tf_static, from the namespaced URDF (after 4 s)
   4. 5 NSKRobotNode instances (after 5 s delay)
+  4b. truth_odom_tf for each robot in truth_odom_robots (after 4 s) — ONLY
+     with truth_odom_robots:=[K], which is empty by default
   5. ConvergenceMonitorNode (after 6 s delay)
   6. RViz2 with preconfigured layout (after 7 s delay) — ONLY with rviz:=true
 
@@ -20,6 +22,7 @@ RViz is OFF by default and MUST stay so for any measured run: rendering the
 stack. Use rviz:=true for eyeballing only, never during a timed run.
 """
 
+import ast
 import os
 import tempfile
 
@@ -84,12 +87,21 @@ DOT_POSES = [
 ]
 
 
-def make_namespaced_burger_sdf(robot_id: int) -> str:
+def make_namespaced_burger_sdf(robot_id: int, truth_odom: bool = False) -> str:
     """Rewrite the stock burger SDF's plugin/sensor topics and frames into
     the robot_N namespace and return the path of a tempfile holding the
     result, plus append a PosePublisher for ground truth. Geometry, inertia,
     joints, and sensor parameters are untouched; each replaced string occurs
     exactly once in the stock model.
+
+    truth_odom=True additionally moves this robot's DiffDrive transform OFF the
+    bridged /tf, so truth_odom_tf can own the frame pair instead — see the
+    truth_odom_robots launch argument. It changes nothing else: DiffDrive keeps
+    publishing /robot_N/odom at the same rate, on the same topic, with the same
+    meaning, so record_run.sh, check_run_bag.py, the strip script and every
+    consumer of wheel odometry are untouched. False leaves the replacement list
+    exactly as it was before the flag existed, so a default boot writes a
+    byte-identical SDF.
 
     Called at launch EXECUTE time via LazyRobotAsset, never while the launch
     description is being built — see that class.
@@ -97,7 +109,24 @@ def make_namespaced_burger_sdf(robot_id: int) -> str:
     with open(TURTLEBOT3_BURGER_SDF) as f:
         sdf = f.read()
     ns = f'robot_{robot_id}'
-    for old, new in [
+    truth_odom_pairs = [
+        # The stock model publishes DiffDrive's odom->base_footprint onto the
+        # shared gz /tf (model.sdf line 396), which swarm_sim bridges into ROS
+        # /tf for all five robots at once. tf2 allows ONE parent per frame, so
+        # the truth transform cannot simply be added alongside it: both would
+        # claim robot_N/odom -> robot_N/base_footprint and every consumer would
+        # read a mixture. The bridge spec names /tf for the whole swarm and
+        # cannot drop one robot's transforms, so the removal has to happen on
+        # the gz side, here.
+        #
+        # /robot_N/tf_wheel is a valid gz topic that NOTHING bridges, so these
+        # transforms stay inside Gazebo. Deliberately not the empty string:
+        # DiffDrive runs an invalid tf_topic through gz::sim::validTopic() and
+        # silently falls back to /model/<name>/tf, which would work by accident
+        # rather than by contract.
+        ('<tf_topic>/tf</tf_topic>', f'<tf_topic>/{ns}/tf_wheel</tf_topic>'),
+    ] if truth_odom else []
+    for old, new in truth_odom_pairs + [
         ('<topic>cmd_vel</topic>', f'<topic>/{ns}/cmd_vel</topic>'),
         ('<odom_topic>odom</odom_topic>',
          f'<odom_topic>/{ns}/odom</odom_topic>'),
@@ -158,6 +187,34 @@ def make_namespaced_burger_urdf(robot_id: int) -> str:
     return urdf.replace('${namespace}', f'robot_{robot_id}/')
 
 
+def parse_robot_ids(text: str, arg_name: str) -> list:
+    """A list-literal launch argument such as '[0]' -> [0].
+
+    Strict on purpose. The alternative — treating anything unparseable as "no
+    robots" — turns a typo into a full run recorded in the wrong mode, which is
+    only discoverable afterwards from the bag. A bare integer is accepted as
+    well as a list, because 'truth_odom_robots:=0' has exactly one reading and
+    refusing it would cost a boot to learn a punctuation rule.
+    """
+    text = (text or '').strip()
+    if not text:
+        return []
+    try:
+        value = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as exc:
+        raise RuntimeError(
+            f'{arg_name}:={text!r} is not a list literal ({exc}). '
+            f'Write it as {arg_name}:=[0] or {arg_name}:=[].') from exc
+
+    ids = [value] if isinstance(value, int) else list(value)
+    bad = [i for i in ids if not isinstance(i, int) or not 0 <= i < NUM_ROBOTS]
+    if bad:
+        raise RuntimeError(
+            f'{arg_name}:={text!r} names {bad}, which is not a robot id in '
+            f'0..{NUM_ROBOTS - 1}.')
+    return sorted(set(ids))
+
+
 class LazyRobotAsset(Substitution):
     """One of the make_namespaced_* helpers above, deferred to execute time.
 
@@ -179,17 +236,33 @@ class LazyRobotAsset(Substitution):
     A missing TurtleBot3 install therefore surfaces when the spawn timer fires
     rather than at description build; it is the same FileNotFoundError naming
     the same path, and a boot without those packages was never going to work.
+
+    truth_odom_arg names a launch argument holding the list of robots whose
+    odometry comes from ground truth; when given, this resolves it at the same
+    execute time and passes truth_odom=True/False to the maker. Reading it here
+    rather than at build time is what keeps the flag consistent with the rest
+    of the class: the SDF is written once, when the spawn action runs, from
+    whatever the command line actually said.
     """
 
-    def __init__(self, make, robot_id: int):
+    def __init__(self, make, robot_id: int, truth_odom_arg: str = None):
         self._make = make
         self._robot_id = robot_id
+        self._truth_odom_arg = truth_odom_arg
 
     def describe(self) -> str:
-        return f'{self._make.__name__}({self._robot_id})'
+        if self._truth_odom_arg is None:
+            return f'{self._make.__name__}({self._robot_id})'
+        return (f'{self._make.__name__}({self._robot_id}, '
+                f'truth_odom=<{self._truth_odom_arg}>)')
 
     def perform(self, context) -> str:
-        return self._make(self._robot_id)
+        if self._truth_odom_arg is None:
+            return self._make(self._robot_id)
+        ids = parse_robot_ids(
+            LaunchConfiguration(self._truth_odom_arg).perform(context),
+            self._truth_odom_arg)
+        return self._make(self._robot_id, truth_odom=self._robot_id in ids)
 
 
 def generate_launch_description():
@@ -367,6 +440,49 @@ def generate_launch_description():
 
     rviz_group = OpaqueFunction(function=_rviz_actions)
 
+    # Ground-truth odometry for named robots, gated the same way and for the
+    # same reason: with the list empty this returns NOTHING, so a default boot
+    # has no such node in the tree at all rather than a suppressed one.
+    #
+    # 4 s, alongside robot_state_publisher. The bridge comes up at 3 s and must
+    # already be forwarding /model/robot_N/pose for this node to have an input;
+    # slam_toolbox and Nav2 arrive later still, from explore.launch.py, so the
+    # transform is live before anything looks it up.
+    #
+    # A distinct node name per robot. Unlike frontier_explorer (see the note in
+    # explore.launch.py) this process spins exactly ONE node, so the
+    # process-wide `-r __node:=` that name= becomes renames the one node it is
+    # meant to, and two truth-driven robots cannot collide.
+    def _truth_odom_actions(context):
+        ids = parse_robot_ids(
+            LaunchConfiguration('truth_odom_robots').perform(context),
+            'truth_odom_robots')
+        if not ids:
+            return []
+        return [TimerAction(
+            period=4.0,
+            actions=[
+                Node(
+                    package='nsk_swarm',
+                    executable='truth_odom_tf',
+                    name=f'truth_odom_tf_robot_{n}',
+                    parameters=[{
+                        'robot_id': n,
+                        # The anchor. Same spawn_xs/spawn_ys the robot nodes
+                        # and the monitor read, so there is one table and one
+                        # place to get it wrong.
+                        'spawn_x': spawn_xs[n],
+                        'spawn_y': spawn_ys[n],
+                        'use_sim_time': True,
+                    }],
+                    output='screen',
+                )
+                for n in ids
+            ],
+        )]
+
+    truth_odom_group = OpaqueFunction(function=_truth_odom_actions)
+
     # Gazebo, gated the same way, and for a second reason: a substitution
     # cannot express "this argv element is absent". A PythonExpression that
     # evaluates to '' still passes an empty argument through to gz sim, which
@@ -471,6 +587,27 @@ def generate_launch_description():
                         'for timed and recorded runs, as rviz already is.',
         ),
         DeclareLaunchArgument(
+            'truth_odom_robots',
+            default_value='[]',
+            description='List of robot IDs whose odom->base_footprint comes '
+                        'from Gazebo ground truth instead of wheel odometry, '
+                        'e.g. [0]. For each one, DiffDrive\'s transform is '
+                        'moved off the bridged /tf and a truth_odom_tf node '
+                        'publishes inv(spawn).truth in its place; the scans '
+                        'are untouched, and /robot_N/odom still carries the '
+                        'same wheel odometry on the same topic. Exists '
+                        'because b2maps_e0\'s explorer steered by a map its '
+                        'own odometry had destroyed — 138 deg median heading '
+                        'error, walls in fans of rotated copies, exploration '
+                        'declared complete having never seen the outer '
+                        'boundary. Orthogonal to nav_robots, which only mutes '
+                        'the wander driver; a truth-driven explorer needs '
+                        'both. MUST default []: every run recorded before '
+                        'this existed has to reproduce exactly, and with the '
+                        'list empty the generated SDFs are byte-identical and '
+                        'no extra node is launched.',
+        ),
+        DeclareLaunchArgument(
             'wander',
             default_value='false',
             description='Enable the legacy dot-era wander driver on every '
@@ -494,7 +631,8 @@ def generate_launch_description():
                     name=f'spawn_robot_{n}',
                     arguments=[
                         '-world', 'knowledge_world',
-                        '-file', LazyRobotAsset(make_namespaced_burger_sdf, n),
+                        '-file', LazyRobotAsset(make_namespaced_burger_sdf, n,
+                                                'truth_odom_robots'),
                         '-name', f'robot_{n}',
                         '-x', str(x), '-y', str(y), '-z', '0.01',
                     ],
@@ -609,6 +747,9 @@ def generate_launch_description():
                 ),
             ],
         ),
+
+        # ── 5b. Ground-truth odometry (opt-in; OFF by default, after 4 s) ───
+        truth_odom_group,
 
         # ── 6. RViz2 (opt-in; OFF by default, after 7 s) ─────────────────────
         rviz_group,
