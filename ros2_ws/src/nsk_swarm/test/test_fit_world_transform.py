@@ -16,11 +16,26 @@ common involution, and a 180 deg rotation is one too.
 
 The script lives in experiments/, which is not an importable package (nor a
 colcon one), so it is loaded by location the way test_preflight_motion.py loads
-preflight_motion.py. Importing it runs module-level code only -- numpy, scipy,
-PIL, yaml and bag_overlap, which defers its rosbag2_py import into the two
-functions that read a bag. No ROS environment is needed.
+preflight_motion.py. Importing it runs module-level code only -- numpy, yaml
+and bag_overlap, which defers its rosbag2_py import into the two functions that
+read a bag. No ROS environment is needed.
+
+scipy and PIL are NOT module-level there; the fitter defers them into load_map,
+coarse_search and render precisely so that importing it costs nothing, and the
+comment at their import site says so. Deferring moves the failure out of
+collection and into whichever test makes the call -- it does not remove it. So
+a test that reaches one of those three needs that library at RUN time and is
+marked accordingly. Run 35539327xxx is what that costs when it is not: CI's
+ros:jazzy container has no scipy, and the one test here that calls
+coarse_search failed on the import at fit_world_transform.py:431.
+
+Everything else in this file is pure arithmetic over dicts and small numpy
+arrays -- the merge predicate, the candidate gate, the free optimum -- and MUST
+keep running in CI. Those are the tests that catch the defects this file exists
+for; skipping the module wholesale to dodge one import would retire them.
 """
 
+import importlib
 import importlib.util
 import os
 
@@ -37,6 +52,36 @@ def load_fitter():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _importable(name: str) -> bool:
+    """True if `name` can actually be imported here.
+
+    A real import attempt, not importlib.util.find_spec: find_spec answers
+    "is there something on the path called this", which is not the same
+    question as "will the deferred import inside coarse_search succeed". A
+    half-installed scipy, or one shadowed by a meta_path blocker, satisfies
+    the first and fails the second -- and the second is the one that decides
+    whether the test can run. Costs one import of an already-imported module
+    everywhere the library IS present.
+    """
+    try:
+        importlib.import_module(name)
+    except ImportError:
+        return False
+    return True
+
+
+# scipy is absent from CI's ros:jazzy container by design (see the deferred
+# import comment in fit_world_transform.py). This marker is the other half of
+# that arrangement: the import is deferred so the MODULE loads, and the test
+# that forces it is skipped so the SUITE passes. Only tests reaching
+# coarse_search, load_map or render need it -- everything else here is
+# numpy-only and must keep running.
+needs_scipy = pytest.mark.skipif(
+    not _importable('scipy'),
+    reason='scipy not installed — coarse_search imports it at call time '
+           '(fit_world_transform.py:431)')
 
 
 fitter = load_fitter()
@@ -234,8 +279,13 @@ def test_the_free_optimum_ignores_seeded_peaks():
     assert free_optimum(peaks)['score'] == 0.95
 
 
+@needs_scipy
 def test_a_seed_survives_the_translation_nms_that_deleted_the_twin():
     """The b2maps_e0t_kp failure, in miniature.
+
+    The only test in this file that reaches a deferred import: coarse_search
+    pulls scipy.ndimage and scipy.signal at call time, so this is skipped
+    where scipy is absent. Nothing above it needs the marker.
 
     The map's best placement and its 180 deg twin sit 0.307 m apart in
     translation -- inside NMS_RADIUS -- so the greedy suppression drops the

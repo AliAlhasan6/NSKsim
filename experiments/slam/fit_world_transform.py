@@ -48,14 +48,23 @@ import yaml
 # PIL and scipy are imported inside the three functions that use them --
 # load_map, coarse_search and render -- not here. CI imports this module only
 # to reach placements_coincide() and merge_groups() for the merge tests
-# (test_fit_world_transform.py), and its ros:jazzy container has neither
-# library: nothing in ros-core, navigation2, nav2-bringup or slam-toolbox
-# pulls python3-pil or python3-scipy, and the pip installs in ci.yml name
-# scipy only as an extra (torch_geometric[full], networkx[default]). A
-# module-level import of either is therefore a COLLECTION error that takes
-# the whole nsk_swarm suite down, not just these tests -- which is what
-# happened on 03d666c. numpy and yaml stay here: both are present in that
-# container, and every function in this file needs numpy anyway.
+# (test_fit_world_transform.py). Nothing in ros-core, navigation2,
+# nav2-bringup or slam-toolbox pulls python3-scipy, and the pip installs in
+# ci.yml name scipy only as an extra (torch_geometric[full],
+# networkx[default]), so SCIPY IS ABSENT THERE. Pillow is installed, but on
+# purpose and for run_health.py's write_png (a32bc6c), not for this file --
+# nothing here may assume it stays. A module-level import of either is a
+# COLLECTION error that takes the whole nsk_swarm suite down, not just these
+# tests, which is what happened on 03d666c. numpy and yaml stay here: both
+# are present in that container, and every function in this file needs numpy
+# anyway.
+#
+# THE RULE FOR TESTS: a test that calls into load_map, coarse_search or render
+# needs that library at CALL time and must be skipped without it -- deferring
+# the import moves the failure from collection into the test, it does not
+# remove it. Mark such a test the way needs_scipy marks the coarse_search one
+# in test_fit_world_transform.py. Every other function here is numpy-only and
+# its tests must keep running in CI.
 #
 # Same convention bag_overlap.py already uses for rosbag2_py and the ROS
 # message types (bag_overlap.py:157, 242).
