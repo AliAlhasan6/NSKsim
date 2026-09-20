@@ -87,7 +87,8 @@ def read_metadata(bag_dir):
     meta = Path(bag_dir) / "metadata.yaml"
     if not meta.is_file():
         raise FileNotFoundError(
-            f"{bag_dir}: no metadata.yaml -- not a bag, or the recorder did not shut down cleanly"
+            f"{bag_dir}: no metadata.yaml -- not a bag, or the recorder "
+            "did not shut down cleanly"
         )
     info = yaml.safe_load(meta.read_text())["rosbag2_bagfile_information"]
     counts = {
@@ -141,7 +142,8 @@ def report(label, r):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("raw", help="raw run bag directory (what C4 measured)")
-    ap.add_argument("rewritten", help="rewriter output bag directory (what gets stripped)")
+    ap.add_argument("rewritten",
+                    help="rewriter output bag directory (what gets stripped)")
     ap.add_argument(
         "--tol-ms",
         type=float,
@@ -170,7 +172,8 @@ def main(argv=None):
 
     ok, reasons = verdict(raw, rew, int(round(args.tol_ms * 1e6)))
     if ok:
-        print("PASS: same time zero, so C4's --start applies to the rewritten bag unchanged.")
+        print("PASS: same time zero, so C4's --start applies to the "
+              "rewritten bag unchanged.")
         return 0
     for r in reasons:
         print(f"FAIL: {r}")
