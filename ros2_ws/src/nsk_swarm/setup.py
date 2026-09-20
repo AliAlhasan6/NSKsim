@@ -41,6 +41,7 @@ setup(
             'convergence_monitor = nsk_swarm.convergence_monitor:main',
             'frontier_explorer   = nsk_swarm.frontier_explorer:main',
             'truth_odom_tf       = nsk_swarm.truth_odom_tf:main',
+            'free_space_relay    = nsk_swarm.free_space_relay:main',
             'nsk_engine          = nsk_engine.engine_server:main',
         ],
     },

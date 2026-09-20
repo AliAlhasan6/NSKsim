@@ -25,6 +25,7 @@ import shutil
 import tempfile
 
 import pytest
+import yaml
 
 from ament_index_python.packages import PackageNotFoundError
 from launch import LaunchContext, LaunchDescription
@@ -236,7 +237,11 @@ def delayed(launch_description):
 # ── explore.launch.py ────────────────────────────────────────────────────────
 
 def test_explore_launches_slam_nav2_and_the_explorer():
-    ld = build('explore.launch.py')
+    # resolved(), not the raw description: slam_toolbox is built inside an
+    # OpaqueFunction so that free_space_relay can add parameters without the
+    # default path carrying them, and an OpaqueFunction is a black box until a
+    # context performs it.
+    ld = resolved(build('explore.launch.py'))
     present = nodes(ld)
 
     # SLAM must be a LifecycleNode, not a plain Node: launched plain it sits in
@@ -260,7 +265,10 @@ def test_the_nav2_flag_gates_nav2_and_the_explorer_but_never_slam():
     ld = build('explore.launch.py')
 
     def surviving(**arguments):
-        kept = enabled(ld, **arguments)
+        # Resolved per call: the slam node and its two lifecycle actions come
+        # out of an OpaqueFunction, which has to be performed against the same
+        # arguments before its conditions can be asked anything.
+        kept = enabled(resolved(ld, **arguments), **arguments)
         return {
             'slam': sum(isinstance(e, LifecycleNode)
                         and e.node_package == 'slam_toolbox' for e in kept),
@@ -468,9 +476,41 @@ def node_parameters(filename, executable, name, **arguments):
             for key, value in block.items():
                 if perform_substitutions(context, list(key)) != name:
                     continue
-                found.append(value.evaluate(context)
-                             if hasattr(value, 'evaluate') else value)
+                found.append(_perform_value(context, value))
     return found
+
+
+def _perform_value(context, value):
+    """One parameter's value, as launch would hand it to the node.
+
+    Three shapes reach here. A ParameterValue evaluates itself, which is what
+    applies its value_type cast. A PLAIN value -- a bool, an int -- is already
+    what it will be. And a plain string is neither: normalize_parameters()
+    rewrites it into a tuple of TextSubstitution at Node construction, exactly
+    as it does the keys, so it has to be performed or the test compares a
+    tuple of objects against the string it stands for.
+
+    Only when every element is a substitution: a parameter whose value is a
+    genuine list (an array of doubles, say) must come back as that list.
+
+    The performed text is then read back through YAML, because that is what
+    launch_ros did to it: normalize_parameter_dict runs a plain string value
+    through yaml.dump to keep its type, so '/robot_0/scan_free' is stored as
+    the document '/robot_0/scan_free\\n...\\n' -- PyYAML's explicit
+    end-of-document marker and all. The node parses it back before it ever
+    sees it; a test that skipped this step would compare a YAML document
+    against the string it encodes and fail on a value that is perfectly
+    correct.
+    """
+    if hasattr(value, 'evaluate'):
+        return value.evaluate(context)
+    if isinstance(value, (list, tuple)) and value and all(
+            hasattr(v, 'perform') for v in value):
+        text = perform_substitutions(context, list(value))
+        if text.endswith('\n...\n'):
+            return yaml.safe_load(text)
+        return text
+    return value
 
 
 def explorer_parameter(name, **arguments):
@@ -783,6 +823,58 @@ def test_the_flag_moves_diffdrives_transform_off_the_bridged_tf():
     assert '<odom_topic>/robot_0/odom</odom_topic>' in '\n'.join(flagged)
 
 
+@needs_burger
+def test_each_sensor_bound_occurs_exactly_once_in_the_real_stock_model():
+    """Uniqueness in the UPSTREAM file, which is the thing that can drift.
+
+    Both rewrites are exact-string replacements against a model this repo does
+    not own and does not pin. Two failure modes, and str.replace is silent on
+    both:
+
+      ZERO matches -- upstream reformatted the element (0.12 for 0.120000, say,
+      or whitespace inside the tag). The pair becomes a no-op and the robots
+      spawn as LDS-01s while every config, gate and document says LDS-02.
+
+      MORE THAN ONE match -- upstream added a second <min>/<max> elsewhere, a
+      joint limit or a second sensor. The replacement would hit all of them and
+      silently retune something that is not the lidar.
+
+    The fixture test below cannot catch either: the fixture is ours, so it
+    agrees with us by construction. This one has to read the real file, which
+    is why it is gated on turtlebot3_gazebo being installed.
+    """
+    module = load('swarm_sim.launch.py')
+    stock = open(module.TURTLEBOT3_BURGER_SDF).read()
+
+    for bound in (f'<min>{module.BURGER_STOCK_RANGE_MIN:.6f}</min>',
+                  f'<max>{module.BURGER_STOCK_RANGE_MAX}</max>'):
+        assert stock.count(bound) == 1, (
+            f'{bound!r} occurs {stock.count(bound)} times in '
+            f'{module.TURTLEBOT3_BURGER_SDF}, expected exactly 1')
+
+    # And the new bounds are not already there, which would make the rewrite
+    # untestable by presence alone.
+    for bound in (f'<min>{module.BURGER_RANGE_MIN:.6f}</min>',
+                  f'<max>{module.BURGER_RANGE_MAX}</max>'):
+        assert bound not in stock, f'{bound!r} is already in the stock model'
+
+
+@needs_burger
+def test_the_spawned_model_carries_the_lds02_bounds():
+    """The end state, read off a real spawned SDF: 160 to 8000 mm."""
+    module = load('swarm_sim.launch.py')
+    with open(module.make_namespaced_burger_sdf(0)) as f:
+        sdf = f.read()
+
+    assert f'<min>{module.BURGER_RANGE_MIN:.6f}</min>' in sdf
+    assert f'<max>{module.BURGER_RANGE_MAX}</max>' in sdf
+    assert f'<min>{module.BURGER_STOCK_RANGE_MIN:.6f}</min>' not in sdf
+    assert f'<max>{module.BURGER_STOCK_RANGE_MAX}</max>' not in sdf
+    # The ROBOTIS e-manual figures, as metres.
+    assert module.BURGER_RANGE_MIN == pytest.approx(0.160)
+    assert module.BURGER_RANGE_MAX == pytest.approx(8.000)
+
+
 def test_the_replacement_list_rewrites_every_element_it_names(monkeypatch):
     """The rewrite, against a fixture, so it is covered without turtlebot3.
 
@@ -800,6 +892,8 @@ def test_the_replacement_list_rewrites_every_element_it_names(monkeypatch):
                    '<child_frame_id>base_footprint</child_frame_id>',
                    '<topic>scan</topic>', '<gz_frame_id>base_scan</gz_frame_id>',
                    '<topic>imu</topic>', '<topic>joint_states</topic>',
+                   f'<min>{module.BURGER_STOCK_RANGE_MIN:.6f}</min>',
+                   f'<max>{module.BURGER_STOCK_RANGE_MAX}</max>',
                    '</model>'):
         assert source.count(target) == 1, f'fixture: {target}'
 
@@ -811,7 +905,13 @@ def test_the_replacement_list_rewrites_every_element_it_names(monkeypatch):
                 '<frame_id>odom</frame_id>',
                 '<child_frame_id>base_footprint</child_frame_id>',
                 '<topic>scan</topic>', '<gz_frame_id>base_scan</gz_frame_id>',
-                '<topic>imu</topic>', '<topic>joint_states</topic>'):
+                '<topic>imu</topic>', '<topic>joint_states</topic>',
+                # The stock sensor bounds. A spawned model still carrying
+                # these is an LDS-01, whatever the YAML and the launch
+                # constants say, and every range-dependent number downstream
+                # would then be describing a sensor the robots do not have.
+                f'<min>{module.BURGER_STOCK_RANGE_MIN:.6f}</min>',
+                f'<max>{module.BURGER_STOCK_RANGE_MAX}</max>'):
         assert was not in out, f'left un-namespaced: {was}'
     for now in ('<topic>/robot_2/cmd_vel</topic>',
                 '<odom_topic>/robot_2/odom</odom_topic>',
@@ -820,7 +920,13 @@ def test_the_replacement_list_rewrites_every_element_it_names(monkeypatch):
                 '<topic>/robot_2/scan</topic>',
                 '<gz_frame_id>robot_2/base_scan</gz_frame_id>',
                 '<topic>/robot_2/imu</topic>',
-                '<topic>/robot_2/joint_states</topic>'):
+                '<topic>/robot_2/joint_states</topic>',
+                # The LDS-02's bounds, 160 to 8000 mm. Formatted as the stock
+                # file formats each one -- six places for the min, one for the
+                # max -- because these are exact-string replacements against a
+                # file this repo does not own.
+                f'<min>{module.BURGER_RANGE_MIN:.6f}</min>',
+                f'<max>{module.BURGER_RANGE_MAX}</max>'):
         assert now in out, f'not rewritten: {now}'
 
     # The append, and the rate the whole ground-truth layer is timed by.
@@ -875,3 +981,134 @@ def test_numeric_scan_matching_spellings_stay_bools():
         got = node_parameters('explore.launch.py', 'async_slam_toolbox_node',
                               'use_scan_matching', scan_matching=raw)
         assert got == [expected], f'scan_matching:={raw} resolved to {got!r}'
+
+
+def slam_parameter_keys(**arguments):
+    """The keys of slam_toolbox's inline parameter dict, as launch builds it."""
+    ld = resolved(build('explore.launch.py'), **arguments)
+    context = LaunchContext()
+    context.launch_configurations.update(arguments)
+    for entity in build('explore.launch.py').entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+    slam = [e for e in _walk(ld)
+            if isinstance(e, LifecycleNode) and e.node_package == 'slam_toolbox']
+    assert len(slam) == 1, slam
+    for block in slam[0]._Node__parameters:
+        if isinstance(block, dict):
+            return [perform_substitutions(context, list(k)) for k in block]
+    raise AssertionError('slam_toolbox has no inline parameter dict')
+
+# ── the free-space relay (explore.launch.py free_space_relay) ────────────────
+
+RELAY = ('nsk_swarm', 'free_space_relay')
+
+
+def test_explore_declares_free_space_relay_defaulting_false():
+    # The A/B variable for the mapping change. Every run before it has to
+    # reproduce exactly, so a command that does not name it must behave as
+    # though it did not exist.
+    ld = build('explore.launch.py')
+    assert declared_defaults(ld)['free_space_relay'] == 'false'
+
+
+def test_no_relay_node_by_default_and_one_when_asked():
+    ld = build('explore.launch.py')
+    assert RELAY not in nodes(resolved(ld))
+    assert nodes(resolved(ld, free_space_relay='true')).count(RELAY) == 1
+
+
+def test_the_default_hands_slam_toolbox_exactly_the_old_parameters():
+    """The byte-identity claim, as a claim about parameters.
+
+    With the flag off, slam_toolbox's dict block must carry the four keys it
+    carried before this argument existed and NOT scan_topic or
+    max_laser_range -- naming those here, even at today's values, would make
+    the launch file a second source that goes stale when slam_robotN.yaml is
+    edited.
+    """
+    keys = slam_parameter_keys()
+    assert keys == ['use_lifecycle_manager', 'use_sim_time', 'map_name',
+                    'use_scan_matching'], keys
+
+
+def test_the_flag_points_slam_at_the_relay_and_lowers_the_range():
+    keys = slam_parameter_keys(free_space_relay='true')
+    assert 'scan_topic' in keys and 'max_laser_range' in keys
+
+    topic = node_parameters('explore.launch.py', 'async_slam_toolbox_node',
+                            'scan_topic', free_space_relay='true')
+    assert topic == ['/robot_0/scan_free'], topic
+
+    rng = node_parameters('explore.launch.py', 'async_slam_toolbox_node',
+                          'max_laser_range', free_space_relay='true')
+    assert rng == [pytest.approx(7.9)], rng
+
+
+def test_the_relay_range_is_strictly_below_the_scans_range_max():
+    """The inequality the relay rests on, across the two files that set it.
+
+    RELAY_RANGE_THRESHOLD lives in explore.launch.py and the scan's range_max
+    lives in swarm_sim.launch.py (BURGER_RANGE_MAX, rewritten into the spawned
+    model). Neither file can check the pair on its own, which is exactly why
+    this test reads BOTH rather than asserting the threshold against a literal:
+    a literal here would go stale the moment the sensor moved, and go stale
+    silently, since a too-high threshold is not a syntax error anywhere.
+
+    Equal values are what every run before the relay had, and they are why
+    no-return beams cleared nothing: Karto drops anything >= maxRange
+    (Karto.h:6169), so a fill has nowhere to go.
+    """
+    explore = load('explore.launch.py')
+    swarm = load('swarm_sim.launch.py')
+
+    assert explore.RELAY_RANGE_THRESHOLD < swarm.BURGER_RANGE_MAX
+
+    # And the fill the relay derives from the pair must land strictly between
+    # them, or Karto either drops it or marks a wall where nothing is.
+    fill = 0.5 * (explore.RELAY_RANGE_THRESHOLD + swarm.BURGER_RANGE_MAX)
+    assert explore.RELAY_RANGE_THRESHOLD < fill < swarm.BURGER_RANGE_MAX
+
+
+def test_the_spawned_model_carries_the_range_the_slam_config_expects():
+    """The sensor, slam_toolbox and the relay must agree on one number.
+
+    Three files independently name the lidar ceiling: swarm_sim.launch.py
+    rewrites it into the model, slam_robot<id>.yaml gives it to Karto as
+    max_laser_range, and explore.launch.py overrides that with the relay's
+    threshold. Karto clips rangeThreshold to the scan's range_max
+    (Karto.h:3946-3949), so a max_laser_range ABOVE the sensor is silently
+    inert and one below silently discards returns -- neither fails loudly, and
+    the b2maps runs are long enough that finding out afterwards is expensive.
+    """
+    swarm = load('swarm_sim.launch.py')
+    # EXP_NAV off the launch file rather than retyped: it is the directory
+    # explore.launch.py actually hands to slam_toolbox.
+    params = os.path.join(load('explore.launch.py').EXP_NAV, 'slam_robot0.yaml')
+    if not os.path.isfile(params):
+        pytest.skip(f'{params} not present -- nothing to cross-check against')
+
+    with open(params) as handle:
+        cfg = yaml.safe_load(handle)['slam_toolbox']['ros__parameters']
+
+    assert cfg['max_laser_range'] == pytest.approx(swarm.BURGER_RANGE_MAX)
+    assert swarm.BURGER_RANGE_MAX != swarm.BURGER_STOCK_RANGE_MAX
+
+
+def test_the_relay_gets_its_robot_and_the_same_threshold():
+    ids = node_parameters('explore.launch.py', 'free_space_relay', 'robot_id',
+                          free_space_relay='true', robot_id='3')
+    thr = node_parameters('explore.launch.py', 'free_space_relay',
+                          'range_threshold', free_space_relay='true',
+                          robot_id='3')
+    module = load('explore.launch.py')
+
+    assert ids == [3]
+    assert thr == [pytest.approx(module.RELAY_RANGE_THRESHOLD)]
+
+
+def test_the_relay_follows_the_robot_id():
+    topic = node_parameters('explore.launch.py', 'async_slam_toolbox_node',
+                            'scan_topic', free_space_relay='true',
+                            robot_id='4')
+    assert topic == ['/robot_4/scan_free'], topic

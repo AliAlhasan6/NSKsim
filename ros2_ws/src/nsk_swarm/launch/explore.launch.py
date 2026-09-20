@@ -71,6 +71,32 @@ from nav2_common.launch import RewrittenYaml
 # path (VENV_SITE_PACKAGES); follow that precedent here.
 EXP_NAV = '/home/lawlite/Desktop/NSKsim/experiments/nav'
 
+# slam_toolbox's max_laser_range when free_space_relay is on, and the threshold
+# the relay fills just above. It must sit strictly BELOW the scan's range_max or
+# the relay's fill is dropped by Karto exactly as +inf is -- see
+# free_space_relay.py.
+#
+# The simulated lidar is a ROBOTIS LDS-02 -- detection distance 160 to 8000 mm
+# per the ROBOTIS e-manual, the sensor that replaced the LDS-01 on the
+# TurtleBot3 Burger in 2022 -- not the 120 to 3500 mm LDS-01 that the stock
+# turtlebot3_gazebo model still ships; make_namespaced_burger_sdf rewrites both
+# bounds at spawn.
+#
+# So range_max is BURGER_RANGE_MAX in swarm_sim.launch.py, 8.0
+# m; this is that minus the same 0.1 m of headroom the 3.5 m era used, so the
+# fill lands at the midpoint 7.95 m, 50 mm clear of both ends against a 0.05 m
+# map resolution. The invariant, not the literal, is what matters: the two files
+# are checked against each other in test_launch_descriptions.py.
+#
+# The headroom costs the last 0.1 m of every genuine hit -- readings in
+# [7.9, 8.0) are traced as free to 7.9 m with no obstacle marked, instead of
+# marking one where they landed. At the old pair that band was 96114 readings:
+# 1.93% of b2maps_e0t's 4979217 returns and 0.82% of all its beams. That figure
+# is HISTORICAL, about a 3.5 m bag at a 3.4 m threshold, and does not carry over
+# -- the [7.9, 8.0) band cannot be known until a run at 8 m produces it, and
+# should be re-measured then rather than assumed to be the same fraction.
+RELAY_RANGE_THRESHOLD = 7.9
+
 
 def generate_launch_description():
     nav2_bringup_share = get_package_share_directory('nav2_bringup')
@@ -167,6 +193,29 @@ def generate_launch_description():
                     '(96.1% off against 76.1% on) and invents 0.98 m of '
                     'map->odom drift that the poses do not have. n=1.')
 
+    declare_free_space_relay = DeclareLaunchArgument(
+        'free_space_relay', default_value='false',
+        description='Feed slam_toolbox a scan whose no-return beams clear '
+                    'free space, instead of the raw one where they clear '
+                    'nothing. Karto drops any reading at or above the scan '
+                    'range_max, +inf included (Karto.h:6169), so on b2maps_e0t '
+                    '57.47% of 11.7M beams cleared nothing and the run mapped '
+                    '63 m2 of a 391 m2 floor. Still needed at 8 m: 20.5% of '
+                    'beams return nothing there, and the relay is worth 209 -> '
+                    '335 m2 of free space on e0t\'s own trajectory. It is NOT '
+                    'a substitute for the range and the range is not a '
+                    'substitute for it -- Karto sizes the grid from filtered '
+                    'readings only (Karto.h:5644), so a filled beam can never '
+                    'enlarge the map box. Range sets the box, the relay fills '
+                    'it. true starts free_space_relay, '
+                    'points scan_topic at /robot_<id>/scan_free, and lowers '
+                    f'max_laser_range to {RELAY_RANGE_THRESHOLD} so the '
+                    'relay\'s fill is traced as free space rather than '
+                    'dropped or marked as a wall. Nav2 keeps the RAW scan: '
+                    'the fill is a convention Karto reads and an obstacle '
+                    'layer would not. Default false leaves the launch exactly '
+                    'as it was, YAML included.')
+
     declare_rviz = DeclareLaunchArgument(
         'rviz', default_value='false',
         description='Launch an RViz preconfigured for robot_<id> (Fixed Frame '
@@ -216,15 +265,52 @@ def generate_launch_description():
     # the absolute '/map', so the OccupancyGrid (and '<map_name>_metadata') would
     # publish on bare /map, /map_metadata regardless of namespace. Point it at
     # /robot_<id>/map so the map lands under the robot's namespace for Nav2/RViz.
-    slam_node = LifecycleNode(
-        package='slam_toolbox',
-        executable='async_slam_toolbox_node',
-        name='slam_toolbox',
-        namespace=namespace,
-        parameters=[namespaced_slam_params,
-                    {'use_lifecycle_manager': False,
-                     'use_sim_time': True,
-                     'map_name': ['/robot_', robot_id, '/map'],
+    def _relay_on(context) -> bool:
+        return LaunchConfiguration('free_space_relay').perform(
+            context).lower() in ('true', '1')
+
+    def _slam_overrides(context) -> dict:
+        """The free-space-relay overrides, or nothing at all.
+
+        Empty by default, and that is the point: with the flag off
+        slam_toolbox is handed exactly the parameter dict it was handed before
+        this argument existed, and slam_robotN.yaml remains the single source
+        for scan_topic and max_laser_range. Naming those two here
+        unconditionally -- even with today's values -- would make the launch
+        file a second source that goes stale the moment the YAML is edited.
+        """
+        if not _relay_on(context):
+            return {}
+        rid = LaunchConfiguration('robot_id').perform(context)
+        return {
+            # What the relay publishes; the raw scan is untouched and still
+            # feeds Nav2's costmaps.
+            'scan_topic': f'/robot_{rid}/scan_free',
+            # Must be strictly BELOW the scan's range_max for the relay's fill
+            # to be traced rather than dropped -- see free_space_relay.py.
+            'max_laser_range': RELAY_RANGE_THRESHOLD,
+        }
+
+    def _slam_actions(context):
+        """The slam_toolbox node and the two events that drive its lifecycle.
+
+        Built at execute time so the overrides above can be ABSENT rather than
+        present-with-the-old-value. The three are returned together because
+        the events match the node by identity.
+        """
+        node = _make_slam_node(_slam_overrides(context))
+        return [node, _slam_configure(node), _slam_activate(node)]
+
+    def _make_slam_node(overrides: dict) -> LifecycleNode:
+        return LifecycleNode(
+            package='slam_toolbox',
+            executable='async_slam_toolbox_node',
+            name='slam_toolbox',
+            namespace=namespace,
+            parameters=[namespaced_slam_params,
+                        {'use_lifecycle_manager': False,
+                         'use_sim_time': True,
+                         'map_name': ['/robot_', robot_id, '/map'],
                      # Overridden HERE rather than through RewrittenYaml's
                      # param_rewrites: a later dict wins over an earlier
                      # params file, so this needs no second rewrite pass and
@@ -236,32 +322,57 @@ def generate_launch_description():
                      # cast 'scan_matching:=0' infers as the INT 0, which
                      # rclpy will not accept for a bool parameter, and the
                      # node would die at startup on a reasonable spelling.
-                     'use_scan_matching': ParameterValue(
-                         LaunchConfiguration('scan_matching'),
-                         value_type=bool)}],
-        output='screen',
-    )
+                         'use_scan_matching': ParameterValue(
+                             LaunchConfiguration('scan_matching'),
+                             value_type=bool),
+                         **overrides}],
+            output='screen',
+        )
 
-    slam_configure = EmitEvent(
-        event=ChangeState(
-            lifecycle_node_matcher=matches_action(slam_node),
-            transition_id=Transition.TRANSITION_CONFIGURE,
-        ),
-    )
+    def _slam_configure(node) -> EmitEvent:
+        return EmitEvent(
+            event=ChangeState(
+                lifecycle_node_matcher=matches_action(node),
+                transition_id=Transition.TRANSITION_CONFIGURE,
+            ),
+        )
 
-    slam_activate = RegisterEventHandler(
-        OnStateTransition(
-            target_lifecycle_node=slam_node,
-            start_state='configuring',
-            goal_state='inactive',
-            entities=[
-                EmitEvent(event=ChangeState(
-                    lifecycle_node_matcher=matches_action(slam_node),
-                    transition_id=Transition.TRANSITION_ACTIVATE,
-                )),
-            ],
-        ),
-    )
+    def _slam_activate(node) -> RegisterEventHandler:
+        return RegisterEventHandler(
+            OnStateTransition(
+                target_lifecycle_node=node,
+                start_state='configuring',
+                goal_state='inactive',
+                entities=[
+                    EmitEvent(event=ChangeState(
+                        lifecycle_node_matcher=matches_action(node),
+                        transition_id=Transition.TRANSITION_ACTIVATE,
+                    )),
+                ],
+            ),
+        )
+
+    slam_group = OpaqueFunction(function=_slam_actions)
+
+    # The relay itself, gated the same way and for the same reason as
+    # swarm_sim's truth_odom_tf group: with the flag off this returns NOTHING,
+    # so a default run has no such node in the tree rather than a suppressed
+    # one. It reads the raw scan and publishes /robot_<id>/scan_free, which is
+    # what the overrides above point slam_toolbox at.
+    def _relay_actions(context):
+        if not _relay_on(context):
+            return []
+        rid = LaunchConfiguration('robot_id').perform(context)
+        return [Node(
+            package='nsk_swarm',
+            executable='free_space_relay',
+            name=f'free_space_relay_robot_{rid}',
+            parameters=[{'robot_id': int(rid),
+                         'range_threshold': RELAY_RANGE_THRESHOLD}],
+            output='screen',
+        )]
+
+    relay_group = OpaqueFunction(function=_relay_actions)
 
     # ── 2. Nav2 stack ───────────────────────────────────────────────────────
     # navigation_launch.py does NOT set namespace= on its server Nodes — its
@@ -375,10 +486,10 @@ def generate_launch_description():
         declare_precheck,
         declare_escape_distance,
         declare_scan_matching,
+        declare_free_space_relay,
         declare_rviz,
-        slam_node,
-        slam_configure,
-        slam_activate,
+        relay_group,
+        slam_group,
         nav2_group,
         explorer_node,
         rviz_group,
