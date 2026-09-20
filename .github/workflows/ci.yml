@@ -36,6 +36,15 @@ jobs:
           pip3 install --break-system-packages torch --index-url https://download.pytorch.org/whl/cpu
           pip3 install --break-system-packages torch_geometric networkx
 
+          # pillow: run_health.py --save-map writes the run's final map as a
+          # PNG beside the PGM, through PIL (experiments/analysis/run_health.py
+          # write_png), and two tests read that PNG back to check it is the
+          # same image as the PGM. Not an optional extra: without it R7 cannot
+          # produce half its output, so a missing pillow must fail here rather
+          # than skip. Run 35520327049 found this the moment the collection
+          # failure above stopped hiding it.
+          pip3 install --break-system-packages pillow
+
           # The ros:jazzy image is ros-core — no Nav2, no slam_toolbox. These
           # are import-time dependencies of the SUITE, not optional extras:
           #   navigation2  -> nav2_simple_commander, imported at module level by
