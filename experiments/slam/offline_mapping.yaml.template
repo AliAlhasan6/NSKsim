@@ -33,7 +33,7 @@ slam_toolbox:
     odom_frame: robot___ROBOT__/odom
     base_frame: robot___ROBOT__/base_footprint
     map_frame: robot___ROBOT__/map
-    scan_topic: /robot___ROBOT__/scan
+    scan_topic: /robot___ROBOT__/__SCAN_SUFFIX__
 
     # map_name defaults to the ABSOLUTE '/map', which ignores namespacing. We
     # run unnamespaced and one robot at a time, so bare /map is what we want and
@@ -50,7 +50,7 @@ slam_toolbox:
     resolution: 0.1
 
     # Matches the bag's LaserScan.range_max and bag_overlap.py's MAX_RANGE.
-    max_laser_range: 3.5
+    max_laser_range: __MAX_LASER_RANGE__
 
     # ── scan-matching cadence ────────────────────────────────────────────────
     # Recorded paths are only 12.7-15.1 m long. At the stock 0.2 m that is ~65

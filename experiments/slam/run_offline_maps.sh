@@ -50,6 +50,40 @@ SETTLE="${SETTLE:-8}"
 # odom->base_footprint IS ground truth -- see rewrite_odom_from_truth.py.
 SCAN_MATCHING="${SCAN_MATCHING:-true}"
 
+# FREE_SPACE_RELAY=true replays each scan through nsk_swarm's free_space_relay
+# and points slam_toolbox at its output instead of the bag's raw topic.
+#
+# Karto drops every reading at or above the scan's range_max, +inf included
+# (karto_sdk Karto.h:6169), so a beam that hits nothing clears nothing: on
+# b2maps_e0t that is 57.47% of 11.7M beams, and the run mapped 63 m2 of a
+# 391 m2 floor. The relay rewrites those beams to a value between
+# RELAY_RANGE_THRESHOLD and range_max, which Karto traces as free space
+# without marking an obstacle -- but only while max_laser_range is BELOW
+# range_max, which is why the two move together here.
+#
+# The bag is untouched: the relay is a node in the replay, exactly as it is a
+# node in the live run, so an online map and an offline map of the same run
+# are built the same way. Default false renders a params file byte-identical
+# to every one already in experiments/logs/.
+FREE_SPACE_RELAY="${FREE_SPACE_RELAY:-false}"
+
+# Both of these are DERIVED FROM THE BAG unless set, and that is the whole
+# point: this script replays recorded scans, and a bag's range_max is whatever
+# the sensor was when it was recorded. There are now two eras of bag -- every
+# b16/b18/b2maps bag is a 3.5 m LDS-01, and anything recorded after
+# BURGER_RANGE_MAX moved is an 8 m LDS-02 -- so a literal here would be wrong
+# for one of them whichever value it took.
+#
+# Getting it wrong is quiet in one direction and loud in the other. Too HIGH a
+# max_laser_range is inert: Karto clips rangeThreshold to the scan's own
+# maxRange (Karto.h:3946-3949), so 8.0 against a 3.5 m bag just behaves as 3.5
+# and nothing says so. Too high a RELAY THRESHOLD is not inert -- 7.9 against a
+# 3.5 m bag leaves no value that is both traced and not dropped, so
+# free_space_relay refuses to invent one, logs once, and passes every scan
+# through UNCHANGED. The replay then completes, writes a map, and that map is
+# silently the no-relay map under a name that says otherwise.
+RELAY_HEADROOM="${RELAY_HEADROOM:-0.1}"
+
 mkdir -p "$MAPDIR" "$LOGDIR"
 
 die() { echo -e "\nFATAL: $*\n" >&2; exit 1; }
@@ -63,6 +97,19 @@ die() { echo -e "\nFATAL: $*\n" >&2; exit 1; }
 
 [[ "$SCAN_MATCHING" == "true" || "$SCAN_MATCHING" == "false" ]] || \
   die "SCAN_MATCHING must be exactly 'true' or 'false', got: $SCAN_MATCHING"
+
+[[ "$FREE_SPACE_RELAY" == "true" || "$FREE_SPACE_RELAY" == "false" ]] || \
+  die "FREE_SPACE_RELAY must be exactly 'true' or 'false', got: $FREE_SPACE_RELAY"
+
+if [[ "$FREE_SPACE_RELAY" == "true" ]]; then
+  SCAN_SUFFIX="scan_free"
+  ros2 pkg executables nsk_swarm 2>/dev/null | grep -q free_space_relay || \
+    die "free_space_relay is not in the sourced nsk_swarm. Build from the \
+repo root (colcon build --packages-select nsk_swarm) and source \
+install/setup.bash."
+else
+  SCAN_SUFFIX="scan"
+fi
 
 command -v ros2 >/dev/null 2>&1 || \
   die "ros2 is not on PATH. Run: source /opt/ros/jazzy/setup.bash"
@@ -96,6 +143,47 @@ if [[ ${#ROBOTS[@]} -eq 0 ]]; then
   ROBOTS=(0 1 2 3 4)
 fi
 
+# ── the lidar ceiling, read off the bag ─────────────────────────────────────
+# Measured, not assumed, for the reason on RELAY_HEADROOM above: this replays
+# recorded scans, and the recorded range_max is a property of the bag rather
+# than of the current launch files. Read from the FIRST requested robot; all
+# five carry the same sensor, and a bag that disagrees between robots is a
+# broken bag rather than something to average.
+#
+# BAG_RANGE_MAX=<value> overrides, for a hand-built or repaired bag.
+if [[ -z "${BAG_RANGE_MAX:-}" ]]; then
+  # stderr to a file, NOT folded into the value: rosbag2's storage plugins log
+  # on stderr, and 2>&1 here would splice a log line into the number on any run
+  # that merely warned. The regex below would then reject a perfectly good bag.
+  RANGE_ERR="$(mktemp)"
+  BAG_RANGE_MAX="$(python3 "$REPO_ROOT/experiments/slam/bag_range_max.py" \
+                     "$BAG" "${ROBOTS[0]}" 2>"$RANGE_ERR")" || \
+    die "could not read range_max from $BAG:
+$(cat "$RANGE_ERR")"
+  rm -f "$RANGE_ERR"
+fi
+
+[[ "$BAG_RANGE_MAX" =~ ^[0-9]+(\.[0-9]+)?$ ]] || \
+  die "BAG_RANGE_MAX is not a number: '$BAG_RANGE_MAX'"
+
+if [[ "$FREE_SPACE_RELAY" == "true" ]]; then
+  RELAY_RANGE_THRESHOLD="${RELAY_RANGE_THRESHOLD:-$(awk -v m="$BAG_RANGE_MAX" \
+      -v h="$RELAY_HEADROOM" 'BEGIN { printf "%.4g", m - h }')}"
+  MAX_LASER_RANGE="$RELAY_RANGE_THRESHOLD"
+  # The inequality free_space_relay rests on, checked HERE rather than
+  # discovered 40 minutes into a replay that quietly produced the no-relay map.
+  awk -v t="$RELAY_RANGE_THRESHOLD" -v m="$BAG_RANGE_MAX" \
+      'BEGIN { exit !(t < m && t > 0) }' || \
+    die "RELAY_RANGE_THRESHOLD $RELAY_RANGE_THRESHOLD is not strictly between \
+0 and the bag's range_max $BAG_RANGE_MAX. The relay would have no value that is \
+both traced by Karto and not dropped, so it would pass every scan through \
+unchanged and this run would silently be a no-relay run."
+  echo "bag range_max $BAG_RANGE_MAX -- relay threshold $RELAY_RANGE_THRESHOLD"
+else
+  MAX_LASER_RANGE="${MAX_LASER_RANGE:-$BAG_RANGE_MAX}"
+  echo "bag range_max $BAG_RANGE_MAX -- max_laser_range $MAX_LASER_RANGE"
+fi
+
 # ── per-robot run ───────────────────────────────────────────────────────────
 
 FAILED=()
@@ -113,10 +201,19 @@ for N in "${ROBOTS[@]}"; do
   # Params live in experiments/logs/, not /tmp -- /tmp is wiped on reboot and
   # these are the record of what produced each map.
   sed -e "s/__ROBOT__/$N/g" -e "s/__SCAN_MATCHING__/$SCAN_MATCHING/g" \
+      -e "s/__SCAN_SUFFIX__/$SCAN_SUFFIX/g" \
+      -e "s/__MAX_LASER_RANGE__/$MAX_LASER_RANGE/g" \
       "$TEMPLATE" > "$PARAMS"
   grep -q "robot_$N/odom" "$PARAMS" || die "substitution failed in $PARAMS"
   grep -q "use_scan_matching: $SCAN_MATCHING" "$PARAMS" || \
     die "scan-matching substitution failed in $PARAMS"
+  grep -q "scan_topic: /robot_$N/$SCAN_SUFFIX" "$PARAMS" || \
+    die "scan-topic substitution failed in $PARAMS"
+  grep -q "max_laser_range: $MAX_LASER_RANGE" "$PARAMS" || \
+    die "max-laser-range substitution failed in $PARAMS"
+  # __UPPERCASE__, not bare '__': ros__parameters is not a placeholder.
+  grep -qE '__[A-Z_]+__' "$PARAMS" && \
+    die "unsubstituted placeholder left in $PARAMS"
 
   rm -f "$OUT.pgm" "$OUT.yaml"
 
@@ -151,6 +248,23 @@ for N in "${ROBOTS[@]}"; do
   DUR="${!DUR_VAR:--1}"
   START_VAR="START_$N"
   START="${!START_VAR:-0}"
+  # The relay must be subscribed before the first scan is replayed: it is a
+  # plain republisher with no history, so anything it misses is simply not
+  # mapped. Started per robot and killed with the replay, so two robots in one
+  # invocation cannot leave each other's relay running.
+  RELAY_PID=""
+  if [[ "$FREE_SPACE_RELAY" == "true" ]]; then
+    echo "[3/4] starting free_space_relay for robot_$N " \
+         "(threshold $RELAY_RANGE_THRESHOLD m)"
+    ros2 run nsk_swarm free_space_relay --ros-args \
+        -p "robot_id:=$N" -p "range_threshold:=$RELAY_RANGE_THRESHOLD" \
+        >> "$LOG" 2>&1 &
+    RELAY_PID=$!
+    sleep 2
+    kill -0 "$RELAY_PID" 2>/dev/null || \
+      die "free_space_relay died at startup; see $LOG"
+  fi
+
   echo "[3/4] replaying $RUN at rate $RATE, start-offset $START, playback-duration $DUR"
 
   # START_<N> is kept for completeness but /tf_static sits at bag time 0 and
@@ -163,6 +277,13 @@ for N in "${ROBOTS[@]}"; do
 
   echo "      settling ${SETTLE}s for the final map publish"
   sleep "$SETTLE"
+
+  if [[ -n "$RELAY_PID" ]]; then
+    # After the settle, not before: the last scans are still being processed,
+    # and a relay killed early truncates the map by however much is in flight.
+    kill "$RELAY_PID" 2>/dev/null; wait "$RELAY_PID" 2>/dev/null
+    grep -a 'beams filled' "$LOG" | tail -1
+  fi
 
   echo "[4/4] saving map"
   
