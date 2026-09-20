@@ -85,13 +85,47 @@ fi
 # LATER topics earlier either: it subscribes "with default QoS unless
 # otherwise specified in a QoS overrides file", which would silently drop
 # those latched transforms.
-have="$(ros2 topic list)"
-missing=()
-for t in "${REQUIRED[@]}"; do
-  grep -qxF "$t" <<<"$have" || missing+=("$t")
+#
+# The check RETRIES, because `ros2 topic list` is itself a discovery snapshot
+# and not a reading of the graph. It starts a node, waits one discovery period
+# and prints whatever has been announced by then; on this rig -- 5 robots,
+# ~28 topics, every stack already up -- that snapshot is routinely partial.
+# Rehearsal 4 aborted on one: 13 of 25 "missing", a random mix across robots
+# and topic types including /model/robot_0/pose, which truth_odom_tf was
+# receiving at that very moment (it had already logged its first transform
+# from it). A second look answered differently.
+#
+# So a topic is only declared absent after PREFLIGHT_TRIES snapshots taken
+# PREFLIGHT_WAIT_S apart, and each attempt re-checks ONLY what was still
+# missing -- a topic seen once is settled. The gate itself is unchanged: a
+# stack that never came up still aborts, and still aborts before any bag
+# exists. What changed is that the gate no longer decides on one sample.
+PREFLIGHT_TRIES="${PREFLIGHT_TRIES:-5}"     # snapshots, including the first
+PREFLIGHT_WAIT_S="${PREFLIGHT_WAIT_S:-3}"   # seconds between them
+
+missing=("${REQUIRED[@]}")
+for (( attempt=1; attempt<=PREFLIGHT_TRIES; attempt++ )); do
+  have="$(ros2 topic list)"
+  still=()
+  for t in "${missing[@]}"; do
+    grep -qxF "$t" <<<"$have" || still+=("$t")
+  done
+  missing=("${still[@]+"${still[@]}"}")
+  if (( ${#missing[@]} == 0 )); then
+    echo "pre-flight: all ${#REQUIRED[@]} required topic(s) advertised," \
+         "on attempt $attempt of $PREFLIGHT_TRIES"
+    break
+  fi
+  if (( attempt < PREFLIGHT_TRIES )); then
+    echo "pre-flight attempt $attempt of $PREFLIGHT_TRIES:" \
+         "${#missing[@]} of ${#REQUIRED[@]} topic(s) not yet advertised;" \
+         "re-checking those in ${PREFLIGHT_WAIT_S}s" >&2
+    sleep "$PREFLIGHT_WAIT_S"
+  fi
 done
 if (( ${#missing[@]} )); then
-  echo "ABORT: ${#missing[@]} of ${#REQUIRED[@]} topic(s) not advertised:" >&2
+  echo "ABORT: ${#missing[@]} of ${#REQUIRED[@]} topic(s) not advertised" \
+       "after $PREFLIGHT_TRIES attempt(s) ${PREFLIGHT_WAIT_S}s apart:" >&2
   printf '  %s\n' "${missing[@]}" >&2
   echo "Bring up SLAM/Nav2 and wait for all stacks active, then re-run." >&2
   exit 1
