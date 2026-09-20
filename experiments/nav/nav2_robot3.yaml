@@ -109,7 +109,11 @@ controller_server:
       # That region is feature-poor. knowledge_world.sdf puts all four interior
       # walls in the central band (y=+3.0, y=-3.0, x=-4.0, x=+4.0), so the region
       # is north of every one of them, and the x=-10 boundary is 4.2 m away --
-      # past the 3.5 m lidar ceiling. Whatever is in range there is a wall
+      # past the 3.5 m lidar ceiling IN FORCE WHEN THIS WAS DIAGNOSED. That
+      # boundary is inside the 8.0 m ceiling the sim now runs, so the degeneracy
+      # is expected to disappear and this tolerance can be revisited once a run
+      # at 8 m shows no error_code=102 in that region -- see the note on
+      # transform_timeout in slam_robot<id>.yaml. Whatever is in range there is a wall
       # running along x, and a single straight wall gives no constraint along its
       # own length: the degenerate case for laser scan matching. The pose graph
       # stalls, and map->odom goes stale in content while staying fresh in
@@ -183,6 +187,25 @@ local_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
+          # DELIBERATELY NOT SCALED WITH THE LIDAR. The sensor is 8 m
+          # (BURGER_RANGE_MAX in swarm_sim.launch.py); these stay at the 2.5/3.0
+          # chosen against a 3.5 m one. They govern local avoidance at max_vel_x
+          # 0.22 m/s with robot_radius 0.11 and inflation_radius 0.25, and
+          # nothing about not hitting a wall improves by marking obstacles 8 m
+          # away, while the voxel layer's cost grows roughly as range^2 on a rig
+          # with a history of starving under load -- R9's two gated counts at
+          # 0.000/min is a run criterion. If they are ever scaled, keep the ratio
+          # (5.5 / 6.5) and do it as its own change with its own rehearsal.
+          #
+          # RECHECK THIS IF obstacle_max_range IS EVER RAISED: these costmaps
+          # read the RAW /robot_<id>/scan, never the relay's scan_free.
+          # free_space_relay rewrites every no-return beam to 7.95 m, a value
+          # meaningful only against Karto's rangeThreshold; an obstacle layer
+          # reading it would plant a phantom ring of obstacles at 7.95 m on every
+          # beam that hit nothing. obstacle_max_range 2.5 is below that fill, as
+          # it was below the old 3.45 m one -- but that is a coincidence of two
+          # unrelated numbers, not a guarantee. Nav2's own inf_is_valid is the
+          # knob for clearing on no-returns, and it is a separate decision.
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
@@ -225,6 +248,8 @@ global_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
+          # Not scaled with the 8 m lidar, and on the RAW scan, for the reasons
+          # spelled out on the local_costmap's copy of these four keys above.
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5

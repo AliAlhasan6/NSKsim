@@ -7,6 +7,15 @@ slam_toolbox:
     map_frame: robot_0/map
     scan_topic: /robot_0/scan
     resolution: 0.05
-    max_laser_range: 3.5
+    # The simulated lidar is a ROBOTIS LDS-02 -- detection distance 160 to
+    # 8000 mm per the ROBOTIS e-manual, the sensor that replaced the LDS-01 on
+    # the TurtleBot3 Burger in 2022 -- not the 120 to 3500 mm LDS-01 that the
+    # stock turtlebot3_gazebo model still ships; make_namespaced_burger_sdf
+    # rewrites both bounds at spawn.
+    #
+    # Must equal BURGER_RANGE_MAX in swarm_sim.launch.py. The reasoning for the
+    # number is on that constant and in experiments/nav/slam_robot0.yaml: below
+    # 7.44 m at least one boundary wall never enters a scan on e0t's trajectory.
+    max_laser_range: 8.0
     minimum_travel_distance: 0.2
     minimum_travel_heading: 0.2

@@ -41,7 +41,26 @@ slam_toolbox:
     resolution: 0.05
     restamp_tf: false
     min_laser_range: 0.0
-    max_laser_range: 3.5             # burger LDS-01 usable range
+    # The simulated lidar is a ROBOTIS LDS-02 -- detection distance 160 to
+    # 8000 mm per the ROBOTIS e-manual, the sensor that replaced the LDS-01 on
+    # the TurtleBot3 Burger in 2022 -- not the 120 to 3500 mm LDS-01 that the
+    # stock turtlebot3_gazebo model still ships (model.sdf:152-153);
+    # make_namespaced_burger_sdf rewrites both bounds at spawn.
+    #
+    # The LDS-01 is what every run up to b2maps_e0t used, and it cannot see this
+    # world: that run's true trajectory never came within 7.44 m of all four
+    # boundary walls -- closest approach east 4.178, west 4.355, north 6.707,
+    # south 7.440 m -- so at 3.5 m the map's extent is bounded by where the robot
+    # went rather than by where the room ends: 63 m2 of a 391 m2 floor, in a
+    # 12.05 x 8.00 m box.
+    #
+    # MUST equal BURGER_RANGE_MAX in swarm_sim.launch.py. Karto clips its own
+    # rangeThreshold to the scan's range_max (Karto.h:3946-3949), so a value
+    # above it is inert and a value below it throws returns away. Throwing them
+    # away is what free_space_relay's threshold does ON PURPOSE, and only there:
+    # explore.launch.py overrides this key with RELAY_RANGE_THRESHOLD when
+    # free_space_relay:=true. Nothing else should sit below range_max.
+    max_laser_range: 8.0
     minimum_time_interval: 0.5
     # Raised 0.2 -> 0.5. NOTE: the mechanism given in ea59e20 -- that 0.2 s sat
     # inside a load-driven TF excursion tail -- is wrong. The rung2e pilot
@@ -55,7 +74,9 @@ slam_toolbox:
     # This node is where the real fault lives. knowledge_world.sdf puts all four
     # interior walls in the central band (y=+3.0, y=-3.0, x=-4.0, x=+4.0); that
     # region is north of every one of them, and the x=-10 boundary is 4.2 m away,
-    # past the max_laser_range 3.5 ceiling set above. Whatever is in range there
+    # past the 3.5 m ceiling in force when this was diagnosed -- though INSIDE
+    # the 8.0 m one set above, which is why this is expected to resolve; see the
+    # note at the end of this block. Whatever is in range there
     # is a wall running along x, and a single straight wall gives no constraint
     # along its own length -- the degenerate case for laser scan matching. The
     # pose graph stalls and the map->odom broadcast goes stale in content while
@@ -73,6 +94,15 @@ slam_toolbox:
     # inflated-envelope clearance of inflation_radius 0.25 - robot_radius
     # 0.11 = 0.14 m, leaving ~0.03 m of headroom. It scales with max_vel_x: if
     # the robot is sped up, this must come down or inflation_radius must go up.
+    #
+    # EXPECTED TO RESOLVE, UNVERIFIED. The whole diagnosis above rests on the
+    # x=-10 boundary being 4.2 m away and the ceiling being 3.5 m. At 8.0 m that
+    # boundary is in range from the failing region, so the scans there are no
+    # longer a single straight wall and the degeneracy should not arise. If the
+    # first run at 8 m logs no error_code=102 in x in [-2.3, -5.8],
+    # y in [6.0, 9.1], this timeout and transform_tolerance 0.5 in
+    # nav2_robot<id>.yaml can both be revisited. Until a run says so they stay:
+    # the bound below is what makes 0.5 safe, not the fault it was raised for.
     transform_timeout: 0.5
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
