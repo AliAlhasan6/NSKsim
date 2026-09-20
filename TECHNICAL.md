@@ -34,8 +34,11 @@ swarm_sim.launch.py            (single entry point; num_robots = 5, single sourc
 │
 ├── ros_gz_bridge              odom / cmd_vel bridging to Gazebo Harmonic
 ├── gz sim                     physics + world (worlds/knowledge_world.sdf, self-contained)
+│     5× TurtleBot3 Burger, lidar retuned to an LDS-02 at spawn (see below)
 └── rviz2                      visualisation (rviz/nsk_convergence.rviz)
 ```
+
+**Sensor.** The simulated lidar is a **ROBOTIS LDS-02** — detection distance 160 to 8000 mm per the ROBOTIS e-manual, the sensor that replaced the LDS-01 on the TurtleBot3 Burger in 2022 — not the 120 to 3500 mm LDS-01 that the stock `turtlebot3_gazebo` model still ships; `make_namespaced_burger_sdf` rewrites both bounds at spawn, and `slam_robot<id>.yaml`'s `max_laser_range` tracks the upper one. Sweep geometry (360 samples, 1° increment, 5 Hz, σ = 0.01 m) is the stock model's and is common to both sensors. The platform is therefore a TurtleBot3 Burger **with an LDS-02**, the configuration ROBOTIS has shipped since 2022, and not a stock `turtlebot3_gazebo` burger. The LDS-01 could not see this world: `b2maps_e0t`'s true trajectory closed to 4.178 m of the east wall but only 7.440 m of the south, so below 7.44 m at least one boundary wall never entered a scan and the mapped extent was set by the path rather than by the room — 63 m² of a 391 m² floor, in a 12.05 × 8.00 m box. Note that the lidar range is **not** `comm_range`; see the note under the parameter table.
 
 **One knowledge-sharing cycle.** A robot calls `/nsk/compress`; the engine compresses that agent's graph (retention ratio selected by the robot) and returns it as `graph_json`. The robot broadcasts the payload on `/kg_share`. Every peer within `comm_range` (3.0 m, 2D Euclidean on odom positions) that hears the broadcast calls `/nsk/merge` with the received graph; the engine embeds it with the GATv2 encoder and fuses it into the receiver's persistent embedding state. The convergence monitor, on a 10-second timer, queries `/nsk/similarity_query` for the full pairwise cosine-similarity matrix and tracks swarm-wide convergence.
 
@@ -131,13 +134,15 @@ Because QoS breakage manifests as silence rather than errors, the acceptance tes
 | Parameter | Node(s) | Default | Meaning |
 |---|---|---|---|
 | `num_robots` | all | 5 (launch-file variable — single source of truth) | swarm size; must match the engine's agent count |
-| `comm_range` | robots, monitor | 3.0 m | 2D Euclidean broadcast/merge gating |
+| `comm_range` | robots, monitor | 3.0 m | 2D Euclidean broadcast/merge gating. A **radio** range, deliberately independent of the lidar's — see the note below |
 | `service_timeout_sec` | robots, monitor | 5.0 | engine call timeout |
 | `min_rise` / `stability_eps` | monitor | 0.03 / 0.005 | convergence criterion (§6) |
 | `config_path`, `checkpoint_path`, `dataset_indices`, `nsk_base_path` | engine | checkpoint `experiments/checkpoints/joint_best.pt` under `nsk_base_path` (default `/home/lawlite/Desktop/NSK`) | model loading; relative checkpoint resolves against the base |
 | `venv_site_packages` | launch argument | `<repo>/venv/lib/python3.12/site-packages` | see environment note below |
 
 The `num_robots` = 5 single-sourcing corrects a prototype defect where the count was declared in three places and disagreed (8 vs 5), which produced a `KeyError: 5` in every similarity query — the monitor asked for agents the engine never created.
+
+**`comm_range` is not the sensor range, and must not be made to track it.** It gates who *hears* a `/kg_share` broadcast; the lidar decides what a robot can *see*. That the two were once numerically close (3.0 m against the stock LDS-01's 3.5 m) was a coincidence, and it is no longer even that — the sim now runs an 8 m ceiling (`BURGER_RANGE_MAX` in `swarm_sim.launch.py`) while `comm_range` stays at 3.0. Keeping the communication graph decoupled from the measurement graph is the property EXP-01 rests on, and two things depend on the specific value: `swarm_sim.launch.py`'s spawn pentagon exists so that every pair starts *inside* 3.0 m (on the old ~3.8 m ring the nearest pair was 4.20 m and sharing encounters were impossible), and `test_geometry.py` pins the strict `<` at exactly 3.0.
 
 **Environment.** The models require torch/PyG from a project venv created with `--system-site-packages` (so rclpy from `/opt/ros` and torch from pip share one interpreter), while colcon-generated entry points carry a `#!/usr/bin/python3` shebang that bypasses any activated venv. The launch file therefore prepends the venv's site-packages to `PYTHONPATH` via `SetEnvironmentVariable` (overridable through the `venv_site_packages` launch argument), and hence `ros2 launch nsk_swarm swarm_sim.launch.py` works from any correctly-sourced terminal with no manual exports. Manual `ros2 run` of the engine still requires the export. Standard sourcing order per terminal: `/opt/ros/jazzy/setup.bash`, then the workspace `install/setup.bash`.
 

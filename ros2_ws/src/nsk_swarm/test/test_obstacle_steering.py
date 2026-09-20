@@ -23,13 +23,31 @@ from nsk_swarm.robot_node import EXPLORE, FLOCK
 
 from test_stuck_escape import make_robot_stub
 
-# Stock TurtleBot3 burger hls_lfcd_lds, the lidar this sim actually runs
+# The lidar this sim actually runs. The simulated lidar is a ROBOTIS LDS-02 --
+# detection distance 160 to 8000 mm per the ROBOTIS e-manual, the sensor that
+# replaced the LDS-01 on the TurtleBot3 Burger in 2022 -- not the 120 to
+# 3500 mm LDS-01 that the stock turtlebot3_gazebo model still ships;
+# make_namespaced_burger_sdf rewrites both bounds at spawn.
+#
+# Sweep geometry is the stock model's and common to both sensors
 # (turtlebot3_gazebo/models/turtlebot3_burger/model.sdf): 360 samples,
-# min_angle 0.0, max_angle 6.28, range 0.12 .. 3.5.
+# min_angle 0.0, max_angle 6.28.
+#
+# Nothing under test here reads either bound as a constant -- the steering
+# filters on scan.range_min/scan.range_max off the message itself
+# (robot_node._forward_arc_bins:413), which is exactly why both fixtures could
+# move without any assertion moving with them. They are kept in step anyway so
+# that a scan built here is a scan this sim could actually produce.
+#
+# The floor moving 0.12 -> 0.16 was measured against b2maps_e0t before it was
+# taken: 94 of 58542840 beams across five robots fall in [0.12, 0.16), and
+# replaying robot_0's 32524 scans through _forward_arc_bins at both floors
+# emptied no bin and flipped no blocked/open verdict. The bin-emptying case is
+# the one that mattered -- an arc with no valid sample reads as NOT blocked.
 BURGER_SAMPLES    = 360
 BURGER_ANGLE_MIN  = 0.0
-BURGER_RANGE_MIN  = 0.12
-BURGER_RANGE_MAX  = 3.5
+BURGER_RANGE_MIN  = 0.16
+BURGER_RANGE_MAX  = 8.0
 
 OPEN = 3.0    # a clear return, comfortably past the 0.6 m stop distance
 WALL = 0.3    # a wall well inside it

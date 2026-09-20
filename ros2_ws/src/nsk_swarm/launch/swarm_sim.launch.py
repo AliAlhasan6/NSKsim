@@ -50,6 +50,59 @@ VENV_SITE_PACKAGES = '/home/lawlite/Desktop/NSKsim/venv/lib/python3.12/site-pack
 TURTLEBOT3_BURGER_SDF = ('/opt/ros/jazzy/share/turtlebot3_gazebo/models/'
                          'turtlebot3_burger/model.sdf')
 
+# WHICH SENSOR THIS SIM MODELS -- the canonical statement, quoted from here by
+# slam_robot<id>.yaml, explore.launch.py, README.md and TECHNICAL.md:
+#
+#   The simulated lidar is a ROBOTIS LDS-02 -- detection distance 160 to
+#   8000 mm per the ROBOTIS e-manual, the sensor that replaced the LDS-01 on
+#   the TurtleBot3 Burger in 2022 -- not the 120 to 3500 mm LDS-01 that the
+#   stock turtlebot3_gazebo model still ships; make_namespaced_burger_sdf
+#   rewrites both bounds at spawn.
+#
+# BURGER_STOCK_RANGE_MIN/MAX are what the stock model ships (model.sdf:152 and
+# :153, the only <min> and <max> in the file); BURGER_RANGE_MIN/MAX are what
+# every spawned robot actually runs. Everything else about the sensor -- 360
+# samples, 1 degree increment, 5 Hz, gaussian noise at 0.01 m -- is common to
+# both and untouched.
+#
+# WHY, at length, because a fidelity claim is not a preference. The LDS-01 is a
+# real 0.12-3.5 m sensor
+# and it cannot see this world: b2maps_e0t's true trajectory bounds an
+# 11.37 x 5.75 m box inside a 20 x 20 m room, and its closest approach to each
+# outer wall is east 4.178, west 4.355, north 6.707, south 7.440 m. Below
+# 7.44 m at least one boundary wall never enters a single scan, so the map's
+# extent is set by where the robot went rather than by where the room ends --
+# e0t mapped 63 m2 of a 391 m2 floor in a 12.05 x 8.00 m box. 8.0 m is 7.44
+# rounded up, and lands exactly on a real sensor rather than an invented one,
+# which is why the platform can still be named honestly: a TurtleBot3 Burger
+# WITH AN LDS-02, the configuration ROBOTIS has shipped since 2022.
+#
+# This is NOT a substitute for free_space_relay and does not overlap with it.
+# Karto sizes its occupancy grid from FILTERED readings only (Karto.h:5644,
+# InRange(reading, minRange, rangeThreshold)), so a relay-filled beam can never
+# enlarge the grid -- measured: b2maps_e0t_kp and _kpfree have identical
+# 12.00 x 8.00 m boxes. Range sets the box; the relay fills it. Raising this
+# alone still leaves 20.5% of beams clearing nothing at 8 m.
+#
+# The MINIMUM moves with it, for the same reason: the LDS-02's detection
+# distance is 160-8000 mm (ROBOTIS e-manual), so keeping the LDS-01's 0.12 m
+# floor beside an 8 m ceiling would model neither sensor. Measured cost on
+# b2maps_e0t, which is none: 94 of 58542840 beams across all five robots fall
+# in [0.12, 0.16) -- 0.00016%, and 49 of them are robot_0's. Replaying every
+# robot_0 scan through _forward_arc_bins at both floors, 5 scans of 32524 hold
+# such a beam, 2 change a forward bin's minimum, and NO bin is emptied and no
+# blocked/open verdict flips. The robot's own body cannot enter the band
+# either: at the sensor's z=0.171 the only same-model geometry is
+# lidar_sensor_collision, whose surface is 0.039-0.063 m away, already below
+# both floors.
+#
+# Anything that reports a number derived from the lidar ceiling must read
+# BURGER_RANGE_MAX, not the stock file -- see run_health.py:lidar_max_range.
+BURGER_STOCK_RANGE_MAX = 3.5
+BURGER_RANGE_MAX = 8.0
+BURGER_STOCK_RANGE_MIN = 0.12
+BURGER_RANGE_MIN = 0.16
+
 # Stock burger URDF: a xacro template that prefixes every link/joint frame
 # with ${namespace}. robot_state_publisher needs it substituted to robot_N/ so
 # the static TF frames match the gz-side (robot_N/base_footprint, etc.).
@@ -90,9 +143,16 @@ DOT_POSES = [
 def make_namespaced_burger_sdf(robot_id: int, truth_odom: bool = False) -> str:
     """Rewrite the stock burger SDF's plugin/sensor topics and frames into
     the robot_N namespace and return the path of a tempfile holding the
-    result, plus append a PosePublisher for ground truth. Geometry, inertia,
-    joints, and sensor parameters are untouched; each replaced string occurs
-    exactly once in the stock model.
+    result, plus append a PosePublisher for ground truth. Geometry, inertia
+    and joints are untouched; each replaced string occurs exactly once in the
+    stock model.
+
+    THE SENSOR'S RANGE BOUNDS ARE NOT UNTOUCHED: <range><min> and <range><max>
+    move from BURGER_STOCK_RANGE_MIN/MAX to BURGER_RANGE_MIN/MAX, so the
+    spawned robots carry an LDS-02 rather than the burger's stock LDS-01. The
+    reasoning is on those constants. Everything else about the sensor -- 360
+    samples, 1 degree increment, 5 Hz, gaussian noise at 0.01 m -- is the stock
+    model's, and is shared by both sensors.
 
     truth_odom=True additionally moves this robot's DiffDrive transform OFF the
     bridged /tf, so truth_odom_tf can own the frame pair instead — see the
@@ -127,6 +187,23 @@ def make_namespaced_burger_sdf(robot_id: int, truth_odom: bool = False) -> str:
         ('<tf_topic>/tf</tf_topic>', f'<tf_topic>/{ns}/tf_wheel</tf_topic>'),
     ] if truth_odom else []
     for old, new in truth_odom_pairs + [
+        # The lidar's two range bounds. Applies to every robot regardless of
+        # truth_odom: the sensor is the same sensor on all five. See
+        # BURGER_RANGE_MAX.
+        #
+        # The two are formatted DIFFERENTLY because the stock file writes them
+        # differently -- <min>0.120000</min> to six places, <max>3.5</max> to
+        # one. These are exact-string replacements against a file this repo
+        # does not own, so the formatting is part of the pattern, not a style
+        # choice; str(0.12) would render '0.12' and match nothing. Each
+        # literal occurs exactly once in the stock model, and
+        # test_launch_descriptions.py asserts both counts so a stock-model
+        # update that reformats either one fails loudly instead of silently
+        # leaving the sensor where it was.
+        (f'<min>{BURGER_STOCK_RANGE_MIN:.6f}</min>',
+         f'<min>{BURGER_RANGE_MIN:.6f}</min>'),
+        (f'<max>{BURGER_STOCK_RANGE_MAX}</max>',
+         f'<max>{BURGER_RANGE_MAX}</max>'),
         ('<topic>cmd_vel</topic>', f'<topic>/{ns}/cmd_vel</topic>'),
         ('<odom_topic>odom</odom_topic>',
          f'<odom_topic>/{ns}/odom</odom_topic>'),

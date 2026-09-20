@@ -31,6 +31,16 @@ engine node. The pipeline itself (models, training, checkpoint) lives in a separ
 NSK research repo — this repo is the robotics integration, its test suite, and the
 experiment logs.
 
+**Sensor.** The simulated lidar is a **ROBOTIS LDS-02** — detection distance 160 to
+8000 mm per the ROBOTIS e-manual, the sensor that replaced the LDS-01 on the
+TurtleBot3 Burger in 2022 — not the 120 to 3500 mm LDS-01 that the stock
+`turtlebot3_gazebo` model still ships; `make_namespaced_burger_sdf` rewrites both
+bounds at spawn. Sweep geometry (360 samples, 1° increment, 5 Hz, σ = 0.01 m noise)
+is the stock model's and common to both. The reason is in that function's comment:
+at 3.5 m the mapped extent is bounded by where a robot went rather than by where
+the room ends, because the trajectory of the reference run never came within
+7.44 m of all four boundary walls.
+
 ### Architecture
 
 ![NSKsim architecture](docs/nsksim_pipeline.png)
