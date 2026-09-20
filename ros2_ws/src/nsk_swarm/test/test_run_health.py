@@ -64,7 +64,12 @@ needs_burger = pytest.mark.skipif(
     reason=f'{rh.BURGER_SDF} not installed -- the stock model is what these '
            'tests read')
 
-LIDAR_MAX_M = 3.5        # burger LDS-01 <range><max>, model.sdf:153
+# The ceiling the sim RUNS, which is not the stock model's. BURGER_RANGE_MAX in
+# swarm_sim.launch.py; make_namespaced_burger_sdf rewrites model.sdf:153's 3.5
+# into every spawned robot. Reading the stock file here is the bug
+# lidar_max_range was changed to prevent, so the literal tracks the launch file.
+LIDAR_MAX_M = 8.0
+STOCK_LIDAR_MAX_M = 3.5  # burger LDS-01 <range><max>, model.sdf:153
 TRUTH_HZ = 20.0          # PosePublisher <update_frequency>, swarm_sim.launch.py
 DIFFDRIVE_HZ = 50.0      # the gz-sim DiffDrive default; see rate_facts()
 
@@ -263,16 +268,30 @@ def test_the_boundary_is_the_four_perimeter_walls_only():
         assert min(x1 - x0, y1 - y0) == pytest.approx(0.1)
 
 
-def test_the_e0_closest_approach_fails_the_criterion():
-    """The run that motivated the criterion must not pass it.
+def test_the_e0_closest_approach_is_measured_the_same_way_it_always_was():
+    """The geometry is fixed; what it MEANS moved with the lidar.
 
     e0's nearest point to the perimeter was (-6.053, +3.487), 3.897 m from
-    wall_west's inner face at x = -9.95, against a 3.50 m lidar range.
+    wall_west's inner face at x = -9.95. That distance is a fact about a
+    recorded trajectory and does not change, so it is still asserted here.
+
+    What changed is the verdict. Against the old 3.50 m ceiling this run FAILED
+    the criterion, and that failure is why the criterion exists. Against the
+    8.0 m one it passes with 4.1 m to spare -- so COVERAGE no longer
+    discriminates the run that motivated it, and on its own it is now a weak
+    gate. It is kept because a run that never comes within lidar range of the
+    perimeter is still definitively bad; it is no longer sufficient, and the
+    criterion that carries the weight at 8 m is the b2maps README's fifth one,
+    occupied cells on the outer boundary of the offline truth map.
+
+    Both bounds are asserted so that the day either ceiling moves again, this
+    test says which way and by how much.
     """
     d = rh.closest_approach([(-6.053, 3.487)], rh.boundary_rects())
 
     assert d == pytest.approx(3.897, abs=1e-3)
-    assert d > LIDAR_MAX_M
+    assert d > STOCK_LIDAR_MAX_M     # failed the criterion as originally set
+    assert d <= LIDAR_MAX_M          # passes it at the range the sim now runs
 
 
 def test_a_trajectory_that_does_reach_the_boundary_passes():
@@ -291,10 +310,27 @@ def test_a_trajectory_that_does_reach_the_boundary_passes():
 # unchecked.
 
 @needs_burger
-def test_the_lidar_range_comes_from_the_burger_sdf():
-    reach, line = rh.lidar_max_range()
+def test_the_lidar_range_comes_from_the_launch_file_not_the_stock_model():
+    """The gate must read the range the ROBOTS HAVE, not the one on disk.
+
+    make_namespaced_burger_sdf rewrites <range><max> into every spawned model,
+    so the stock file keeps advertising a sensor nothing in this sim carries.
+    Grepping it would leave COVERAGE testing against 3.5 m while the robots saw
+    8 m -- and silently, because _grep_one only dies on an ABSENT pattern and
+    <max>3.5</max> is still right there. Silently, and in the direction that
+    makes the gate easier to pass.
+
+    So: the effective value is 8.0, it is not the stock 3.5, and the source
+    string names both files so a future divergence is readable rather than
+    invisible.
+    """
+    reach, src = rh.lidar_max_range()
+
     assert reach == pytest.approx(LIDAR_MAX_M)
-    assert line == 153
+    assert reach != pytest.approx(STOCK_LIDAR_MAX_M)
+    assert 'swarm_sim.launch.py' in src
+    assert f'stock {STOCK_LIDAR_MAX_M:.2f} m' in src
+    assert 'model.sdf:153' in src
 
 
 @needs_burger

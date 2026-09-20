@@ -23,9 +23,18 @@ no longer be blamed on the odometry.
 A run counts when all five hold. Nothing here is judged by eye; each is a
 number a script prints.
 
-1. **COVERAGE ≤ 3.50 m.** The *true* trajectory passes within the burger's own
-   lidar maximum range of an outer boundary wall at least once. e0 managed
-   3.897 m and stopped.
+1. **COVERAGE ≤ 8.00 m.** The *true* trajectory passes within the lidar's
+   maximum range of an outer boundary wall at least once. `run_health.py`
+   reads the range from `BURGER_RANGE_MAX` in `swarm_sim.launch.py`, not from
+   the stock model, so this threshold follows the sensor automatically.
+
+   **This criterion is now weak, and criterion 5 carries the weight.** It was
+   written against a 3.50 m ceiling, where e0's 3.897 m failed it and e0t's
+   4.178 m would have too. At 8.00 m both pass, so COVERAGE no longer separates
+   the runs that motivated it. It is kept because a trajectory that never comes
+   within lidar range of the perimeter is still definitively bad — but passing
+   it is no longer evidence that the map reached the boundary, only that the
+   robot could in principle have seen it.
 2. **R9's two gated counts are 0** — Nav2/tf2 transform warnings and
    slam_toolbox message-filter drops. e0's baseline is 0.000/min over
    98.96 min, so the limit is 0.000 and the first warning fails the run.
@@ -230,7 +239,7 @@ nothing.
 | R4 | 0 transforms off a truth stamp | 14471 transforms, 0 off, worst dyaw 2.5e-14° |
 | R5 | median \|dYaw\| > 1° | 81.1° |
 | R7 | writes the final online map | 11.95 × 8.00 m, 779 occupied |
-| COVERAGE | ≤ 3.50 m | FAIL at 5.621 m — expected on 12 min, **not** on a real run |
+| COVERAGE | ≤ 8.00 m | rehearsal 5 read 5.621 m, which FAILED the 3.50 m gate it ran under and PASSES the 8.00 m one. The number is the rehearsal's; the verdict is not comparable across the change |
 
 `--parked` defaults to the lowest robot id that is not K; pass it explicitly
 only if that robot was not parked. R7 writes `.pgm`, `.png` and `.yaml`;

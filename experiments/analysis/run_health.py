@@ -187,11 +187,54 @@ def _grep_one(path: Path, pattern: str, what: str,
     die(f'no {what} found in {path} (pattern {pattern!r})')
 
 
-def lidar_max_range() -> tuple[float, int]:
-    """The burger's lidar <range><max>, in metres, and its line number."""
-    value, line = _grep_one(BURGER_SDF, r'<max>([0-9.]+)</max>',
-                            'lidar maximum range')
-    return float(value), line
+def lidar_max_range() -> tuple[float, str]:
+    """The lidar ceiling the sim ACTUALLY RUNS, in metres, and its source.
+
+    NOT the stock model's <range><max>. swarm_sim.launch.py's
+    make_namespaced_burger_sdf rewrites that element into every spawned robot
+    (BURGER_STOCK_RANGE_MAX -> BURGER_RANGE_MAX), so the stock file states the
+    range of a sensor no robot in this sim carries.
+
+    Reading the stock file is exactly how this criterion would drift away from
+    the world it claims to describe while still printing a number. _grep_one
+    dies only when a pattern is ABSENT, and <max>3.5</max> is still there in
+    the stock model -- untouched, findable, and wrong. COVERAGE would go on
+    testing against 3.5 m while the robots saw 8 m, silently, and in the
+    direction that makes the gate EASIER to pass: a criterion that got weaker
+    and said nothing about it is worse than one that broke.
+
+    So the effective value is read from the launch file that sets it, the way
+    rate_facts() reads PosePublisher's update_frequency out of the same file.
+    Three things are checked, because the constant alone does not prove the
+    rewrite happens:
+
+      1. the stock model still has a <range><max> to rewrite,
+      2. BURGER_RANGE_MAX is defined, and
+      3. it is WIRED INTO the replacement list -- the f-string that builds the
+         new element must be there, or the constant is a number the spawn path
+         never reads.
+
+    The stock value travels in the returned source string beside the effective
+    one. The pair is the evidence: a launch file that stopped rewriting the
+    sensor shows up here as the two numbers being equal, which is legible,
+    rather than as the effective number quietly becoming the stock one.
+    """
+    stock, stock_line = _grep_one(
+        BURGER_SDF, r'<max>([0-9.]+)</max>', 'the stock lidar maximum range')
+    effective, eff_line = _grep_one(
+        LAUNCH_FILE, r'^BURGER_RANGE_MAX\s*=\s*([0-9.]+)',
+        'the lidar maximum range the sim runs (BURGER_RANGE_MAX in the launch '
+        'file)')
+    _grep_one(
+        LAUNCH_FILE, r"(f'<max>\{BURGER_RANGE_MAX\}</max>')",
+        'the SDF rewrite that applies BURGER_RANGE_MAX to the spawned model. '
+        'The constant is defined but nothing in make_namespaced_burger_sdf '
+        'uses it, so the robots would still spawn with the stock sensor while '
+        'this gate reported the new range')
+
+    src = (f'{LAUNCH_FILE.relative_to(REPO_ROOT)}:{eff_line}; '
+           f'stock {float(stock):.2f} m at {BURGER_SDF.name}:{stock_line}')
+    return float(effective), src
 
 
 def rate_facts() -> dict:
@@ -1100,10 +1143,10 @@ def main() -> int:
                                    args.save_map)
 
     if args.bag:
-        reach, reach_line = lidar_max_range()
+        reach, reach_src = lidar_max_range()
         results['COVERAGE'] = report_coverage(
             args.bag, args.robot, read_truth_xy(args.bag, args.robot),
-            boundary_rects(), reach, f'{BURGER_SDF}:{reach_line}')
+            boundary_rects(), reach, reach_src)
 
     failed = [k for k, v in results.items() if v is False]
     skipped = [k for k, v in results.items() if v is None]
