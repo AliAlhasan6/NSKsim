@@ -469,8 +469,15 @@ def path_lengths(odom):
 
 # ──────────────────────── step 6: validation gate ───────────────────────────
 
-def world_walls():
-    """Axis-aligned (x0, x1, y0, y1) rectangles for every box model in the world.
+def world_walls_named():
+    """(model name, (x0, x1, y0, y1)) for every box model in the world.
+
+    The parse world_walls() is built on, kept separate only because some
+    callers need to tell the four outer boundary walls (wall_north, wall_south,
+    wall_east, wall_west) from the four interior maze walls, and a bare
+    rectangle cannot say which it is. One parser, so a caller that selects a
+    subset and a caller that takes all of them cannot disagree about the
+    geometry.
 
     The ground plane uses <plane> rather than <box> and carries no <pose>, so
     requiring both naturally excludes it.
@@ -479,7 +486,7 @@ def world_walls():
         die(f'world SDF not found, cannot validate spawn poses: {WORLD_SDF}')
 
     text = WORLD_SDF.read_text()
-    rects = []
+    walls = []
     for model in re.finditer(r'<model name="([^"]+)">(.*?)</model>', text, re.S):
         body = model.group(2)
         pose = re.search(r'<pose>([^<]+)</pose>', body)
@@ -488,11 +495,17 @@ def world_walls():
             continue
         px, py = (float(v) for v in pose.group(1).split()[:2])
         sx, sy = (float(v) for v in size.group(1).split()[:2])
-        rects.append((px - sx / 2, px + sx / 2, py - sy / 2, py + sy / 2))
+        walls.append((model.group(1),
+                      (px - sx / 2, px + sx / 2, py - sy / 2, py + sy / 2)))
 
-    if not rects:
+    if not walls:
         die(f'parsed no box models from {WORLD_SDF}; cannot validate spawn poses')
-    return rects
+    return walls
+
+
+def world_walls():
+    """Axis-aligned (x0, x1, y0, y1) rectangles for every box model in the world."""
+    return [rect for _name, rect in world_walls_named()]
 
 
 def dist_to_nearest_wall(pts, rects):
