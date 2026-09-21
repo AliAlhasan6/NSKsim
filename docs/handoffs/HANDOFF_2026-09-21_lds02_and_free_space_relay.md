@@ -47,7 +47,8 @@ Pushed, HEAD `b449bb2`:
 | `a8276f1` | `run_offline_maps.sh` reads the lidar ceiling off the bag (`bag_range_max.py`), never from a literal. |
 | `9171179` | The COVERAGE gate reads the range the robots actually have. |
 | `5a337a4` | `experiments/runs/b2maps/REHEARSAL_free_space_relay.md` |
-| `19a68c4`, `a32bc6c`, `b449bb2` | Three CI fixes, all the same shape: a test assumed a package CI does not install. |
+| `19a68c4`, `b449bb2` | Two CI fixes of the same shape: a test assumed a package CI does not install — turtlebot3_gazebo, then scipy. Both become skips. |
+| `a32bc6c` | The opposite case, and deliberately so: pillow is *added* to CI. PIL is a dependency of R7, which writes the map as a PGM and a PNG from one array, so a missing PIL must fail the job rather than skip. |
 
 Earlier in the session, from the 19th: `record_run.sh` pre-flight retry,
 `check_run_bag.py` C4 in sim time, `check_cut_reference.py`, `run_health.py`,
@@ -87,23 +88,30 @@ every run. Both `e0t` and `relay1` passed C1–C4, R2, R5 and R7.
   two pose samples is still a hard FAIL, while a short contiguous prefix or
   suffix is admitted within a bounded grace. Do not widen the tolerance
   instead.
-- **R9** FAILED on both. `e0t`'s 7 warnings were one event (map→odom arriving
-  ~0.55 s old against Nav2's 0.5 s tolerance) at sim 4250–5540 s, after the
-  2400 s cut. `relay1`'s single warning came from `collision_monitor`, a
-  different node. **Open:** the gate counts all nodes together, so it will keep
-  firing across five runs for unrelated reasons. The split-by-frame-pair
-  proposal is in `~/.claude/plans/zazzy-forging-sonnet.md`.
+- **R9** FAILED on both. `e0t`'s 7 warnings are seven separate occurrences of
+  one failure mode — map→odom arriving ~0.55 s old against Nav2's 0.5 s
+  tolerance — at sim 4251, 4280, 4333, 4920, 5239, 5388 and 5536 s, spread over
+  about 21 minutes of sim and all after the 2400 s cut. `relay1`'s single
+  warning came from `collision_monitor`, a different node. **Open:** the gate
+  counts all nodes together, so it will keep firing across five runs for
+  unrelated reasons. The split-by-frame-pair proposal is in
+  `~/.claude/plans/zazzy-forging-sonnet.md`.
 - **COVERAGE** is now weak: at 8 m it passes almost anything, and both `e0`
   and `e0t` would pass it. Criterion 5 — occupied cells on the outer boundary —
   carries the weight now.
 
 ## 6. Traps found. Do not re-learn these.
 
-- **The live install tree is `~/Desktop/NSKsim/install`, not
-  `ros2_ws/install`.** Source `ros2_ws/install` *for the build only*, because
-  `nsk_swarm_interfaces` exists nowhere else. Check before every run that the
-  installed launch files match the source; a stale tree rehearsed the old
-  system once this session.
+- **Two install trees, different jobs.** `ros2_ws/install` is a build-time
+  dependency only — it is the one place `nsk_swarm_interfaces` is built, so the
+  build needs it on the path, and it belongs in the build shell and nowhere
+  else. `~/Desktop/NSKsim/install` is the tree you run from, and the only one a
+  launching terminal sources; sourcing it chains `nsk_swarm_interfaces` in on
+  its own. `ros2_ws/install` left sourced into a run shadows the repo-root
+  `nsk_swarm` with a 2026-09-10 build that has no `truth_odom_tf`. Check before
+  every run that the installed launch files match the source; a stale tree
+  rehearsed the old system once this session. `experiments/runs/b2maps/README.md`
+  states this the same way.
 - **`make_namespaced_burger_sdf` returns a temp file path, not SDF text.** Two
   checks read nothing and reported a false zero before this was noticed.
 - **ROS command-line tools miss things under load.** `ros2 topic list` failed a
