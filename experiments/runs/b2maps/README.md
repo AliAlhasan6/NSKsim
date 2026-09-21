@@ -38,8 +38,22 @@ number a script prints.
 2. **R9's two gated counts are 0** — Nav2/tf2 transform warnings and
    slam_toolbox message-filter drops. e0's baseline is 0.000/min over
    98.96 min, so the limit is 0.000 and the first warning fails the run.
-3. **R4 exact**: 0 transforms off a truth stamp, worst |dxy| ≤ 1e-6 m, worst
-   |dyaw| ≤ 1e-6 deg, worst |z| = 0.
+3. **R4 exact, inside the pose series**: 0 transforms falling *between* two
+   pose samples, worst |dxy| ≤ 1e-6 m, worst |dyaw| ≤ 1e-6 deg, worst |z| = 0.
+
+   The qualifier is the rule `e7e2abb` settled, and it is not a loosening.
+   Transforms whose stamps land outside the recorded pose series are the
+   **recording edge**, not a second publisher: rosbag2 subscribes to `/tf` and
+   to `/model/robot_K/pose` at different moments, and whichever it gets first
+   is a discovery race. `b2maps_relay1` recorded `/tf` 142.4 ms early and so
+   carried 3 transforms ahead of its first pose — with worst |dxy| 0.000 m
+   across the other 11 268. `b2maps_rehearsal5` won the race the other way and
+   has none. Those transforms are admitted only as a contiguous prefix or
+   suffix of the stream, within `EDGE_GRACE_PERIODS` (20) in both count and
+   span, and only while the pose series itself is gapless — conditions a
+   publisher that ran *during* the run cannot meet, because it would leave
+   transforms inside the series where nothing is forgiven. Poses carrying no
+   transform are printed and not gated; that is a rate question and R2 owns it.
 4. **R5 median wheel-vs-truth |dYaw| > 1°** — `/robot_K/odom` must still be
    independent wheel odometry, or arm D cannot be built from these bags.
 5. **The offline truth map has occupied cells on the outer boundary.**
@@ -52,29 +66,39 @@ run is not a run, and the four above cannot be read from it.
 
 ## Once, before e0t — build and sourcing
 
+There are two install trees and they have different jobs. **`ros2_ws/install`
+is a build-time dependency only** — it is the one place `nsk_swarm_interfaces`
+is built, so the build needs it on the path. **`~/Desktop/NSKsim/install` is
+the tree you run from**, and it is the only one sourced in the three terminals
+below.
+
 ```bash
 cd ~/Desktop/NSKsim
-colcon build --packages-select nsk_swarm          # from the REPO ROOT
+
+# BUILD — ros2_ws/install is sourced here and nowhere else, for
+# nsk_swarm_interfaces. Use a throwaway shell so it cannot leak into a run.
+bash -c 'source /opt/ros/jazzy/setup.bash
+         source ros2_ws/install/setup.bash
+         colcon build --packages-select nsk_swarm'      # from the REPO ROOT
+
+# RUN — every terminal below starts with exactly these two lines.
 source /opt/ros/jazzy/setup.bash
-source ~/Desktop/NSKsim/install/setup.bash        # the repo-root install
+source ~/Desktop/NSKsim/install/setup.bash              # the repo-root install
 ```
 
-Every terminal below starts with those two `source` lines.
-
-**Never source `ros2_ws/install/setup.bash`.** That tree was built on
-2026-09-10 and has no `truth_odom_tf` in it; the repo-root install does. The
-failure is not always loud — sourcing the stale tree first puts an older
-`nsk_swarm` ahead of the one you just built, and the launch either dies at 4 s
-with *executable not found* or runs the wrong node set. Confirm before
+**Do not source `ros2_ws/install/setup.bash` in a terminal you then launch
+from.** That tree was built on 2026-09-10 and has no `truth_odom_tf` in it; the
+repo-root install does. The failure is not always loud — sourcing the stale
+tree puts an older `nsk_swarm` ahead of the one you just built, and the launch
+either dies at 4 s with *executable not found* or runs the wrong node set.
+Sourcing the repo-root install chains `nsk_swarm_interfaces` in on its own, so
+a run never needs `ros2_ws/install` named a second time. Confirm before
 launching:
 
 ```bash
-ls install/nsk_swarm/lib/nsk_swarm/     # must list truth_odom_tf
+ls install/nsk_swarm/lib/nsk_swarm/     # must list truth_odom_tf and
+                                        # free_space_relay
 ```
-
-`nsk_swarm_interfaces` still resolves out of `ros2_ws/install`; sourcing the
-repo-root install chains it in, which is why the repo-root one is the only one
-you source.
 
 The install holds **copies**, not symlinks (`--symlink-install` is not used),
 so every edit to a launch file or a node needs that `colcon build` again before
@@ -147,12 +171,29 @@ taking the bag to 28.
 
 ```bash
 ros2 launch nsk_swarm explore.launch.py robot_id:=$K scan_matching:=false \
+    free_space_relay:=true \
     > $LOGS/${RUN}_explore.log 2>&1
 ```
 
 `scan_matching:=false` is what makes this a known-pose run: slam_toolbox never
 calls `MatchScan`, every scan keeps the pose it was handed, and `map → odom`
 stays identity. It is only sound because T1 supplied truth poses.
+
+`free_space_relay:=true` (`explore.launch.py:196`) is what makes the 8 m sensor
+worth having. Karto's `OccupancyGrid::AddScan` (`Karto.h:6169`) skips any
+reading at or above the maximum range — `+inf` included — with no ray trace, so
+a beam that returns nothing clears no floor; 57.4 % of `b2maps_e0t`'s 11.7 M
+beams were `+inf`. The relay republishes `/robot_K/scan` as
+`/robot_K/scan_free` with those beams filled just above the range threshold, so
+Karto traces them as free space. Range alone sets how far the box can reach;
+the relay decides whether open floor inside it becomes known. Neither works
+without the other, and `b2maps_relay1` is the first run with both.
+
+Nav2's costmaps stay on the raw `/robot_K/scan`. The fill value means
+something only against Karto's `rangeThreshold`; an obstacle layer would read
+it as a return and put an obstacle there. Nav2 has its own knob for the same
+question — `inf_is_valid` on the observation source — and it is a separate
+decision with its own rehearsal.
 
 **Record until the explorer exits**, capped at **2 h wall time**:
 
@@ -236,7 +277,7 @@ nothing.
 |---|---|---|
 | R9 | 0 transform warnings, 0 slam drops | 0 and 0 over 12.14 min |
 | R2 | robot K ≈ 20 Hz, parked control ≈ 50 Hz | 20.001 / 50.001 Hz |
-| R4 | 0 transforms off a truth stamp | 14471 transforms, 0 off, worst dyaw 2.5e-14° |
+| R4 | 0 transforms between two pose samples; any recording edge a short contiguous prefix/suffix | 14471 compared, 0 between, 0 leading and 0 trailing, 16 poses with no transform, worst dyaw 2.5e-14° |
 | R5 | median \|dYaw\| > 1° | 81.1° |
 | R7 | writes the final online map | 11.95 × 8.00 m, 779 occupied |
 | COVERAGE | ≤ 8.00 m | rehearsal 5 read 5.621 m, which FAILED the 3.50 m gate it ran under and PASSES the 8.00 m one. The number is the rehearsal's; the verdict is not comparable across the change |
@@ -263,13 +304,21 @@ and there is no rewritten bag.
 ### 4. Offline map, known-pose
 
 ```bash
-BAG=$LOGS/${RUN}_slamin RUN=$RUN SCAN_MATCHING=false \
+BAG=$LOGS/${RUN}_slamin RUN=$RUN SCAN_MATCHING=false FREE_SPACE_RELAY=true \
     bash experiments/slam/run_offline_maps.sh $K
 ```
 
 Writes `experiments/maps/${RUN}_robot$K.pgm` / `.yaml`. `SCAN_MATCHING=false`
 for the same reason as in T3, and it is sound for the same reason: the bag's
 `odom → base_footprint` is ground truth.
+
+`FREE_SPACE_RELAY=true` (`run_offline_maps.sh:68`) replays each scan through
+the same `free_space_relay` node T3 ran online, so the offline map is built on
+the same beams as the online one. Both must be set, or the two maps of one run
+answer different questions. The script derives the fill from the range the bag
+itself carries (`bag_range_max.py`) and aborts if the fill and the threshold do
+not straddle, so old 3.5 m bags replay correctly at 3.4 / 3.45 rather than
+against a literal.
 
 ### 5. Place the map in the world
 
@@ -305,10 +354,11 @@ criterion 5 above (occupied cells on the outer boundary) is read off this map.
 That document was written before rehearsal 4 and is wrong in ways that cost
 runs. It is kept for its reasoning, not its commands.
 
-* **Sourcing and build.** It builds inside `ros2_ws` and sources
-  `ros2_ws/install/setup.bash`. That install has no `truth_odom_tf` and
-  shadows the repo-root one. Build from the repo root, source
-  `~/Desktop/NSKsim/install/setup.bash`.
+* **Sourcing and build.** It builds inside `ros2_ws` and then keeps
+  `ros2_ws/install/setup.bash` sourced for the run. That install has no
+  `truth_odom_tf` and shadows the repo-root one. Build from the repo root —
+  `ros2_ws/install` belongs in the build shell only, for
+  `nsk_swarm_interfaces` — and run from `~/Desktop/NSKsim/install`.
 * **Launch arguments.** It shows `nav_robots:=[0]` alone in places; both
   `nav_robots:=[K]` and `truth_odom_robots:=[K]` are required.
 * **`tee`.** It pipes all three processes through `tee`. Logs only.
