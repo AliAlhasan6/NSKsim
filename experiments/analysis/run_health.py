@@ -101,6 +101,48 @@ FAIL_FACTOR = 2.0
 # make_namespaced_burger_sdf failed to take.
 TF_RATE_TOL = 0.20
 
+# ── R4: how much of the recording edge is not a finding ──────────────────────
+# A transform whose stamp lies OUTSIDE the recorded pose series is not evidence
+# of a second publisher; it is usually evidence that rosbag2 attached to /tf
+# and to /model/robot_K/pose at different moments. b2maps_relay1's record log:
+#
+#     [1789943096.804587] Subscribed to topic '/tf'
+#     [1789943096.947029] Subscribed to topic '/model/robot_0/pose'
+#
+# 142.4 ms apart, which at the PosePublisher's 20 Hz is 2.85 sample periods --
+# and exactly 3 transforms in that bag carry stamps (75.250, 75.300, 75.350)
+# earlier than the first recorded pose (75.400). The order is a discovery race
+# and swings both ways run to run: e0t +44.6 ms, e0 +2824 ms, and rehearsal5
+# subscribed to the pose topic FIRST, at -224 ms, so it has no leading edge at
+# all. Gating on it gates the recorder, not the transform.
+#
+# The grace is a count and a span, both in PosePublisher periods, at each end.
+# 20 periods is 1.0 s at 20 Hz. Measured against the runs R4 actually applies
+# to -- the truth_odom_tf ones -- that is about seven times the widest edge
+# seen: relay1 3, e0t 1, rehearsal5 0.
+#
+# It is NOT seven times every attach gap this rig has produced. b2maps_e0 took
+# 2824 ms to subscribe, which would be 57 periods; R4 does not run on it (e0 is
+# the DiffDrive run being replaced, so it has no truth transform to check), but
+# a truth run that attached that slowly WOULD fail here. That is the intended
+# behaviour and not a number to raise on sight: an edge that long is no longer
+# a negligible artefact, and the record log beside the bag says in two lines
+# whether the recorder or a publisher produced it.
+#
+# The bound is deliberately belt-and-braces. Contiguity and an unbroken pose
+# series already make a second publisher implausible here, and R2 catches one
+# outright by reading the 70 Hz sum on the pair. What the bound adds is that
+# "outside the pose series" cannot become an unexamined place to put
+# transforms. The case R4 exists for puts them INSIDE the series, where the
+# comparison is unchanged and unmatched is still a hard failure.
+EDGE_GRACE_PERIODS = 20
+
+# A truth sample is MISSING, rather than merely jittered, when the step to the
+# next one exceeds this many nominal periods. b2maps_relay1's pose series steps
+# 50.000 ms every time -- median, min and max all equal -- so this only has to
+# separate "one sample absent" (2.0) from "no sample absent" (1.0).
+TRUTH_GAP_PERIODS = 1.5
+
 # ── R7: the trinary thresholds nav2's map_saver uses ─────────────────────────
 # Percent occupancy, matching experiments/slam/save_map.py's OCC_TH/FREE_TH
 # (0.65/0.25 there, scaled by 100 at the comparison). Restated in this file
@@ -467,14 +509,108 @@ def read_truth_tf_series(bag: Path, robot: int):
     return truth, tf_pairs, wheel, other_publishers
 
 
-def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel) -> bool:
+def split_at_truth_span(tf_pairs, truth):
+    """Recorded transforms partitioned by stamp against the truth series' span.
+
+    Returns (before, inside, after), each a list of (stream index, row), where
+    the stream index is the transform's position in the order it was recorded.
+    The indices are what makes the contiguity test below possible: an edge is
+    only an edge if it sits at an END of the stream.
+
+    Pure. `tf_pairs` must be in recorded order, which read_truth_tf_series
+    guarantees by appending as it reads.
+    """
+    if not truth or not tf_pairs:
+        return [], [], []
+    lo, hi = min(truth), max(truth)
+    before, inside, after = [], [], []
+    for i, row in enumerate(tf_pairs):
+        ns = row[0]
+        bucket = before if ns < lo else after if ns > hi else inside
+        bucket.append((i, row))
+    return before, inside, after
+
+
+def truth_gaps(truth, truth_hz: float):
+    """Adjacent truth stamps more than TRUTH_GAP_PERIODS apart. Pure.
+
+    This is what separates the two readings of "the transform's stamp is
+    outside the pose series". If the series is unbroken from its first sample
+    to its last, then outside means the recorder had not attached yet. If the
+    series has holes, poses went missing DURING the run and an unmatched
+    transform can no longer be attributed to the edge -- so the edge grace
+    below is withheld entirely rather than applied to a series that cannot
+    support it.
+    """
+    period_ns = 1e9 / truth_hz
+    ks = sorted(truth)
+    return [(a, b) for a, b in zip(ks, ks[1:])
+            if (b - a) > TRUTH_GAP_PERIODS * period_ns]
+
+
+def judge_edge(edge, n_tf: int, truth_hz: float, leading: bool):
+    """(ok, reason, span_periods) for one end's out-of-span transforms. Pure.
+
+    Admissible only as a contiguous run at its own end of the stream, no longer
+    than EDGE_GRACE_PERIODS in both count and span. A publisher that ran during
+    the run cannot satisfy the first condition, and one that burst inside the
+    attach window cannot satisfy the second.
+    """
+    if not edge:
+        return True, 'none', 0.0
+    idx = [i for i, _row in edge]
+    want = (list(range(len(edge))) if leading
+            else list(range(n_tf - len(edge), n_tf)))
+    where = 'prefix' if leading else 'suffix'
+    if idx != want:
+        return (False,
+                f'not a contiguous {where} of the recorded stream (indices '
+                f'{idx[0]}..{idx[-1]} of {n_tf}), so these were published '
+                'during the run, not before the recorder attached', 0.0)
+
+    period_ns = 1e9 / truth_hz
+    stamps = [row[0] for _i, row in edge]
+    span = (max(stamps) - min(stamps)) / period_ns + 1.0
+    if len(edge) > EDGE_GRACE_PERIODS:
+        return (False, f'{len(edge)} transforms is more than the '
+                       f'{EDGE_GRACE_PERIODS}-period grace', span)
+    if span > EDGE_GRACE_PERIODS:
+        return (False, f'spans {span:.1f} periods, more than the '
+                       f'{EDGE_GRACE_PERIODS}-period grace', span)
+    return True, 'within grace', span
+
+
+def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel,
+                    truth_hz: float) -> bool:
     """R4 and R5 together: the transform IS the truth, and the wheel odometry
     is still the wheel's.
 
     R4 compares each recorded robot_K/odom -> robot_K/base_footprint against
     inv(A) . P at ITS OWN header stamp. The node copies the pose's stamp
-    verbatim, so every transform must land on a pose sample exactly; one that
-    does not was published by something else, which is itself the finding.
+    verbatim, so a transform whose stamp is one the pose series carries must
+    match it exactly, and one that falls BETWEEN two pose samples was published
+    by something else -- a surviving DiffDrive broadcast being the case this
+    guards. That comparison, and its 1e-6 tolerances, are unchanged.
+
+    What changed (2026-09-21) is which transforms it is asked of. The rule used
+    to require that EVERY recorded transform land on a pose stamp, and
+    b2maps_relay1 failed it on 3 of 11271 while the other 11268 agreed to
+    0.000 m and 2.5e-14 deg. Those 3 were the first three in the stream,
+    contiguous, stamped 75.250/75.300/75.350 against a first recorded pose of
+    75.400 -- the window in which the recorder held a /tf subscription and not
+    yet a /model/robot_0/pose one. See EDGE_GRACE_PERIODS for the evidence.
+
+    So the transforms are split at the pose series' span. INSIDE it the old
+    rule stands unweakened: land on a stamp, match it to 1e-6, or fail. OUTSIDE
+    it they are the recording edge, and are admitted only if they sit at an end
+    of the stream, are short, and the pose series itself has no holes -- three
+    conditions a second publisher cannot meet, because a publisher that ran
+    during the run leaves transforms inside the span, where nothing here
+    forgives them.
+
+    Poses carrying no transform are counted and printed but not gated: a
+    transform that was never published is a question about the rate, and R2
+    already answers that against /clock.
 
     R5 is the C4 discriminator from rewrite_odom_from_truth, pointed the other
     way: if /robot_K/odom had quietly become a copy of the truth, the two yaw
@@ -489,10 +625,26 @@ def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel) -> bool:
               '/tf at all')
         print('  -> FAIL\n')
         return False
+    if not truth:
+        print(f'  no /model/robot_{robot}/pose in the bag, so there is no '
+              'truth to compare the transform against')
+        print('  -> FAIL\n')
+        return False
+
+    period_ms = 1000.0 / truth_hz
+    gaps = truth_gaps(truth, truth_hz)
+    print(f'  pose series   [{min(truth) / 1e9:.3f}, {max(truth) / 1e9:.3f}] '
+          f's sim, {"gapless" if not gaps else f"{len(gaps)} GAP(S)"} at '
+          f'{truth_hz:g} Hz ({period_ms:g} ms)')
+    for a, b in gaps[:5]:
+        print(f'      {(b - a) / 1e6:.1f} ms with no pose, after '
+              f'{a / 1e9:.3f} s sim')
+
+    before, inside, after = split_at_truth_span(tf_pairs, truth)
 
     unmatched = 0
     worst_xy = worst_yaw = worst_z = 0.0
-    for ns, x, y, yaw, z in tf_pairs:
+    for _i, (ns, x, y, yaw, z) in inside:
         want = truth.get(ns)
         if want is None:
             unmatched += 1
@@ -502,15 +654,42 @@ def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel) -> bool:
         worst_yaw = max(worst_yaw, abs(math.degrees(_wrap(yaw - eyaw))))
         worst_z = max(worst_z, abs(z))
 
-    matched = len(tf_pairs) - unmatched
-    print(f'  transforms on a truth stamp   {matched:>9}')
-    print(f'  transforms on no truth stamp  {unmatched:>9}  '
-          '(must be 0: another publisher)')
+    matched = len(inside) - unmatched
+    print(f'  compared      {matched:>9}  transforms inside the pose series')
     print(f'  worst |dxy|   {worst_xy:.3e} m    (tolerance 1e-6)')
     print(f'  worst |dyaw|  {worst_yaw:.3e} deg  (tolerance 1e-6)')
     print(f'  worst |z|     {worst_z:.3e} m    (must be 0: planar transform)')
+    print(f'  BETWEEN two pose samples      {unmatched:>9}  '
+          '(must be 0: another publisher)')
+
+    lead_ok, lead_why, lead_span = judge_edge(before, len(tf_pairs), truth_hz,
+                                              leading=True)
+    trail_ok, trail_why, trail_span = judge_edge(after, len(tf_pairs),
+                                                 truth_hz, leading=False)
+    print(f'  at the recording edge         '
+          f'{len(before):>9} leading, {len(after)} trailing  '
+          f'(grace {EDGE_GRACE_PERIODS} periods each)')
+    for label, edge, why, span, passed in (
+            ('leading ', before, lead_why, lead_span, lead_ok),
+            ('trailing', after, trail_why, trail_span, trail_ok)):
+        if not edge:
+            continue
+        stamps = [row[0] for _i, row in edge]
+        print(f'      {label}  {min(stamps) / 1e9:.3f} .. '
+              f'{max(stamps) / 1e9:.3f} s sim, {len(edge)} transforms over '
+              f'{span:.1f} periods')
+        print(f'                {"ok" if passed else "FAIL"}: {why}')
+    if gaps and (before or after):
+        print('      the pose series has holes, so an out-of-span transform '
+              'cannot be charged to the recorder: grace WITHHELD')
+
+    orphans = len(set(truth) - {row[0] for row in tf_pairs})
+    print(f'  poses with no transform       {orphans:>9}  '
+          '(reported, not gated: a missing transform is R2\'s rate question)')
+
+    edges_ok = lead_ok and trail_ok and not (gaps and (before or after))
     ok = (unmatched == 0 and matched > 0 and worst_xy <= 1e-6
-          and worst_yaw <= 1e-6 and worst_z == 0.0)
+          and worst_yaw <= 1e-6 and worst_z == 0.0 and edges_ok)
     print(f'  -> {"PASS" if ok else "FAIL"}\n')
 
     print('R5 THE WHEEL ODOMETRY IS STILL THE WHEEL\'S')
@@ -1135,7 +1314,8 @@ def main() -> int:
         sx, sy = spawn[args.robot]
         truth, tf_pairs, wheel, _ = read_truth_tf_series(args.bag, args.robot)
         results['R4/R5'] = report_truth_tf(
-            args.robot, (sx, sy, 0.0), truth, tf_pairs, wheel)
+            args.robot, (sx, sy, 0.0), truth, tf_pairs, wheel,
+            facts['truth_hz'])
 
     if args.bag and args.save_map:
         results['R7'] = report_map(args.robot,

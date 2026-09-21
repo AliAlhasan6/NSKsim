@@ -430,9 +430,22 @@ def test_inv_compose_matches_the_hand_calculated_vector():
     assert math.degrees(got[2]) == pytest.approx(45.0, abs=1e-6)
 
 
+PERIOD_NS = 50_000_000  # 1 / TRUTH_HZ, the spacing _truth_driven() uses
+
+
+def _r4(truth, tf_pairs, wheel, anchor=SPAWN0):
+    """report_truth_tf at the PosePublisher rate the synthetic series runs at.
+
+    TRUTH_HZ is the literal;
+    test_the_transform_rates_come_from_the_files_that_set_them is what keeps it
+    honest against swarm_sim.launch.py.
+    """
+    return rh.report_truth_tf(0, anchor, truth, tf_pairs, wheel, TRUTH_HZ)
+
+
 def test_a_correct_truth_driven_run_passes_r4_and_r5():
     truth, tf_pairs, wheel = _truth_driven()
-    assert rh.report_truth_tf(0, SPAWN0, truth, tf_pairs, wheel) is True
+    assert _r4(truth, tf_pairs, wheel) is True
 
 
 def test_the_wrong_anchor_fails_r4():
@@ -440,18 +453,23 @@ def test_the_wrong_anchor_fails_r4():
     is exactly the silent failure the whole check exists for.
     """
     truth, tf_pairs, wheel = _truth_driven()
-    assert rh.report_truth_tf(0, (0.0, 0.90, 0.0), truth, tf_pairs,
-                              wheel) is False
+    assert _r4(truth, tf_pairs, wheel, anchor=(0.0, 0.90, 0.0)) is False
 
 
-def test_a_transform_on_a_stamp_no_pose_has_fails_r4():
+def test_a_transform_between_two_pose_samples_fails_r4():
     """Every transform the node publishes carries the pose's own stamp, so a
     transform on any other stamp came from somewhere else -- a surviving
     DiffDrive broadcast being the case this guards.
+
+    The foreign stamp has to sit INSIDE the pose series, which is where a
+    publisher that ran during the run would put it. Outside the series is the
+    recording edge, and b2maps_relay1 showed that is the recorder's attach
+    order rather than a publisher -- see EDGE_GRACE_PERIODS.
     """
     truth, tf_pairs, wheel = _truth_driven()
-    tf_pairs.append((7, 0.0, 0.0, 0.0, 0.0))
-    assert rh.report_truth_tf(0, SPAWN0, truth, tf_pairs, wheel) is False
+    mid = tf_pairs[100][0] + PERIOD_NS // 2      # between samples 100 and 101
+    tf_pairs.insert(101, (mid, 0.0, 0.0, 0.0, 0.0))
+    assert _r4(truth, tf_pairs, wheel) is False
 
 
 def test_a_tilted_transform_fails_r4():
@@ -461,12 +479,189 @@ def test_a_tilted_transform_fails_r4():
     truth, tf_pairs, wheel = _truth_driven()
     ns, x, y, t, _z = tf_pairs[5]
     tf_pairs[5] = (ns, x, y, t, 0.01)
-    assert rh.report_truth_tf(0, SPAWN0, truth, tf_pairs, wheel) is False
+    assert _r4(truth, tf_pairs, wheel) is False
 
 
 def test_no_transforms_at_all_fails_r4():
     truth, _tf, wheel = _truth_driven()
-    assert rh.report_truth_tf(0, SPAWN0, truth, [], wheel) is False
+    assert _r4(truth, [], wheel) is False
+
+
+def test_no_truth_poses_at_all_fails_r4():
+    """Without a pose series there is nothing to compare against, and nothing
+    to define an edge either -- so this cannot be allowed to pass by having an
+    empty 'inside' population.
+    """
+    _truth, tf_pairs, wheel = _truth_driven()
+    assert _r4({}, tf_pairs, wheel) is False
+
+
+# ── R4's recording edge ──────────────────────────────────────────────────────
+# b2maps_relay1 failed the old rule on 3 of 11271 transforms while the other
+# 11268 matched to 0.000 m and 2.5e-14 deg. The 3 were the first three in the
+# stream, stamped one pose period apart, all before the first RECORDED pose:
+# rosbag2 subscribed to /tf 142.4 ms before /model/robot_0/pose. These tests
+# pin the line between that and the publisher R4 actually hunts.
+
+def _leading(truth, tf_pairs, n=3, step=PERIOD_NS):
+    """n transforms before the pose series, at its own rate, as the recorder's
+    attach window produces them. Returned in stream order, edge first.
+    """
+    first = min(truth)
+    lead = [(first - (n - i) * step, 0.0, 0.0, 0.0, 0.0) for i in range(n)]
+    return lead + tf_pairs
+
+
+def test_three_leading_transforms_are_the_recording_edge_and_pass():
+    """relay1's exact shape: 3 transforms one period apart ahead of the first
+    recorded pose, the pose series itself unbroken.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    assert _r4(truth, _leading(truth, tf_pairs), wheel) is True
+
+
+def test_a_trailing_edge_passes_the_same_way():
+    """The race can leave the edge at either end -- rehearsal5 subscribed to
+    the pose topic FIRST -- so a suffix has to be admitted on the same terms.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    last = max(truth)
+    tf_pairs += [(last + (i + 1) * PERIOD_NS, 0.0, 0.0, 0.0, 0.0)
+                 for i in range(3)]
+    assert _r4(truth, tf_pairs, wheel) is True
+
+
+def test_an_edge_longer_than_the_grace_fails():
+    """The grace is bounded so that "outside the series" cannot become a place
+    to hide an arbitrary number of transforms.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    over = rh.EDGE_GRACE_PERIODS + 1
+    assert _r4(truth, _leading(truth, tf_pairs, n=over), wheel) is False
+
+
+def test_the_grace_is_short_against_a_run():
+    """Pins the SIZE of the grace, not just the comparison against it.
+
+    The test above scales with EDGE_GRACE_PERIODS, so it stays green however
+    large the constant grows. This one does not: an edge as long as the run
+    itself has to fail, which is what makes the grace an allowance for an
+    attach window rather than a hole in R4.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    assert rh.EDGE_GRACE_PERIODS < len(tf_pairs)
+    whole_run = _leading(truth, tf_pairs, n=len(tf_pairs))
+    assert _r4(truth, whole_run, wheel) is False
+
+
+def test_a_sparse_edge_fails_on_its_span_even_when_few():
+    """Count and span are both bounded, and they are not the same bound.
+
+    A handful of transforms reaching far back before the pose series is not an
+    attach window -- a recorder that took a second to subscribe cannot produce
+    a stamp from a minute earlier. This is the shape a slow SECOND publisher
+    makes: few enough to sit inside the count grace, spread far too wide.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    first = min(truth)
+    sparse = [(first - n * PERIOD_NS, 0.0, 0.0, 0.0, 0.0)
+              for n in (1200, 800, 400)]
+    assert len(sparse) <= rh.EDGE_GRACE_PERIODS      # the count is fine
+    assert _r4(truth, sparse + tf_pairs, wheel) is False
+
+
+def test_out_of_span_transforms_that_are_not_at_an_end_fail():
+    """Contiguity is what makes the edge an edge. A publisher whose transforms
+    are interleaved through the recorded stream is not an attach artefact, even
+    when every one of its stamps happens to fall outside the pose series.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    first = min(truth)
+    mixed = list(tf_pairs)
+    for i in range(3):
+        mixed.insert(50 * (i + 1), (first - (3 - i) * PERIOD_NS,
+                                    0.0, 0.0, 0.0, 0.0))
+    assert _r4(truth, mixed, wheel) is False
+
+
+def _punch_hole(truth, tf_pairs, lo=100, hi=104):
+    """Drop four consecutive samples from BOTH series.
+
+    Both, deliberately. Dropping the poses alone would leave four transforms
+    stranded inside the span with no pose to match, and the run would fail as
+    "another publisher" -- the right verdict for the wrong reason, and a test
+    that cannot tell whether the gap rule works at all.
+    """
+    doomed = set(sorted(truth)[lo:hi])
+    for ns in doomed:
+        del truth[ns]
+    return [row for row in tf_pairs if row[0] not in doomed]
+
+
+def test_a_gap_in_the_pose_series_is_not_itself_a_failure():
+    """R4 judges the transform, not the pose stream. A run that dropped poses
+    but whose every transform still matches has nothing for R4 to report.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    tf_pairs = _punch_hole(truth, tf_pairs)
+    assert rh.truth_gaps(truth, TRUTH_HZ) != []
+    assert _r4(truth, tf_pairs, wheel) is True
+
+
+def test_a_gapped_pose_series_withholds_the_edge_grace():
+    """If poses went missing DURING the run, "before the first pose" no longer
+    means "before the recorder attached", so the same 3 transforms that pass on
+    an unbroken series must not pass here.
+
+    The two assertions differ only in whether the pose series has a hole: same
+    transforms, same anchor, same edge.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    assert _r4(truth, _leading(truth, tf_pairs), wheel) is True
+
+    truth, tf_pairs, wheel = _truth_driven()
+    tf_pairs = _punch_hole(truth, tf_pairs)
+    assert _r4(truth, _leading(truth, tf_pairs), wheel) is False
+
+
+def test_a_pose_with_no_transform_is_reported_not_gated(capsys):
+    """relay1 has one, at sim 106.050. A transform that was never published is
+    a question about the RATE, which R2 answers against /clock -- but it must
+    not be invisible.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    dropped = tf_pairs.pop(60)
+    assert dropped[0] in truth
+    assert _r4(truth, tf_pairs, wheel) is True
+    out = capsys.readouterr().out
+    assert re.search(r'poses with no transform\s+1', out)
+
+
+def test_the_edge_population_is_named_in_the_report(capsys):
+    truth, tf_pairs, wheel = _truth_driven()
+    _r4(truth, _leading(truth, tf_pairs), wheel)
+    out = capsys.readouterr().out
+    assert re.search(r'compared\s+200\s+transforms inside the pose series',
+                     out)
+    assert re.search(r'at the recording edge\s+3 leading, 0 trailing', out)
+
+
+def test_split_at_truth_span_buckets_by_the_pose_interval():
+    """The partition itself, without the report around it."""
+    truth = {100: (0.0, 0.0, 0.0), 200: (0.0, 0.0, 0.0)}
+    rows = [(50, 0, 0, 0, 0), (100, 0, 0, 0, 0), (150, 0, 0, 0, 0),
+            (200, 0, 0, 0, 0), (250, 0, 0, 0, 0)]
+    before, inside, after = rh.split_at_truth_span(rows, truth)
+    assert [i for i, _r in before] == [0]
+    assert [i for i, _r in inside] == [1, 2, 3]   # endpoints are INSIDE
+    assert [i for i, _r in after] == [4]
+
+
+def test_truth_gaps_finds_only_a_missing_sample():
+    truth = {i * PERIOD_NS: (0.0, 0.0, 0.0) for i in range(10)}
+    assert rh.truth_gaps(truth, TRUTH_HZ) == []
+    del truth[5 * PERIOD_NS]
+    assert len(rh.truth_gaps(truth, TRUTH_HZ)) == 1
 
 
 def test_wheel_odometry_that_is_really_truth_fails_r5():
@@ -476,13 +671,12 @@ def test_wheel_odometry_that_is_really_truth_fails_r5():
     """
     truth, tf_pairs, _wheel = _truth_driven()
     same_as_truth = [(ns, t) for ns, _x, _y, t, _z in tf_pairs]
-    assert rh.report_truth_tf(0, SPAWN0, truth, tf_pairs,
-                              same_as_truth) is False
+    assert _r4(truth, tf_pairs, same_as_truth) is False
 
 
 def test_a_missing_wheel_stream_fails_r5():
     truth, tf_pairs, _wheel = _truth_driven()
-    assert rh.report_truth_tf(0, SPAWN0, truth, tf_pairs, []) is False
+    assert _r4(truth, tf_pairs, []) is False
 
 
 # ── R2: the frame pair's rate names its owner ────────────────────────────────
