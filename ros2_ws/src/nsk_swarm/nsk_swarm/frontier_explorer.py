@@ -53,6 +53,15 @@ This is a state QUERY, not a fixed delay — a TimerAction in explore.launch.py
 would be RTF-dependent and would silently regress the moment the machine, the
 robot count or the param set changed.
 
+waitUntilNav2Active() has a second, separate defect: it can never return at
+all. Upstream's `_waitForNodeToActivate` spins on the get_state future with no
+timeout, so a single dropped response wedges the explorer before the gate above
+is ever reached — and bt_navigator does drop one, under exactly the load of its
+own Configuring step (aborted_k0_gate_hang: 23 minutes of silence, Nav2 active
+throughout). `FrontierExplorer._waitForNodeToActivate` overrides it to bound
+each call and re-ask. The two fixes are independent: this one is about the wait
+returning, the one above about what it is worth once it does.
+
 Goal supervision (RTF-invariant)
 --------------------------------
 A goal is judged in SIMULATION time, not wall-clock, so the verdict is invariant
@@ -780,6 +789,14 @@ NAV2_READY_TIMEOUT = 120.0  # s wall; overall budget for the lifecycle readiness
                             # safe measuring stick for the wait that precedes it.
 NAV2_READY_POLL = 1.0       # s wall; interval between get_state polls
 NAV2_STATE_CALL_WAIT = 1.0  # s wall; per-call budget for one get_state response
+NAV2_ACTIVATE_CALL_WAIT = 5.0  # s wall; per-call budget for one get_state during
+                            # the bt_navigator activation wait, after which the
+                            # request is dropped and re-sent. Longer than
+                            # NAV2_STATE_CALL_WAIT because this one runs while
+                            # bt_navigator is still Configuring (it spends ~1.4 s
+                            # building navigators and can be slow to answer), and
+                            # because there is no outer budget here to retry
+                            # inside -- see _waitForNodeToActivate below.
 FIRST_MAP_TIMEOUT = 120.0  # s wall; give up waiting for the very first SLAM map
 MAP_REFRESH_WALL = 90.0    # s wall; backstop for the map-refresh wait if /clock stalls
 TF_WAIT = 0.5              # s wall; nap between retries while the map->base TF isn't ready yet
@@ -1902,6 +1919,75 @@ class FrontierExplorer(BasicNavigator):
         return goal
 
     # ── bounded waits (each is timeout-capped and emits heartbeats) ───────────
+    def _waitForNodeToActivate(self, node_name):
+        """BasicNavigator's, with its one unbounded wait bounded and retried.
+
+        Upstream (jazzy nav2_simple_commander/robot_navigator.py:775-793) is:
+
+            while state != 'active':
+                future = state_client.call_async(req)
+                rclpy.spin_until_future_complete(self, future)   # no timeout
+                if future.result() is not None:
+                    state = future.result().current_state.label
+                time.sleep(2)
+
+        with no `timeout_sec` on line 788. A get_state response that is never
+        delivered parks this thread forever -- the `while` loop cannot reach
+        its next iteration to re-ask, so the retry that looks like it is there
+        is unreachable. It is the whole loop's only exit.
+
+        Not hypothetical. In aborted_k0_gate_hang, bt_navigator logged
+
+            failed to send response to /robot_0/bt_navigator/get_state
+            (timeout): client will not receive response
+
+        at 1790113404.848, 0.148 s after this gate asked at 1790113404.700.
+        Nav2 reported "Managed nodes are active" 3.2 s later and the explorer
+        printed nothing for the remaining 23 minutes of the run. b2maps_relay1
+        and b2maps_e0t survived only by luck of timing: both logged
+        "service not available, waiting..." first, so they were still in the
+        bounded wait_for_service loop above while bt_navigator was busy, and
+        asked once it could answer.
+
+        Bounded here at NAV2_ACTIVATE_CALL_WAIT per call; a call that goes
+        unanswered is dropped and re-sent, and N in the log line counts the
+        calls that went unanswered. Everything else is upstream's on purpose --
+        the same service, the same 'active' test, the same wait_for_service
+        loop, and the same trailing time.sleep(2) on every iteration including
+        the successful one -- so a stack that answers normally sees no change
+        in behaviour and none in timing.
+        """
+        self.debug(f'Waiting for {node_name} to become active..')
+        node_service = f'{node_name}/get_state'
+        state_client = self.create_client(GetState, node_service)
+        while not state_client.wait_for_service(timeout_sec=1.0):
+            self.info(f'{node_service} service not available, waiting...')
+
+        req = GetState.Request()
+        state = 'unknown'
+        unanswered = 0
+        while state != 'active':
+            self.debug(f'Getting {node_name} state...')
+            future = state_client.call_async(req)
+            rclpy.spin_until_future_complete(
+                self, future, timeout_sec=NAV2_ACTIVATE_CALL_WAIT)
+            if future.done() and future.result() is not None:
+                state = future.result().current_state.label
+                self.debug(f'Result of get_state: {state}')
+            else:
+                # Drop it rather than leave it in the client's pending map,
+                # where a late reply would sit forever. Same reason
+                # _SensorNode.lifecycle_state() cancels its own timed-out
+                # futures, and the same two calls.
+                unanswered += 1
+                future.cancel()
+                state_client.remove_pending_request(future)
+                self.info(f'get_state on {node_name} unanswered after '
+                          f'{NAV2_ACTIVATE_CALL_WAIT:.0f} s, asking again '
+                          f'(attempt {unanswered})')
+            time.sleep(2)
+        return
+
     def _wait_for_nav2_servers_active(self, servers=NAV2_REQUIRED_SERVERS):
         """Block until every server in `servers` reports lifecycle state 'active'.
 

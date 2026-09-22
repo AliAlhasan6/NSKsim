@@ -221,6 +221,195 @@ def test_gate_gives_up_when_rclpy_shuts_down(monkeypatch):
     assert fake.now == 0.0
 
 
+# ── Layer 0 — the activation wait BELOW the readiness gate ───────────────────
+#
+# _wait_for_nav2_servers_active above is bounded in three independent places
+# (NAV2_READY_TIMEOUT, NAV2_STATE_CALL_WAIT, and lifecycle_state dropping its
+# own timed-out futures). The wait that runs BEFORE it was not bounded at all:
+# waitUntilNav2Active -> BasicNavigator._waitForNodeToActivate spins on the
+# get_state future with no timeout_sec, so one undelivered response parks the
+# explorer forever and the readiness gate below is never reached to time out.
+# That is the aborted_k0_gate_hang failure. FrontierExplorer overrides the
+# method; these pin the override.
+
+
+class WouldBlockForever(Exception):
+    """Raised by the fake spin when asked to wait with no timeout.
+
+    Models what rclpy.spin_until_future_complete(node, future) does with a
+    future that never completes: it does not return. Raising instead of
+    actually blocking keeps the regression test deterministic and instant,
+    and still fails loudly on any code path that reaches an unbounded wait.
+    """
+
+
+class FakeFuture:
+    def __init__(self, answerable, label):
+        self.answerable = answerable
+        self.label = label
+        self._done = False
+        self.cancelled = False
+
+    def done(self):
+        return self._done
+
+    def result(self):
+        if not self._done:
+            return None
+        return SimpleNamespace(current_state=SimpleNamespace(label=self.label))
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class FakeStateClient:
+    """A get_state client whose answers are scripted call by call.
+
+    `answers` is one bool per call -- True the response arrives, False it is
+    lost, exactly the bt_navigator "failed to send response ... (timeout)" in
+    the evidence log. The last entry repeats.
+    """
+
+    def __init__(self, answers, label='active'):
+        self.answers = list(answers)
+        self.label = label
+        self.futures = []
+        self.removed = []
+
+    def wait_for_service(self, timeout_sec=None):
+        return True
+
+    def call_async(self, req):
+        answerable = (self.answers.pop(0) if len(self.answers) > 1
+                      else self.answers[0])
+        future = FakeFuture(answerable, self.label)
+        self.futures.append(future)
+        return future
+
+    def remove_pending_request(self, future):
+        self.removed.append(future)
+
+
+def make_activate_stub(answers, label='active'):
+    client = FakeStateClient(answers, label)
+    stub = SimpleNamespace(client=client, logged=[])
+    stub.info = lambda msg: stub.logged.append(('INFO', msg))
+    stub.debug = lambda msg: stub.logged.append(('DEBUG', msg))
+    stub.create_client = lambda srv_type, name: client
+    stub._waitForNodeToActivate = (
+        FrontierExplorer._waitForNodeToActivate.__get__(stub))
+    return stub
+
+
+@pytest.fixture
+def spin(monkeypatch):
+    """Swap `time` and `rclpy` for fakes that model spin_until_future_complete.
+
+    With a timeout_sec it returns when the response does not arrive, leaving
+    the future not done -- which is what gives the override something to
+    retry. Without one it never returns, which is upstream's bug.
+    """
+    fake = FakeClock()
+
+    def spin_until_future_complete(node, future, timeout_sec=None):
+        if future.answerable:
+            future._done = True
+            return
+        if timeout_sec is None:
+            raise WouldBlockForever(
+                'spin_until_future_complete with no timeout_sec on a response '
+                'that never arrives')
+        fake.sleep(timeout_sec)
+
+    fake_rclpy = SimpleNamespace(
+        ok=lambda: True,
+        spin_until_future_complete=spin_until_future_complete)
+    monkeypatch.setattr(fx, 'time', fake)
+    monkeypatch.setattr(fx, 'rclpy', fake_rclpy)
+    # robot_navigator resolves `rclpy` and `time` from its OWN module globals
+    # (its lines 41 and 18), so patching frontier_explorer's names alone leaves
+    # upstream's method running against the real rclpy. Both modules get the
+    # same fakes, so the two methods below differ only in themselves.
+    import nav2_simple_commander.robot_navigator as rn
+    monkeypatch.setattr(rn, 'time', fake)
+    monkeypatch.setattr(rn, 'rclpy', fake_rclpy)
+    return fake
+
+
+def test_a_lost_get_state_response_is_retried_not_waited_on_forever(spin):
+    # The evidence: first response lost, node active by the second ask.
+    stub = make_activate_stub([False, True])
+    stub._waitForNodeToActivate('bt_navigator')      # must return at all
+
+    assert len(stub.client.futures) == 2, 'the lost call must be re-sent'
+    lost, answered = stub.client.futures
+    assert lost.cancelled and stub.client.removed == [lost], (
+        'a timed-out request must be cancelled AND removed from the pending '
+        'map, or a late reply sits there forever')
+    assert not answered.cancelled
+
+    retry = [m for m in messages(stub, 'INFO') if 'unanswered' in m]
+    assert retry == ['get_state on bt_navigator unanswered after 5 s, '
+                     'asking again (attempt 1)'], retry
+
+
+def test_the_unpatched_upstream_wait_never_returns(spin):
+    """The regression this fixes: upstream reaches an unbounded wait.
+
+    Same stub, same lost response — but BasicNavigator's own method, which
+    omits timeout_sec. In a real process this is the 23-minute silence in
+    aborted_k0_gate_hang; here the fake refuses to pretend it returns.
+    """
+    from nav2_simple_commander.robot_navigator import BasicNavigator
+
+    stub = make_activate_stub([False, True])
+    stub._waitForNodeToActivate = (
+        BasicNavigator._waitForNodeToActivate.__get__(stub))
+    with pytest.raises(WouldBlockForever):
+        stub._waitForNodeToActivate('bt_navigator')
+
+
+def test_an_answering_stack_sees_no_change(spin):
+    # One call, one answer, no retry logged, and upstream's trailing
+    # time.sleep(2) still paid — the happy path is untouched.
+    stub = make_activate_stub([True])
+    stub._waitForNodeToActivate('bt_navigator')
+    assert len(stub.client.futures) == 1
+    assert stub.client.removed == []
+    assert not [m for m in messages(stub, 'INFO') if 'unanswered' in m]
+    assert spin.now == pytest.approx(2.0)
+
+
+def test_it_keeps_asking_until_the_node_answers_active(spin):
+    # Three lost responses in a row do not end the wait, and each is counted.
+    stub = make_activate_stub([False, False, False, True])
+    stub._waitForNodeToActivate('bt_navigator')
+    assert len(stub.client.futures) == 4
+    assert len(stub.client.removed) == 3
+    retry = [m for m in messages(stub, 'INFO') if 'unanswered' in m]
+    assert [m[-len('(attempt N)'):] for m in retry] == [
+        '(attempt 1)', '(attempt 2)', '(attempt 3)']
+
+
+def test_a_node_answering_not_active_is_polled_again(spin):
+    # Answers arrive, but the label is not 'active' until the third — the
+    # 'active' test itself is upstream's and must be unchanged.
+    stub = make_activate_stub([True], label='inactive')
+
+    labels = iter(['configuring', 'inactive', 'active'])
+    original = stub.client.call_async
+
+    def call_async(req):
+        future = original(req)
+        future.label = next(labels)
+        return future
+
+    stub.client.call_async = call_async
+    stub._waitForNodeToActivate('bt_navigator')
+    assert len(stub.client.futures) == 3
+    assert stub.client.removed == []        # nothing timed out; nothing dropped
+
+
 # ── the constant the launch file is pinned against ───────────────────────────
 
 def test_required_servers_are_the_goal_executing_ones():
