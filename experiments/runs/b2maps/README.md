@@ -1,6 +1,6 @@
-# B2 maps — the five truth-driven explorer runs, e0t … e4t
+# B2 maps — the five truth-driven explorer runs, k0 … k4
 
-One run per robot, one at a time, never two at once. In run **e\<K\>t** robot K
+One run per robot, one at a time, never two at once. In run **k\<K\>** robot K
 explores under Nav2 with its `odom → base_footprint` built from Gazebo ground
 truth and slam_toolbox in known-pose mode; the other four hold their spawn
 poses. K is the explorer id, 0 … 4, and it appears in the launch arguments, the
@@ -18,7 +18,7 @@ no longer be blamed on the odometry.
 
 ---
 
-## Success criteria — fixed before e0t is started
+## Success criteria — fixed before k0 is started
 
 A run counts when all five hold. Nothing here is judged by eye; each is a
 number a script prints.
@@ -64,7 +64,7 @@ run is not a run, and the four above cannot be read from it.
 
 ---
 
-## Once, before e0t — build and sourcing
+## Once, before k0 — build and sourcing
 
 There are two install trees and they have different jobs. **`ros2_ws/install`
 is a build-time dependency only** — it is the one place `nsk_swarm_interfaces`
@@ -112,7 +112,7 @@ Set the explorer id once per terminal:
 
 ```bash
 K=0                                   # 0, then 1, 2, 3, 4 in later runs
-RUN=b2maps_e${K}t
+RUN=b2maps_k${K}                      # NOT b2maps_e${K}t — e0/e0t are the controls
 LOGS=experiments/logs/b2maps
 ```
 
@@ -218,6 +218,28 @@ at `--min-sim 1200` the recording was short and the run must be repeated.
 If the 2 h cap comes first, stop anyway and note the time in the run log; the
 bag is still usable for whichever cuts C4 passes on.
 
+**A retry line at the Nav2 start gate is expected, not a fault.** Under load
+the explorer may log
+
+```
+get_state on bt_navigator unanswered after 5 s, asking again (attempt N)
+```
+
+bt_navigator can drop a `get_state` response while it is still Configuring, and
+since `0f48865` the explorer bounds that wait and re-asks instead of blocking on
+it forever. Seeing the line means the gate is working. Let it run; it clears as
+soon as bt_navigator answers.
+
+**A real stall looks different: no `frontier_explorer` line at all after
+`waiting for Nav2 to activate...` for 2 minutes, AND no retry lines either.**
+Retry lines say the wait is alive; silence with none of them says it is not.
+Tear the run down and report it — that is a new failure, not the one `0f48865`
+fixed.
+
+```bash
+grep -a 'frontier_explorer' $LOGS/${RUN}_explore.log | tail -5
+```
+
 **Attach nothing to the running stack.** No `tf2_monitor` — it cannot answer
 R2 anyway (tf2 messages carry no publisher identity, and its rate is the rate
 of all of `/tf`: it read ~316 Hz for robot_0 and the same for robot_1). No
@@ -239,7 +261,7 @@ and R7 comes out of the bag afterwards. Every check below is offline.
    ```
 5. Then this must print `clean`:
    ```bash
-   pgrep -fa '[g]z sim|[p]arameter_bridge|[s]lam_toolbox|[n]sk_swarm|[r]osbag2' \
+   pgrep -fa '[g]z sim|[p]arameter_bridge|[s]lam_toolbox|[n]sk_swarm|[r]osbag2|[b]ag record|[r]ecord_run' \
        || echo clean
    ```
    The brackets are not decoration. `pgrep -f` matches full command lines,
@@ -247,9 +269,20 @@ and R7 comes out of the bag afterwards. Every check below is offline.
    spelling always finds one process and never says `clean`. `[g]z` matches
    `gz` in a real process and not the literal `[g]z` in this command.
 
+   **`[r]osbag2` alone does not find the recorder.** `record_run.sh:142` ends
+   in `exec ros2 bag record -o …`, and `exec` means the surviving command line
+   is exactly that — it contains `ros2` and `bag record`, and the string
+   `rosbag2` appears nowhere in it. `rosbag2_recorder` is the ROS *node* name,
+   which is what the log shows and what `pgrep -f` never sees. The aborted k0
+   run printed `clean` with a recorder still writing. `[b]ag record` catches
+   the recorder itself and `[r]ecord_run` catches the wrapper script if it is
+   ever run without `exec`.
+
 A surviving bridge or gz server poisons the next run quietly: the next boot
 finds topics already advertised and robots already spawned, and the run that
-results is neither this one nor a clean one.
+results is neither this one nor a clean one. A surviving recorder is worse than
+quiet: it holds the previous run's bag open and keeps appending to it, so the
+first minutes of the next run land in the wrong bag.
 
 ---
 
@@ -443,13 +476,13 @@ treating 1200 s as settled.
 
 | path | what |
 |---|---|
-| `experiments/logs/b2maps/b2maps_e<K>t/` | the raw bag, 28 topics |
-| `experiments/logs/b2maps/b2maps_e<K>t_sim.log` | R3's evidence |
-| `experiments/logs/b2maps/b2maps_e<K>t_record.log` | pre-flight attempt, 26 → 28 subscriptions, clean flush |
-| `experiments/logs/b2maps/b2maps_e<K>t_explore.log` | R9's input; exploration-complete line |
-| `experiments/logs/b2maps/b2maps_e<K>t_cut<CUT>_slamin/` | the stripped segment, one per cut (60, 120, 240, 1200) |
-| `experiments/maps/b2maps_e<K>t_online_robot<K>.*` | R7, the map the run steered by |
-| `experiments/maps/b2maps_e<K>t_cut<CUT>_robot<K>.*` | the offline known-pose map, one per cut |
+| `experiments/logs/b2maps/b2maps_k<K>/` | the raw bag, 28 topics |
+| `experiments/logs/b2maps/b2maps_k<K>_sim.log` | R3's evidence |
+| `experiments/logs/b2maps/b2maps_k<K>_record.log` | pre-flight attempt, 26 → 28 subscriptions, clean flush |
+| `experiments/logs/b2maps/b2maps_k<K>_explore.log` | R9's input; exploration-complete line |
+| `experiments/logs/b2maps/b2maps_k<K>_cut<CUT>_slamin/` | the stripped segment, one per cut (60, 120, 240, 1200) |
+| `experiments/maps/b2maps_k<K>_online_robot<K>.*` | R7, the map the run steered by |
+| `experiments/maps/b2maps_k<K>_cut<CUT>_robot<K>.*` | the offline known-pose map, one per cut |
 
 ---
 
