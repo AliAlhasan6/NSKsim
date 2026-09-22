@@ -23,7 +23,7 @@ crashing: one missing topic should not hide the state of the other two.
 Usage:
     source /opt/ros/jazzy/setup.bash
     python3 experiments/slam/check_run_bag.py --bag <dir> --robot K \
-        [--spawn-rev 08617b2] [--budget 2400]
+        [--spawn-rev 08617b2] [--min-sim 2400]
 
 Reading a bag needs the ROS environment, so rosbag2_py is imported inside the
 function that uses it -- the convention bag_overlap.py and
@@ -86,8 +86,8 @@ PROLOGUE_MIN_POSES = 50
 # ── C4: how much exploring the bag has to contain ────────────────────────────
 # Offline mapping replays from the first command onward; everything before it
 # is the robot sitting at spawn. 2400 s is the exploring the B2 maps need per
-# robot. --budget overrides it for a rehearsal, where the point is the
-# procedure rather than the coverage.
+# robot. --min-sim (alias --budget) overrides it for a rehearsal, where the
+# point is the procedure rather than the coverage.
 #
 # SIM seconds, not bag seconds. Bag timestamps are receive times on the wall
 # clock (b2maps_e0's zero is 1789835891293813784 ns, 19:38:11 MSK, and its
@@ -305,17 +305,58 @@ def check_prologue(bag_start: float, cmds, poses, spawn_xy) -> tuple[bool, list]
     return ok, lines
 
 
-def sim_window(clocks, t_cmd: float, budget: float):
-    """Where BUDGET_S seconds of SIM time after t_cmd end, in receive time.
+class _ClockTrace:
+    """Pass-through over the clock series that remembers how far it got.
+
+    sim_window() returns None when the window is never reached and says
+    nothing about how much sim time WAS there -- which is the one number a
+    short bag most needs reported. Its None contract is depended on by
+    callers and tests, so rather than change what it returns, this watches
+    what flows through it.
+
+    sim_available is measured on sim_window's own rule: the last /clock at or
+    before the command is the start, so the span available is the last value
+    seen minus that one.
+    """
+
+    def __init__(self, clocks, t_cmd: float):
+        self._clocks = clocks
+        self._t_cmd = t_cmd
+        self._sim_at_cmd = None
+        self._sim_last = None
+
+    def __iter__(self):
+        for recv, sim in self._clocks:
+            if recv <= self._t_cmd:
+                self._sim_at_cmd = sim
+            self._sim_last = sim
+            yield recv, sim
+
+    @property
+    def sim_available(self) -> float | None:
+        """Sim seconds between the command and the last /clock seen, or None.
+
+        None means no /clock preceded the command, so there is no start to
+        measure from -- a different fault from a bag that is merely short.
+        """
+        if self._sim_at_cmd is None or self._sim_last is None:
+            return None
+        return self._sim_last - self._sim_at_cmd
+
+
+def sim_window(clocks, t_cmd: float, min_sim: float):
+    """Where `min_sim` seconds of SIM time after t_cmd end, in receive time.
 
     `clocks` is an iterable of (receive_s, sim_s) in read order. The sim time
     of an event is the latest /clock value received at or before it, so
     sim_start is the last clock at or before the command, and the window ends
     at the RECEIVE time of the first clock whose VALUE has advanced a full
-    budget past that.
+    `min_sim` past that.
 
     Returns (sim_start, t_end, sim_end), or None if the bag runs out of clock
-    before the budget is reached, or if no clock preceded the command.
+    before `min_sim` is reached, or if no clock preceded the command. A
+    `min_sim` of 0.0 therefore asks only for sim_start -- the sim time of the
+    command itself -- which is what partial_maps.py wants from it.
     """
     sim_start = None
     target = None
@@ -326,17 +367,21 @@ def sim_window(clocks, t_cmd: float, budget: float):
         if sim_start is None:
             return None                  # command precedes every /clock
         if target is None:
-            target = sim_start + budget
+            target = sim_start + min_sim
         if sim >= target:
             return sim_start, recv, sim
     return None
 
 
 def check_budget(strip_t0: float, bag_end: float, t_cmd: float | None,
-                 budget: float, clocks=()) -> tuple[bool, list, float | None]:
+                 min_sim: float, clocks=()) -> tuple[bool, list, float | None]:
     """C4, pure so it can be tested without a bag.
 
-    The budget is SIM seconds, not bag seconds. Bag timestamps are the
+    `min_sim` is the CLI's --min-sim (alias --budget): the run must hold at
+    least that much sim time after the first nonzero command, and --start /
+    --duration are printed for exactly that span.
+
+    It is SIM seconds, not bag seconds. Bag timestamps are the
     recorder's receive times on the wall clock -- Twist carries no header, so
     there is nothing else to stamp a command with -- and RTF varies between
     runs and within one. A window measured in bag seconds would therefore
@@ -364,26 +409,37 @@ def check_budget(strip_t0: float, bag_end: float, t_cmd: float | None,
     lines.append(f'  first nonzero command at {offset:.3f} s '
                  '(strip convention: from the first kept message)')
 
-    found = sim_window(clocks, t_cmd, budget)
+    # Traced, so a failure can say how much sim time the bag DID hold. Without
+    # it the only figure on offer is the receive-time span, which is wall
+    # clock and therefore not comparable with --min-sim at all.
+    trace = _ClockTrace(clocks, t_cmd)
+    found = sim_window(trace, t_cmd, min_sim)
     if found is None:
-        lines.append(f'  /clock never advances {budget:.0f} s of SIM time '
+        lines.append(f'  /clock never advances {min_sim:.0f} s of SIM time '
                      'after that command')
+        have = trace.sim_available
+        if have is None:
+            lines.append('  no /clock arrived at or before the command, so '
+                         'there is no sim start to measure the shortfall from')
+        else:
+            lines.append(f'  sim available after it{have:9.3f} s  -- short by '
+                         f'{min_sim - have:.3f} s')
         lines.append(f'  bag ends {bag_end - t_cmd:.3f} s later in receive '
                      'time, which was not enough')
-        lines.append(f'  usable sim after it    short of {budget:.0f}  FAIL')
+        lines.append(f'  usable sim after it    short of {min_sim:.0f}  FAIL')
         lines.append('  the run stopped too early to map from; record a '
-                     'longer one rather than lowering the budget.')
+                     'longer one rather than lowering --min-sim.')
         return False, lines, offset
 
     sim_start, t_end, sim_end = found
     duration = t_end - t_cmd
     sim_span = sim_end - sim_start
     rtf = sim_span / duration if duration > 0 else float('nan')
-    tight = budget <= sim_span < budget + SIM_SPAN_SLACK_S
+    tight = min_sim <= sim_span < min_sim + SIM_SPAN_SLACK_S
 
     lines.append(f'  sim at that command   {sim_start:.3f} s')
     lines.append(f'  sim span of window    {sim_span:8.3f} s  (need >= '
-                 f'{budget:.0f} and < {budget + SIM_SPAN_SLACK_S:.1f})  '
+                 f'{min_sim:.0f} and < {min_sim + SIM_SPAN_SLACK_S:.1f})  '
                  f'{_verdict(tight)}')
     lines.append(f'  bag span of window    {duration:8.3f} s')
     lines.append(f'  mean RTF over window  {rtf:8.4f}')
@@ -432,9 +488,15 @@ def main() -> int:
     ap.add_argument('--spawn-rev', default='08617b2',
                     help='git rev whose DOT_POSES gives the spawn poses '
                          '(default %(default)s, the b18 era)')
-    ap.add_argument('--budget', type=float, default=BUDGET_S,
-                    help='seconds of exploring C4 requires after the first '
-                         'command (default %(default)s)')
+    # --budget is the original spelling and stays live: it is what
+    # experiments/runs/b2maps/README.md tells people to leave alone, and
+    # removing it would turn that instruction into an error. Both names set
+    # the same value; there is one knob here, not two.
+    ap.add_argument('--min-sim', '--budget', type=float, default=BUDGET_S,
+                    dest='min_sim',
+                    help='SIM seconds of exploring C4 requires after the first '
+                         'nonzero command (default %(default)s). --budget is '
+                         'an accepted alias.')
     args = ap.parse_args()
 
     if not 0 <= args.robot < NUM_ROBOTS:
@@ -513,7 +575,7 @@ def main() -> int:
         print(f'  -> {"PASS" if ok else "FAIL"}\n')
 
     # ── C4 BUDGET ──
-    print(f'C4 BUDGET -- at least {args.budget:.0f} s of SIM time after '
+    print(f'C4 BUDGET -- at least {args.min_sim:.0f} s of SIM time after '
           f'robot_{k} was first commanded')
     if counts.get(cmd_topic, 0) == 0 or counts.get('/clock', 0) == 0:
         absent = [t for t in (cmd_topic, '/clock') if counts.get(t, 0) == 0]
@@ -536,7 +598,7 @@ def main() -> int:
                       "the bag's first message, so this offset is NOT the "
                       "same as C3's prologue length")
             ok, lines, _offset = check_budget(
-                strip_t0, bag_end, first_nonzero_cmd(cmds), args.budget,
+                strip_t0, bag_end, first_nonzero_cmd(cmds), args.min_sim,
                 read_clock_series(bag))
             for line in lines:
                 print(line)

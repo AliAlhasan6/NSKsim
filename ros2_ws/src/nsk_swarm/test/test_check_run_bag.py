@@ -264,6 +264,35 @@ def test_clock_ending_short_of_the_budget_fails():
     assert not any('--start' in ln for ln in lines)
 
 
+def test_the_shortfall_is_named_in_sim_seconds():
+    """A short bag must say how much SIM it held, not only that it was short.
+
+    rtf=0.5 here on purpose: the bag spans 4000 s of receive time carrying
+    2000 s of simulation. Only the sim figure is comparable with --min-sim, so
+    only it can answer "how much longer must the next run be". A shortfall
+    quoted in receive seconds would say 400 s when 800 s of recording is what
+    is actually missing.
+    """
+    ok, lines, _ = budget_case(BUDGET - 400.0, rtf=0.5)
+    assert not ok
+    short = [ln for ln in lines if 'short by' in ln][0]
+    assert '2000.000' in short, short        # sim available after the command
+    assert '400.000' in short, short         # 2400 - 2000, in sim seconds
+    bag_line = [ln for ln in lines if 'bag ends' in ln][0]
+    assert '4000.000' in bag_line, bag_line  # receive span, deliberately other
+
+
+def test_no_clock_before_the_command_names_that_fault_not_a_shortfall():
+    """No sim start means no shortfall can be computed -- say which fault it is."""
+    t_cmd = STRIP_T0 + 10.0
+    late = clocks(100.0, 1.0, start_recv=t_cmd + 1.0)
+    ok, lines, _ = checker.check_budget(STRIP_T0, t_cmd + 200.0, t_cmd,
+                                        BUDGET, late)
+    assert not ok
+    assert any('no sim start to measure' in ln for ln in lines)
+    assert not any('short by' in ln for ln in lines)
+
+
 def test_clock_ending_exactly_at_the_budget_passes():
     """Inclusive boundary: the clock that reaches the budget is enough."""
     ok, lines, _ = budget_case(BUDGET, rtf=1.0)
