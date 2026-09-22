@@ -195,14 +195,28 @@ it as a return and put an obstacle there. Nav2 has its own knob for the same
 question — `inf_is_valid` on the observation source — and it is a separate
 decision with its own rehearsal.
 
-**Record until the explorer exits**, capped at **2 h wall time**:
+**Record at least 1200 s of SIM time after the first nonzero command**, capped
+at **2 h wall time**. This replaces "record until the explorer exits" — see
+*Why 1200 s, and why four cuts* below for what changed and why.
 
 ```bash
 grep -a 'exploration complete' $LOGS/${RUN}_explore.log
 ```
 
-If the cap comes first, stop anyway and note the time in the run log; the bag
-is still usable as long as C4 passes on it.
+That line now tells you the explorer is done, **not** that you may stop. **If
+the explorer finishes early, leave the recorder running until the 1200 s is in
+the bag.** All four offline cuts come out of one recording, so a bag that stops
+when the explorer does cannot supply the 1200 s cut and the run has to be
+redone.
+
+1200 s of SIM, not wall. At the ~0.97 RTF these runs hold, it is roughly 21 min
+of wall time — use that as the on-the-day proxy and leave margin, because RTF
+varies within a run and nothing here may attach to the running stack to read
+`/clock` directly. C4 measures it exactly, afterwards, off the bag; if C4 fails
+at `--min-sim 1200` the recording was short and the run must be repeated.
+
+If the 2 h cap comes first, stop anyway and note the time in the run log; the
+bag is still usable for whichever cuts C4 passes on.
 
 **Attach nothing to the running stack.** No `tf2_monitor` — it cannot answer
 R2 anyway (tf2 messages carry no publisher identity, and its rate is the rate
@@ -245,16 +259,24 @@ results is neither this one nor a clean one.
 
 ```bash
 python3 experiments/slam/check_run_bag.py \
-    --bag $LOGS/$RUN --robot $K --spawn-rev 08617b2
+    --bag $LOGS/$RUN --robot $K --spawn-rev 08617b2 --min-sim 1200
 ```
 
-The **default 2400 s budget** applies to these runs — do not pass `--budget`.
+**`--min-sim 1200` on this first pass** — it is the recording rule, so this is
+the check that the bag holds what it was supposed to hold.
+
+The flag's own default is still 2400 s, which these runs deliberately no longer
+use; *Why 1200 s, and why four cuts* below is the reasoning. `--budget` is an
+accepted alias for the same knob, so older notes quoting it still work.
 
 * **C1** all 28 recorded topics present and non-empty, `/robot_K/odom` among
   them (that is the check that the wheel stream survived).
 * **C2** robot K's first truth pose on its spawn, ≤ 1 cm and ≤ 0.5°.
 * **C3** ≥ 5 s and ≥ 50 pose samples before the first nonzero command.
-* **C4** prints the `--start` / `--duration` step 3 needs.
+* **C4** at `--min-sim 1200`, PASS means the recording is long enough to cut.
+  A FAIL names the shortfall in sim seconds — `sim available after it … short
+  by … s` — which is how much longer the next recording has to run. C4 is then
+  re-run per cut in step 3 to get each cut's numbers.
 
 Rehearsal 5, at the rehearsal's `--budget 300`: C1 28/28, C2 0.16 cm / 0.00°,
 C3 44.67 s with 814 samples, C4 PASS at RTF 0.970.
@@ -287,13 +309,47 @@ only if that robot was not parked. R7 writes `.pgm`, `.png` and `.yaml`;
 `experiments/analysis/pgm_extent.py` reads the PGM back independently if you
 want a second opinion on the extent.
 
-### 3. Strip the RAW bag with C4's numbers
+### 3. Strip the RAW bag with C4's numbers — once per cut
+
+**Four cuts per run: 60, 120, 240 and the full 1200 s.** Each is a separate
+strip and a separate map, all taken from the one recording. Steps 4 and 5 are
+unchanged except for the names they are given.
 
 ```bash
+CUT=240                          # repeat for 60, 120, 240, 1200
+CUTRUN=${RUN}_cut${CUT}
+
+# 1. C4 for this cut -- prints --start / --duration spanning exactly CUT sim s
+python3 experiments/slam/check_run_bag.py \
+    --bag $LOGS/$RUN --robot $K --spawn-rev 08617b2 --min-sim $CUT
+
+# 2. strip that span out of the RAW bag
 python3 experiments/slam/strip_bag_for_offline_slam.py \
-    $LOGS/$RUN $LOGS/${RUN}_slamin \
+    $LOGS/$RUN $LOGS/${CUTRUN}_slamin \
     --start <C4's --start> --duration <C4's --duration>
+
+# 3. step 4 and step 5 below, against this cut
+BAG=$LOGS/${CUTRUN}_slamin RUN=$CUTRUN SCAN_MATCHING=false FREE_SPACE_RELAY=true \
+    bash experiments/slam/run_offline_maps.sh $K
+
+venv/bin/python experiments/slam/fit_world_transform.py \
+    --run $CUTRUN --robot $K --spawn-rev 08617b2 --bag $LOGS/$RUN
 ```
+
+**`--bag` stays `$LOGS/$RUN`, the raw bag, in every cut.** It is what
+corroborates the spawn table against parked robots; `$LOGS/$CUTRUN` is not a
+bag and there is no bag under that name.
+
+`--start` is the same number for all four cuts — it is the offset of the first
+nonzero command, which does not move — and only `--duration` changes. On
+`b2maps_relay1` the three cuts it can supply read `--start 46.786` with
+`--duration` 61.307, 122.031 and 244.103. If a cut's `--start` differs from the
+others, something is wrong with the bag, not with the cut.
+
+Take the cuts a run's C4 passes. `b2maps_relay1` holds 520.220 s of sim after
+its first command, so it supplies 60/120/240 and **fails at 1200** (`short by
+679.780 s`); it predates this rule. Runs recorded under the rule above supply
+all four.
 
 **The raw bag, with no rewrite step.** `rewrite_odom_from_truth.py` exists to
 put truth into a bag that was recorded on wheel odometry; these bags carry the
@@ -303,12 +359,14 @@ and there is no rewritten bag.
 
 ### 4. Offline map, known-pose
 
+Once per cut, with `CUT` and `CUTRUN` set as in step 3:
+
 ```bash
-BAG=$LOGS/${RUN}_slamin RUN=$RUN SCAN_MATCHING=false FREE_SPACE_RELAY=true \
+BAG=$LOGS/${CUTRUN}_slamin RUN=$CUTRUN SCAN_MATCHING=false FREE_SPACE_RELAY=true \
     bash experiments/slam/run_offline_maps.sh $K
 ```
 
-Writes `experiments/maps/${RUN}_robot$K.pgm` / `.yaml`. `SCAN_MATCHING=false`
+Writes `experiments/maps/${CUTRUN}_robot$K.pgm` / `.yaml`. `SCAN_MATCHING=false`
 for the same reason as in T3, and it is sound for the same reason: the bag's
 `odom → base_footprint` is ground truth.
 
@@ -322,16 +380,62 @@ against a literal.
 
 ### 5. Place the map in the world
 
+Once per cut:
+
 ```bash
 venv/bin/python experiments/slam/fit_world_transform.py \
-    --run $RUN --robot $K --spawn-rev 08617b2 --bag $LOGS/$RUN
+    --run $CUTRUN --robot $K --spawn-rev 08617b2 --bag $LOGS/$RUN
 ```
+
+`--run` is the cut, `--bag` is the raw bag. The 80 % on-wall floor is a gate on
+the **1200 s** map; the three short cuts are read for the shape of the map as it
+grew, and a short cut scoring below the floor is a fact about how little had
+been mapped yet, not a failed run.
 
 **`--spawn-rev 08617b2` every time.** The default is `fc050c4`, the b16 era,
 and on a b18/b2maps bag it silently places every map 3.15 m out. `--bag`
 corroborates the spawn table against robots that never moved, so the table is
-checked rather than trusted. The 80 % on-wall floor is the criterion here;
-criterion 5 above (occupied cells on the outer boundary) is read off this map.
+checked rather than trusted. Criterion 5 above (occupied cells on the outer
+boundary) is read off the **1200 s** map, the same one the on-wall floor gates
+— not off a short cut, which has not had time to reach the boundary.
+
+---
+
+## Why 1200 s, and why four cuts
+
+**The map is finished long before 2400 s.** With the LDS-02 at 8 m and the
+free-space relay, `b2maps_relay1` reached 99 % of its final free area about
+**430 s after its first nonzero command** (99 % at sim 546.0 s; the command is
+at sim 118.6 s), and its last 60 s added 0.39 m² to a 387.7 m² map — 0.1 %. A
+2400 s map and a 1200 s map of this world would be near-identical, so the extra
+1200 s buys wall-clock cost and no coverage. 1200 s is still ~2.8× the observed
+saturation time, which is the margin for a run that explores less efficiently
+than this one did. `experiments/analysis/map_saturation.py` is what measures
+this, and re-measures it per run:
+
+```bash
+python3 experiments/analysis/map_saturation.py --bag $LOGS/$RUN --topic /robot_$K/map
+```
+
+**The cuts are there because early maps are shaped by the world, not only by
+sensor range.** `experiments/analysis/partial_maps.py` on `b2maps_relay1`
+reports an occlusion index — the fraction of straight-line-reachable floor that
+is actually known — of **0.59 / 0.71 / 0.72** at 60 / 120 / 240 s. At 60 s,
+41 % of what the robot could have seen if nothing blocked it was still unknown.
+That shortfall is not the sensor running out of reach: stray (known free
+outside the 8 m envelope) is ≤ 0.09 % at every cut, with **zero** cells beyond
+range, so everything known is inside the envelope and what is missing is inside
+it too — behind walls. The cuts are what make that visible; a single final map
+cannot show it.
+
+Read the three cut values, not the final one. `partial_maps.py` defines reach
+from the final map's free cells, so the final map scores 1.000 by construction
+and is not evidence of anything.
+
+Both numbers above are `b2maps_relay1`'s, which is one run of one world with
+one sensor. They are the basis for choosing 1200 s, not a property of the
+configuration — re-read them on the first run recorded under this rule before
+treating 1200 s as settled.
 
 ---
 
@@ -343,9 +447,9 @@ criterion 5 above (occupied cells on the outer boundary) is read off this map.
 | `experiments/logs/b2maps/b2maps_e<K>t_sim.log` | R3's evidence |
 | `experiments/logs/b2maps/b2maps_e<K>t_record.log` | pre-flight attempt, 26 → 28 subscriptions, clean flush |
 | `experiments/logs/b2maps/b2maps_e<K>t_explore.log` | R9's input; exploration-complete line |
-| `experiments/logs/b2maps/b2maps_e<K>t_slamin/` | the stripped segment |
+| `experiments/logs/b2maps/b2maps_e<K>t_cut<CUT>_slamin/` | the stripped segment, one per cut (60, 120, 240, 1200) |
 | `experiments/maps/b2maps_e<K>t_online_robot<K>.*` | R7, the map the run steered by |
-| `experiments/maps/b2maps_e<K>t_robot<K>.*` | the offline known-pose map |
+| `experiments/maps/b2maps_e<K>t_cut<CUT>_robot<K>.*` | the offline known-pose map, one per cut |
 
 ---
 
