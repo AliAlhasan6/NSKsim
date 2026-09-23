@@ -88,6 +88,168 @@ mkdir -p "$MAPDIR" "$LOGDIR"
 
 die() { echo -e "\nFATAL: $*\n" >&2; exit 1; }
 
+# ── children, and stopping every one of them ─────────────────────────────────
+# Every process this script starts is registered here, and the trap below stops
+# all of them on EVERY exit path: normal finish, die, and Ctrl-C.
+#
+# The PID bash hands back is not the process that matters. 'ros2 run' and
+# 'ros2 launch' Popen the real executable and merely wait on it
+# (ros2run/api/__init__.py), so $! is a wrapper:
+#
+#   run_offline_maps.sh
+#   └─ ros2 run nsk_swarm free_space_relay          <- $RELAY_PID
+#      └─ python3 .../lib/nsk_swarm/free_space_relay --ros-args ...
+#
+# 'kill $RELAY_PID' stops the wrapper and leaves the node reparented to init and
+# still republishing /robot_N/scan_free. That is how the relay of
+# b2maps_k1_cut1200 was alive a day after the script exited 0 -- on the SUCCESS
+# path, not an error path -- while slam_toolbox, which had a pkill on its node
+# name, was not. So every stop here takes the whole tree, and the node PIDs are
+# registered too, once they exist, in case a wrapper dies first.
+#
+# Only registered PIDs and their descendants are ever signalled. Never
+# 'pkill -f free_space_relay': a live sim on this machine runs relays with the
+# same command line and those are not this script's to kill.
+CHILD_PIDS=()
+CHILD_CMDS=()
+CHILDREN_STOPPED=0
+
+# A PID's command line, empty if it is gone. The 2>/dev/null comes BEFORE the
+# input redirection on purpose: redirections are applied left to right, and a
+# '< /proc/<gone>/cmdline' that fails is reported by the shell on whatever stderr
+# is current at that moment. Trailing, it printed 'No such file or directory' for
+# every process this script had already stopped.
+pid_cmd() {
+  [[ -r "/proc/$1/cmdline" ]] || return 0
+  tr '\0' ' ' 2>/dev/null < "/proc/$1/cmdline"
+}
+
+# NOT 'kill -0', which cannot tell a zombie from a running process. Our own
+# background jobs are not the problem -- bash reaps those promptly -- but the
+# NODES below are grandchildren that nothing in this shell ever waits on, so one
+# that has exited while its wrapper has not yet collected it answers kill -0 as
+# if it were alive. The escalation loop in stop_pids would then sit out its full
+# budget on a corpse.
+alive() { [[ -n "$(pid_cmd "$1")" ]]; }
+
+register_child() {
+  local pid="$1" cmd
+  cmd="$(pid_cmd "$pid")"
+  [[ -n "$cmd" ]] || return 0
+  CHILD_PIDS+=("$pid")
+  CHILD_CMDS+=("$cmd")
+}
+
+# Descendants of $1, DEEPEST FIRST: a wrapper must not be signalled before the
+# node it holds, because once the parent is gone the child is reparented and
+# pgrep -P can no longer find it.
+descendants() {
+  local kid
+  for kid in $(pgrep -P "$1" 2>/dev/null); do
+    descendants "$kid"
+    echo "$kid"
+  done
+}
+
+# Register what a wrapper has spawned by now. Call it once the child is known to
+# be up -- after the lifecycle wait, after the relay's startup sleep -- so the
+# node stays killable by PID even if its wrapper dies first.
+register_spawned() {
+  local kid
+  while read -r kid; do register_child "$kid"; done < <(descendants "$1")
+}
+
+# PID numbers are recycled. Signal a registered PID only while it is still the
+# process that was registered.
+is_registered_process() {
+  local pid="$1" i
+  for (( i = 0; i < ${#CHILD_PIDS[@]}; i++ )); do
+    if [[ "${CHILD_PIDS[i]}" == "$pid" ]]; then
+      [[ "$(pid_cmd "$pid")" == "${CHILD_CMDS[i]}" ]]
+      return $?
+    fi
+  done
+  return 1
+}
+
+# Stop registered PIDs and everything below them.
+#
+# SIGTERM, NOT SIGINT, even though SIGINT is the signal this stack is written for
+# (rclpy.spin catches KeyboardInterrupt, ros2 launch shuts its nodes down in
+# order). When job control is off -- which it is in any script -- bash sets
+# SIGINT and SIGQUIT to SIG_IGN in every command it starts with '&', and an
+# ignored-on-entry signal cannot be re-enabled from inside. So every wrapper
+# started here is deaf to SIGINT by construction: measured, 'ros2 bag play' sat
+# through a SIGINT to its whole process group and only died on the SIGKILL below.
+# SIGTERM is not special-cased that way and reaches all of them.
+#
+# SIGKILL 10 s later for anything that wanted longer. Nothing here needs a
+# graceful exit: the map is already written by save_map.py before slam_toolbox is
+# stopped, and the relay is a stateless republisher.
+stop_pids() {
+  local pid kid victims=() live=() tops=()
+  # A node is both registered in its own right and reachable as a descendant of
+  # its wrapper, so the list has to be deduplicated or it signals twice and says
+  # so twice.
+  local -A seen=()
+  for pid in "$@"; do
+    [[ -n "$pid" ]] || continue
+    is_registered_process "$pid" || continue
+    tops+=("$pid")
+    while read -r kid; do
+      [[ -n "$kid" && -z "${seen[$kid]:-}" ]] || continue
+      seen[$kid]=1
+      victims+=("$kid")
+    done < <(descendants "$pid")
+    if [[ -z "${seen[$pid]:-}" ]]; then seen[$pid]=1; victims+=("$pid"); fi
+  done
+  (( ${#victims[@]} )) || return 0
+  for pid in "${victims[@]}"; do
+    # Skip what has already gone: on a Ctrl-C the terminal has signalled the
+    # whole foreground group itself, and some of these are dead before we look.
+    alive "$pid" || continue
+    echo "      stopping $pid: $(pid_cmd "$pid" | cut -c1-70)"
+    kill -TERM "$pid" 2>/dev/null
+  done
+  for _ in $(seq 1 20); do
+    live=()
+    for pid in "${victims[@]}"; do alive "$pid" && live+=("$pid"); done
+    (( ${#live[@]} )) || break
+    sleep 0.5
+  done
+  for pid in "${live[@]}"; do
+    echo "      SIGKILL $pid: $(pid_cmd "$pid" | cut -c1-70)"
+    kill -KILL "$pid" 2>/dev/null
+  done
+  # Reap our own background jobs, so a later 'is it gone?' is not answered by a
+  # zombie that still looks like a process to kill -0.
+  for pid in "${tops[@]}"; do wait "$pid" 2>/dev/null; done
+  return 0
+}
+
+# The trap. Idempotent, because INT runs it and the exit that follows runs it
+# again, and $?-preserving, so the EXIT path does not rewrite the script's own
+# exit status. Reverse registration order: last started, first stopped.
+stop_children() {
+  local rc=$?
+  [[ "$CHILDREN_STOPPED" == 1 ]] && return "$rc"
+  CHILDREN_STOPPED=1
+  local i rev=() n=0
+  for (( i = ${#CHILD_PIDS[@]} - 1; i >= 0; i-- )); do
+    rev+=("${CHILD_PIDS[i]}")
+    is_registered_process "${CHILD_PIDS[i]}" && n=$((n + 1))
+  done
+  if (( n )); then
+    echo -e "\n  cleanup: $n process(es) still running" >&2
+    stop_pids "${rev[@]}"
+  fi
+  return "$rc"
+}
+
+trap stop_children EXIT
+trap 'stop_children; exit 130' INT
+trap 'stop_children; exit 143' TERM
+
 # ── preconditions ───────────────────────────────────────────────────────────
 
 [[ -d "$BAG"      ]] || die "bag not found: $BAG"
@@ -220,6 +382,7 @@ for N in "${ROBOTS[@]}"; do
   echo "[1/4] starting slam_toolbox (log: ${LOG#$REPO_ROOT/})"
   ros2 launch "$LAUNCH" params_file:="$PARAMS" > "$LOG" 2>&1 &
   SLAM_PID=$!
+  register_child "$SLAM_PID"
 
   # Wait for the node to reach 'active'. Polling the lifecycle state is the
   # honest check -- a running process proves nothing, the node can sit in
@@ -233,10 +396,14 @@ for N in "${ROBOTS[@]}"; do
     if [[ "$STATE" == *"active"* ]]; then ACTIVE=1; break; fi
   done
   echo
+  # The launched node, not just the 'ros2 launch' wrapper holding it. Registered
+  # whether or not it activated: a node stuck in 'unconfigured' is still a
+  # process, and the failure path below has to take it with it.
+  register_spawned "$SLAM_PID"
   if [[ $ACTIVE -ne 1 ]]; then
     echo "  node never reached 'active'. Last state: ${STATE:-<none>}"
     echo "  tail of $LOG:"; tail -20 "$LOG"
-    kill $SLAM_PID 2>/dev/null; wait $SLAM_PID 2>/dev/null
+    stop_pids "$SLAM_PID"
     FAILED+=("robot_$N (never activated)")
     continue
   fi
@@ -260,9 +427,14 @@ for N in "${ROBOTS[@]}"; do
         -p "robot_id:=$N" -p "range_threshold:=$RELAY_RANGE_THRESHOLD" \
         >> "$LOG" 2>&1 &
     RELAY_PID=$!
+    register_child "$RELAY_PID"
     sleep 2
-    kill -0 "$RELAY_PID" 2>/dev/null || \
-      die "free_space_relay died at startup; see $LOG"
+    # The relay node itself, not just the wrapper that Popen'd it.
+    register_spawned "$RELAY_PID"
+    # The die below is what leaves slam_toolbox running with nothing to stop it,
+    # which is why it is worth saying that the trap now covers it: measured, the
+    # FATAL here takes the whole slam tree with it.
+    alive "$RELAY_PID" || die "free_space_relay died at startup; see $LOG"
   fi
 
   echo "[3/4] replaying $RUN at rate $RATE, start-offset $START, playback-duration $DUR"
@@ -270,10 +442,18 @@ for N in "${ROBOTS[@]}"; do
   # START_<N> is kept for completeness but /tf_static sits at bag time 0 and
   # --start-offset skips it; cut segments with strip_bag_for_offline_slam.py
   # --start/--duration instead, which re-timestamps /tf_static.
+  # Backgrounded and waited on rather than run in the foreground: bash defers a
+  # trap until the foreground command returns, so a Ctrl-C mid-replay would
+  # otherwise not be handled until the replay itself decided to stop -- and a
+  # SIGTERM to this script would leave the replay running with nobody to kill
+  # it. The replay's exit status is not consulted, exactly as before.
   ros2 bag play "$BAG" "${CLOCK_ARGS[@]}" --rate "$RATE" \
       --start-offset "$START" --playback-duration "$DUR" \
       --topics /clock /tf /tf_static "/robot_$N/scan" "/robot_$N/odom" \
-      >> "$LOG" 2>&1
+      >> "$LOG" 2>&1 &
+  PLAY_PID=$!
+  register_child "$PLAY_PID"
+  wait "$PLAY_PID"
 
   echo "      settling ${SETTLE}s for the final map publish"
   sleep "$SETTLE"
@@ -281,7 +461,7 @@ for N in "${ROBOTS[@]}"; do
   if [[ -n "$RELAY_PID" ]]; then
     # After the settle, not before: the last scans are still being processed,
     # and a relay killed early truncates the map by however much is in flight.
-    kill "$RELAY_PID" 2>/dev/null; wait "$RELAY_PID" 2>/dev/null
+    stop_pids "$RELAY_PID"
     grep -a 'beams filled' "$LOG" | tail -1
   fi
 
@@ -290,18 +470,28 @@ for N in "${ROBOTS[@]}"; do
   # slam_toolbox's correction. NOT in the saved .yaml, but required to place the
   # map in world coordinates: world = spawn o (map->odom)^-1 o map_origin o cell.
   # Omitting it cost a session of wrong on-wall figures (2026-09-05).
+  # 'timeout' signals the whole group it started, so tf2_echo cannot outlive it
+  # on expiry -- but registering it covers the 5 s window in which this script
+  # itself could be interrupted.
   timeout 5 ros2 run tf2_ros tf2_echo "robot_$N/map" "robot_$N/odom" \
       --ros-args -p use_sim_time:=true \
-      > "$LOGDIR/map_to_odom_${RUN}_robot_$N.txt" 2>&1
+      > "$LOGDIR/map_to_odom_${RUN}_robot_$N.txt" 2>&1 &
+  TF_PID=$!
+  register_child "$TF_PID"
+  wait "$TF_PID"
   head -8 "$LOGDIR/map_to_odom_${RUN}_robot_$N.txt"
-  
-  
-  
-  python3 "$SAVER" --topic /map --out "$OUT" --timeout 30 >> "$LOG" 2>&1
+
+  python3 "$SAVER" --topic /map --out "$OUT" --timeout 30 >> "$LOG" 2>&1 &
+  SAVE_PID=$!
+  register_child "$SAVE_PID"
+  wait "$SAVE_PID"
   SAVE_RC=$?
 
-  kill $SLAM_PID 2>/dev/null; wait $SLAM_PID 2>/dev/null
-  pkill -f async_slam_toolbox_node 2>/dev/null
+  # The tree, which is the 'ros2 launch' wrapper plus the node registered above.
+  # This replaces a 'pkill -f async_slam_toolbox_node' that was the only reason
+  # slam_toolbox did not leak the way the relay did -- and that would have
+  # reached outside this script's own children to do it.
+  stop_pids "$SLAM_PID"
 
   # ── verification ──────────────────────────────────────────────────────────
   # A file existing is not the check. experiments/maps holds a dozen 27-byte
