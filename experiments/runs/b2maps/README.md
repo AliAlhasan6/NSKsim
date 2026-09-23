@@ -280,9 +280,12 @@ and R7 comes out of the bag afterwards. Every check below is offline.
 
 A surviving bridge or gz server poisons the next run quietly: the next boot
 finds topics already advertised and robots already spawned, and the run that
-results is neither this one nor a clean one. A surviving recorder is worse than
-quiet: it holds the previous run's bag open and keeps appending to it, so the
-first minutes of the next run land in the wrong bag.
+results is neither this one nor a clean one. A surviving recorder fails
+differently: the next run is still captured in full by its own recorder, but
+the old one keeps its own bag open and appends the new run's messages there as
+well. The data lands in both, the previous finished bag is corrupted by a run
+it is not a record of, and the second recorder competes for exactly the time
+this run measures.
 
 ---
 
