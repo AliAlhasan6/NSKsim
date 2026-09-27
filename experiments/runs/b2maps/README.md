@@ -469,6 +469,51 @@ per cell in world coordinates — necessary because slam_toolbox recomputes a
 0.243 cells apart, so comparing by array index would report a sub-cell shift as
 wholesale disagreement.
 
+**Zeroing the gates is necessary but not sufficient: a scan that never arrives
+cannot be integrated.** slam_toolbox subscribes through a
+`tf2_ros::MessageFilter` that parks scans until `odom → base_footprint` is
+available, and `scan_queue_size` — the depth of that queue — **defaults to 1**
+(measured on the live node, slam_toolbox 2.8.5). A scan still parked when the
+next one arrives is discarded, logged as `discarding message because the queue
+is full`, and simply missing from the map. The k4 replays above never showed it
+past the first scan, so the rule above was written without it; `b2maps_k0_cut1200`
+then dropped **6** scans that way under `DETERMINISTIC=true` — at sim 773.0,
+796.0, 806.0, 850.8, 1217.8 and 1272.8 — and was tabulated as reproducible with
+nothing guaranteeing that it was.
+
+Those particular six turned out not to matter. Replayed **twice** with the queue
+sized to the segment — 20 min 53 s and 20 min 43 s, **0 drops each**, against 6
+before — both maps are byte-identical to each other *and* to the map built
+without the parameter: md5 `aefb6eea256df1023464d46e10f10515`, 1565 occupied,
+0 differing cells by `pgm_agreement.py`, identical `.yaml` origin. At 5 Hz a
+dropped scan is nearly the view its neighbours already carried, and by sim 773
+that part of the floor was mapped. So the corpus map stands — what changed is
+that it is now *guaranteed* rather than lucky, and a different draw of the race
+had no reason to be as kind.
+
+`DETERMINISTIC=true` now also sets `scan_queue_size` to **the segment's own scan
+count**, read off the bag per robot (`bag_scan_facts.py --count`; 6000 for a
+1200 s cut). A queue that can hold every scan the replay will ever publish cannot
+evict one, so this is sufficient by construction rather than by a margin. It
+costs nothing when unused — the filter appends to a list, it does not preallocate
+a buffer.
+
+**One drop survives, and it is the one that is harmless.** The segment's first
+scan has no transform behind it yet, so it is discarded either for the queue or
+for an empty transform cache; which of the two is logged varies and does not
+matter. `run_b2maps_cuts.sh` gates on exactly that shape — **at most one drop,
+and only at the segment's first scan** — and fails the row on any other, because
+a drop elsewhere is a scan missing from the map and *which* scan loses that race
+is a timing accident. It is the same distinction the k4 measurement above already
+drew between losing 95.800 (harmless, byte-identical) and losing 97.000
+(divergent), now enforced instead of described.
+
+A map whose log shows no drop past the first scan is **unaffected** by the queue
+size, because the integrated set is the same either way. Confirmed on
+`b2maps_k0_cut60` (0 drops): rebuilt with `scan_queue_size: 300`, its `.pgm` is
+byte-identical to the one built without the parameter, md5
+`c5b4b97c70e89d69b141098427b75257`, sidecar origin included.
+
 `experiments/slam/run_b2maps_cuts.sh` batches steps 3–5 and sets
 `DETERMINISTIC=true` itself, so the rule cannot be forgotten on one cut of
 fifteen; it prints the variant in its log header, and in its final table it
