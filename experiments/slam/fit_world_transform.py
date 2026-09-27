@@ -7,7 +7,12 @@ and 9.0/12.7/6.9/0.9/78.0% on-wall, both far below the free-search baselines --
 so the error is not the direction of that one transform alone. Rather than argue
 the composition out, this measures it: free-fit each map into the world with no
 prior, then ask which of four analytic candidates (2 row conventions x 2
-transform directions) lands on its own free-fit optimum.
+transform directions) reproduces the best free fit that map admits.
+
+Best across BOTH conventions, not within each. A mirrored reading judged only
+against other mirrored placements passes on being the best of them, however far
+behind the upright reading of the same map it is -- which is how a 99.5% A and
+an 80.4% B were once both called winners (see candidate_gate).
 
 The verdict rests only on maps that actually fit the world (see WELL_FIT_FLOOR).
 A map that does not is fitting its own noise, and its free fit is not a
@@ -586,25 +591,102 @@ def free_optimum(refined: list[dict]) -> dict:
     return next(p for p in refined if not p.get('seeded'))
 
 
-def candidate_gate(cand_score: float, best_free_score: float,
+def best_free_convention(refined_by_conv: dict[str, list[dict]]) -> tuple[str, float]:
+    """(convention, score) of the best free optimum across the conventions fitted.
+
+    THE one definition of the reference a candidate is judged against, read by
+    both the gate in main() and the well-fit floor in report(). Those two used
+    to compute it separately and disagree: report() took the max over
+    conventions while the gate took the candidate's own convention.
+
+    Ties go to the first convention in the mapping's order -- A when both were
+    fitted, since main() builds it in `conventions` order. The accumulator this
+    replaces broke ties the same way, comparing with a strict `>`.
+    """
+    conv = max(refined_by_conv,
+               key=lambda cv: free_optimum(refined_by_conv[cv])['score'])
+    return conv, free_optimum(refined_by_conv[conv])['score']
+
+
+def convention_margin_pp(refined_by_conv: dict[str, list[dict]]) -> float | None:
+    """Best A minus best B free fit, in percentage points. None unless both.
+
+    How far apart the two readings of one map are. REPORTED ONLY -- no verdict
+    turns on it. It is what makes a passing B candidate readable: on
+    b2maps_k4_cut1200 the mirrored reading is 18.8 pp behind the upright one,
+    which is not a world symmetry the wall overlap cannot resolve.
+    """
+    if not {'A', 'B'} <= set(refined_by_conv):
+        return None
+    return 100.0 * (free_optimum(refined_by_conv['A'])['score']
+                    - free_optimum(refined_by_conv['B'])['score'])
+
+
+def gate_all_conventions(refined_by_conv: dict[str, list[dict]],
+                         cands_by_conv: dict[str, list[dict]]) -> dict:
+    """Judge every candidate of one map against ONE reference. Pure.
+
+    This is the whole of what the two-pass structure in main() buys: every
+    convention is fitted before anything is judged, and then every candidate --
+    whatever convention it belongs to -- is gated against the best free score
+    across the conventions fitted. Only own_convention_score varies between
+    them, and that is reported, never gated.
+
+    Split out of main() so that wiring is testable without running a search:
+    main() does the fitting, this decides, report() reads the result.
+    """
+    ref_conv, ref_score = best_free_convention(refined_by_conv)
+    for conv, cands in cands_by_conv.items():
+        own = free_optimum(refined_by_conv[conv])['score']
+        for cand in cands:
+            cand['gate'] = candidate_gate(cand['score'], ref_score,
+                                          reference_convention=ref_conv,
+                                          own_convention_score=own)
+    return {'reference_convention': ref_conv, 'reference_score': ref_score,
+            'convention_margin_pp': convention_margin_pp(refined_by_conv)}
+
+
+def candidate_gate(cand_score: float, reference_score: float,
                    tol: float = CANDIDATE_SCORE_TOL,
-                   floor: float = WELL_FIT_FLOOR) -> dict:
+                   floor: float = WELL_FIT_FLOOR,
+                   reference_convention: str | None = None,
+                   own_convention_score: float | None = None) -> dict:
     """Whether a candidate passes, judged on its own score. Pure.
 
-    Two conditions, both about the score alone: it must be within `tol` of
-    what the free search achieved on the same map, and it must clear the same
-    floor the free fit has to clear for the map to gate anything at all. The
-    second is not redundant -- a map whose free fit is 40% has a best the
-    candidate could match while neither is a fit of the world.
+    Two conditions, both about the score alone: it must be within `tol` of the
+    best free fit across the conventions fitted for this map, and it must clear
+    the same floor the free fit has to clear for the map to gate anything at
+    all. The second is not redundant -- a map whose free fit is 40% has a best
+    the candidate could match while neither is a fit of the world.
+
+    THE REFERENCE IS THE BEST ACROSS CONVENTIONS, not the free optimum of the
+    candidate's own convention. Gating a B candidate against B's own optimum
+    asks only "is this the best mirrored placement of this map", never "is a
+    mirrored reading of this map competitive at all" -- and B's optimum can
+    clear the floor while sitting well under A's. On b2maps_k4_cut1200 it did:
+    A fits at 99.5% and B at 80.7%, so B's 80.4% candidate passed on 0.3 pp of
+    its own convention and the verdict came out AMBIGUOUS, blaming world
+    symmetry for a 19.1 pp difference. Against the best across conventions it
+    fails and the verdict is RESOLVED A.
+
+    reference_convention names which convention supplied the reference.
+    own_convention_score, when given, records the comparison this gate no
+    longer makes: the same gap against the candidate's own convention.
+    REPORTED ONLY -- nothing here reads it back.
     """
     # 1e-9 of slack, the same the self-check uses on its plateau bounds: a
     # score exactly one tolerance below the best differs from -tol by float
     # representation alone (0.945 - 0.955 is -0.010000000000000009), and an
     # edge that rejects on that is not the edge it claims to be.
-    gap = cand_score - best_free_score
+    gap = cand_score - reference_score
     return {
-        'score': cand_score, 'best_free_score': best_free_score,
+        'score': cand_score,
+        'reference_score': reference_score,
+        'reference_convention': reference_convention,
         'score_gap': gap, 'tol': tol, 'floor': floor,
+        'own_convention_score': own_convention_score,
+        'own_convention_gap': (None if own_convention_score is None
+                               else cand_score - own_convention_score),
         'within_tol': bool(gap >= -tol - 1e-9),
         'clears_floor': bool(cand_score >= floor - 1e-9),
         'pass': bool(gap >= -tol - 1e-9 and cand_score >= floor - 1e-9),
@@ -946,7 +1028,12 @@ def main() -> None:
             'conventions': {},
         }
 
-        best_overall = None
+        # ── pass 1: fit every convention, judge nothing yet ──
+        # Nothing may be gated until all of them are in, because the reference
+        # is the best free fit ACROSS conventions. Fitting and gating in one
+        # pass is what compared a mirrored reading only with other mirrored
+        # placements (see candidate_gate).
+        fits: dict[str, dict] = {}
         for conv in conventions:
             pts = cell_points(m, conv)
             c = pts.mean(axis=0)
@@ -957,15 +1044,44 @@ def main() -> None:
             refined, bounds = free_fit(pts, c, mask, wx0, wy0, rects, thetas,
                                        seeds=cands)
             optimum = free_optimum(refined)
+            fits[conv] = {'pts': pts, 'c': c, 'cands': cands,
+                          'refined': refined, 'bounds': bounds,
+                          'optimum': optimum}
+            print(f'  convention {conv}: free fit {100 * optimum["score"]:5.1f}% at '
+                  f'theta={optimum["theta"]:+7.2f} dx={optimum["dx"]:+6.3f} '
+                  f'dy={optimum["dy"]:+6.3f}')
+
+        # ── the gate: one reference for every candidate of this map ──
+        gate_info = gate_all_conventions(
+            {cv: f['refined'] for cv, f in fits.items()},
+            {cv: f['cands'] for cv, f in fits.items()})
+        ref_conv = gate_info['reference_convention']
+        ref_score = gate_info['reference_score']
+        margin = gate_info['convention_margin_pp']
+        if len(conventions) > 1:
+            print(f'  reference for every candidate below: convention {ref_conv} at '
+                  f'{100 * ref_score:.1f}%'
+                  + (f' (A-B margin {margin:+.1f} pp)' if margin is not None else ''))
+
+        # ── pass 2: everything that is reported rather than gated ──
+        # cand['gate'], which the verdict rests on and nothing else here does,
+        # was attached above. All of this is measured against the candidate's
+        # OWN convention, which is the frame each of these numbers belongs to.
+        for conv in conventions:
+            f = fits[conv]
+            pts, c, cands, optimum = f['pts'], f['c'], f['cands'], f['optimum']
             for cand in cands:
                 dth, ddx, ddy = deltas(cand, optimum)
                 cand['delta_theta_deg'] = dth
                 cand['delta_dx_m'] = ddx
                 cand['delta_dy_m'] = ddy
                 cand['agrees_with_optimum'] = agrees(cand, optimum)
-                cand['best_match'] = best_match(cand, refined)
-                # The verdict rests on this and nothing else above it.
-                cand['gate'] = candidate_gate(cand['score'], optimum['score'])
+                cand['best_match'] = best_match(cand, f['refined'])
+                # The plateau stays a fact about THIS convention's own
+                # objective: it is the angular width of the optimum the
+                # candidate is sitting in, not a comparison between readings,
+                # and measuring it against another convention's score would
+                # make it empty wherever that convention fits better.
                 cand['plateau_deg'] = list(plateau_span(
                     pts, c, rects, cand,
                     optimum['score'] - CANDIDATE_SCORE_TOL))
@@ -974,18 +1090,17 @@ def main() -> None:
                 g = next(g for g in groups if cand['label'] in g)
                 cand['coincides_with'] = [lb for lb in g if lb != cand['label']]
             entry['conventions'][conv] = {
-                'refined_peaks': refined,
+                'refined_peaks': f['refined'],
                 'analytic_candidates': cands,
                 'merged_groups': groups,
-                'search_bounds': bounds,
+                'search_bounds': f['bounds'],
             }
-            print(f'  convention {conv}: free fit {100 * optimum["score"]:5.1f}% at '
-                  f'theta={optimum["theta"]:+7.2f} dx={optimum["dx"]:+6.3f} '
-                  f'dy={optimum["dy"]:+6.3f}')
-            if best_overall is None or optimum['score'] > best_overall[1]['score']:
-                best_overall = (conv, optimum)
 
-        conv, fit = best_overall
+        entry.update(gate_info)
+
+        # The best free fit across conventions IS the reference, so the PNG is
+        # rendered at it rather than from a second accumulator.
+        conv, fit = ref_conv, fits[ref_conv]['optimum']
         png = OUT_DIR / f'world_fit_{RUN}_robot{n}_{stamp}.png'
         render(m, conv, fit, rects, png)
         png_paths[n] = png
@@ -1026,6 +1141,8 @@ def main() -> None:
                                  'well_fit_floor': WELL_FIT_FLOOR},
         'candidate_gate': {'score_tol': CANDIDATE_SCORE_TOL,
                            'well_fit_floor': WELL_FIT_FLOOR,
+                           'reference': 'the best free fit across the '
+                                        'conventions fitted, per map',
                            'seeded_peaks': 'analytic placements are added to '
                                            'the peak list before NMS'},
         'self_check': check,
@@ -1054,21 +1171,44 @@ def report(results, robots, conventions) -> dict:
 
     print()
     print('=' * 100)
-    print('analytic candidates vs the free fit for the same convention')
+    print('analytic candidates vs the best free fit across conventions')
     print('  GATED on the candidate\'s own on-wall score: within '
           f'{100 * CANDIDATE_SCORE_TOL:.0f} pp of the best free')
-    print(f'  fit AND at or above the {100 * WELL_FIT_FLOOR:.0f}% floor. '
-          'Everything else here is reported,')
-    print('  never gated: dtheta/ddx/ddy against the free optimum, the peak the')
+    print('  fit ACROSS CONVENTIONS -- not the candidate\'s own convention -- '
+          'AND at or above')
+    print(f'  the {100 * WELL_FIT_FLOOR:.0f}% floor. A mirrored reading judged only '
+          'against other mirrored')
+    print('  placements passes on being the best of them, however far behind the')
+    print('  upright reading of the same map it is.')
+    print('  Everything else here is reported, never gated: the gap to the')
+    print('  candidate\'s OWN convention (the "own" column, which is what the gate')
+    print('  used to read), dtheta/ddx/ddy against that own optimum, the peak the')
     print('  candidate lands on (seeded placements included, so its own local')
     print('  optimum is in the list), and the angular plateau it sits on.')
-    print(f'{"":>9}{"conv":>6}{"direction":>21}{"on-wall":>9}{"gap":>7}'
+    print(f'{"":>9}{"conv":>6}{"direction":>21}{"on-wall":>9}{"gap":>7}{"own":>7}'
           f'{"dtheta":>9}{"ddx":>8}{"ddy":>8} |'
           f'{"pk":>4}{"dtheta":>9}{"ddx":>8}{"ddy":>8}{"plateau":>16}  pass')
 
+    def refined_by_conv(n):
+        return {c: results[n]['conventions'][c]['refined_peaks']
+                for c in conventions}
+
     def best_free(n):
-        return max(free_optimum(results[n]['conventions'][c]['refined_peaks'])
-                   ['score'] for c in conventions)
+        # The same helper the gate reads, so the floor here and the reference
+        # there cannot drift apart again.
+        return best_free_convention(refined_by_conv(n))[1]
+
+    def reference_convention(n):
+        return best_free_convention(refined_by_conv(n))[0]
+
+    def margin_pp(n):
+        return convention_margin_pp(refined_by_conv(n))
+
+    def best_free_line(n):
+        margin = margin_pp(n)
+        extra = '' if margin is None else f'   A-B margin {margin:+.1f} pp'
+        return (f'     robot_{n} at {100 * best_free(n):.1f}% '
+                f'(convention {reference_convention(n)}){extra}')
 
     gating = [n for n in robots if best_free(n) >= WELL_FIT_FLOOR]
     diagnostic = [n for n in robots if n not in gating]
@@ -1081,8 +1221,10 @@ def report(results, robots, conventions) -> dict:
                     bm = cand['best_match']
                     g = cand['gate']
                     lo, hi = cand['plateau_deg']
+                    own = g.get('own_convention_gap')
                     print(f'  robot_{n}{conv:>6}{label:>21}{100 * cand["score"]:8.1f}%'
                           f'{100 * g["score_gap"]:+7.1f}'
+                          f'{"-" if own is None else f"{100 * own:+.1f}":>7}'
                           f'{cand["delta_theta_deg"]:9.2f}{cand["delta_dx_m"]:8.3f}'
                           f'{cand["delta_dy_m"]:8.3f} |{bm["peak_rank"]:>4}'
                           f'{bm["delta_theta_deg"]:9.2f}{bm["delta_dx_m"]:8.3f}'
@@ -1092,7 +1234,7 @@ def report(results, robots, conventions) -> dict:
 
     print(f'\n-- gating the verdict: free fit >= {100 * WELL_FIT_FLOOR:.0f}% --')
     for n in gating:
-        print(f'     robot_{n} at {100 * best_free(n):.1f}%')
+        print(best_free_line(n))
     rows(gating)
 
     if diagnostic:
@@ -1100,7 +1242,7 @@ def report(results, robots, conventions) -> dict:
               'is largely fitting the map\'s own')
         print('   noise and is not a reference the analytic candidates must reproduce --')
         for n in diagnostic:
-            print(f'     robot_{n} at {100 * best_free(n):.1f}%')
+            print(best_free_line(n))
         rows(diagnostic)
 
     def candidate(n, conv, label):
@@ -1154,8 +1296,8 @@ def report(results, robots, conventions) -> dict:
                 winners.append((conv, [label]))
 
     gate_names = ', '.join(f'robot_{n}' for n in gating)
-    tol = (f'{100 * CANDIDATE_SCORE_TOL:.0f} pp of the best free fit, at or '
-           f'above {100 * WELL_FIT_FLOOR:.0f}%')
+    tol = (f'{100 * CANDIDATE_SCORE_TOL:.0f} pp of the best free fit across '
+           f'conventions, at or above {100 * WELL_FIT_FLOOR:.0f}%')
     print('=' * 100)
     if not gating:
         print(f'NO VERDICT: no map clears the {100 * WELL_FIT_FLOOR:.0f}% free-fit floor, so')
@@ -1193,12 +1335,20 @@ def report(results, robots, conventions) -> dict:
     return {
         'gate': {
             'rule': 'candidate on-wall score within score_tol of the best '
-                    'free fit, and at or above well_fit_floor',
+                    'free fit ACROSS THE CONVENTIONS FITTED, and at or above '
+                    'well_fit_floor',
+            'reference': 'the best free optimum over conventions_considered, '
+                         'not the candidate\'s own convention: a mirrored '
+                         'reading judged only against other mirrored '
+                         'placements passes on being the best of them',
             'score_tol': CANDIDATE_SCORE_TOL,
             'well_fit_floor': WELL_FIT_FLOOR,
             'reported_not_gated': ['delta_theta_deg', 'delta_dx_m',
                                    'delta_dy_m', 'best_match', 'plateau_deg',
-                                   'agrees_with_optimum'],
+                                   'agrees_with_optimum',
+                                   'gate.own_convention_score',
+                                   'gate.own_convention_gap',
+                                   'convention_margin_pp'],
         },
         'resolved': len(winners) == 1,
         # False whenever the single winner is a merged pair: the placement is
@@ -1215,6 +1365,12 @@ def report(results, robots, conventions) -> dict:
         'diagnostic_robots': [f'robot_{n}' for n in diagnostic],
         'well_fit_floor': WELL_FIT_FLOOR,
         'best_free_fit': {f'robot_{n}': best_free(n) for n in robots},
+        'reference_convention': {f'robot_{n}': reference_convention(n)
+                                 for n in robots},
+        # Reported only. None whenever a single convention was fitted, which is
+        # also the case in which this script cannot say anything about the
+        # other reading of the map.
+        'convention_margin_pp': {f'robot_{n}': margin_pp(n) for n in robots},
         'robots_considered': [f'robot_{n}' for n in robots],
         'conventions_considered': conventions,
     }

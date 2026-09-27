@@ -30,9 +30,10 @@ ros:jazzy container has no scipy, and the one test here that calls
 coarse_search failed on the import at fit_world_transform.py:431.
 
 Everything else in this file is pure arithmetic over dicts and small numpy
-arrays -- the merge predicate, the candidate gate, the free optimum -- and MUST
-keep running in CI. Those are the tests that catch the defects this file exists
-for; skipping the module wholesale to dodge one import would retire them.
+arrays -- the merge predicate, the candidate gate, the cross-convention
+reference the gate reads, and the verdict report() forms out of them -- and
+MUST keep running in CI. Those are the tests that catch the defects this file
+exists for; skipping the module wholesale to dodge one import would retire them.
 """
 
 import importlib
@@ -277,6 +278,189 @@ def test_the_free_optimum_ignores_seeded_peaks():
              {'score': 0.95, 'seeded': False, 'theta': 1.0, 'dx': 0.0, 'dy': 0.0},
              {'score': 0.90, 'seeded': False, 'theta': 2.0, 'dx': 0.0, 'dy': 0.0}]
     assert free_optimum(peaks)['score'] == 0.95
+
+
+# ── Layer 3 — the reference is the best free fit ACROSS conventions ──────────
+# The gate above compared a candidate with "the best free fit". main() read
+# that as the free optimum of the candidate's OWN convention, while report()
+# took the well-fit floor from the max over conventions. So a mirrored (B)
+# reading was only ever asked "are you the best mirrored placement of this
+# map", never "is a mirrored reading of this map competitive at all".
+#
+# b2maps_k4_cut1200 is that defect in the committed logs: A free-fits at 99.5%
+# and B at 80.7%, and B's 80.4% candidate passed on 0.3 pp of its own
+# convention while clearing the 80% floor. Two winners, verdict AMBIGUOUS,
+# blaming world symmetry for a 19.1 pp difference.
+#
+# These tests run the real wiring -- gate_all_conventions() is what main()
+# calls -- and then report(), so what is pinned is the verdict, not only the
+# arithmetic underneath it. All pure dict work: no scipy, no PIL, no ROS.
+
+best_free_convention = fitter.best_free_convention
+convention_margin_pp = fitter.convention_margin_pp
+gate_all_conventions = fitter.gate_all_conventions
+report = fitter.report
+
+# (free fit, analytic candidate score) per convention.
+K4_CUT1200 = {'A': (0.995, 0.995), 'B': (0.807, 0.804)}
+
+
+def synthetic_robot(per_conv):
+    """The minimum report() reads for one robot, gated the way main() gates it.
+
+    Both directions of a convention are placed at the same spot, which is what
+    every b2maps cut does -- map_T_odom is its own inverse there -- so they
+    merge into one winner per convention and two winners means two CONVENTIONS
+    disagreeing, which is the case at issue here.
+    """
+    conventions = {}
+    for i, (conv, (free, cand_score)) in enumerate(per_conv.items()):
+        theta, dx, dy = 179.5 - 90.0 * i, 1.0 + 3.0 * i, -2.0 - 3.0 * i
+        peaks = [{'score': free, 'seeded': False,
+                  'theta': theta, 'dx': dx, 'dy': dy},
+                 {'score': free - 0.05, 'seeded': False,
+                  'theta': theta - 7.0, 'dx': dx + 4.0, 'dy': dy + 4.0}]
+        cands = [{'label': lb, 'convention': conv, 'score': cand_score,
+                  'theta': theta, 'dx': dx, 'dy': dy,
+                  'delta_theta_deg': 0.0, 'delta_dx_m': 0.0, 'delta_dy_m': 0.0,
+                  'agrees_with_optimum': True,
+                  'best_match': {'peak_rank': 1, 'peak_score': free,
+                                 'delta_theta_deg': 0.0, 'delta_dx_m': 0.0,
+                                 'delta_dy_m': 0.0, 'agrees': True},
+                  'plateau_deg': [theta - 0.5, theta + 0.5]}
+                 for lb in (MAP_T_ODOM, INVERSE)]
+        conventions[conv] = {'refined_peaks': peaks,
+                             'analytic_candidates': cands,
+                             'merged_groups': merge_groups(cands),
+                             'search_bounds': {}}
+    entry = {'conventions': conventions}
+    # The real thing main() calls, not a re-implementation of it: a test that
+    # gated these candidates itself would pass while main() gated them
+    # differently, which is the defect it is here to catch.
+    info = gate_all_conventions(
+        {c: conventions[c]['refined_peaks'] for c in per_conv},
+        {c: conventions[c]['analytic_candidates'] for c in per_conv})
+    return entry, info
+
+
+def synthetic_verdict(per_conv, robot=4):
+    entry, info = synthetic_robot(per_conv)
+    return report({robot: entry}, [robot], list(per_conv)), entry, info
+
+
+def gate_of(entry, conv, label=MAP_T_ODOM):
+    return next(c for c in entry['conventions'][conv]['analytic_candidates']
+                if c['label'] == label)['gate']
+
+
+def test_best_free_convention_names_the_max():
+    peaks = {c: [{'score': s, 'seeded': False, 'theta': 0.0, 'dx': 0.0, 'dy': 0.0}]
+             for c, s in (('A', 0.995), ('B', 0.807))}
+    assert best_free_convention(peaks) == ('A', 0.995)
+
+
+def test_best_free_convention_ignores_seeded_peaks():
+    """Same rule free_optimum follows: a seeded peak is a candidate's own
+    placement, so letting it set the reference would let a candidate raise the
+    bar it is about to be measured against."""
+    peaks = {'A': [{'score': 0.99, 'seeded': True, 'theta': 0.0, 'dx': 0.0, 'dy': 0.0},
+                   {'score': 0.70, 'seeded': False, 'theta': 0.0, 'dx': 0.0, 'dy': 0.0}],
+             'B': [{'score': 0.80, 'seeded': False, 'theta': 0.0, 'dx': 0.0, 'dy': 0.0}]}
+    assert best_free_convention(peaks) == ('B', 0.80)
+
+
+def test_a_tie_goes_to_the_first_convention_listed():
+    """A when both are fitted. The accumulator this replaced broke ties the
+    same way, comparing with a strict `>`."""
+    peaks = {c: [{'score': 0.9, 'seeded': False, 'theta': 0.0, 'dx': 0.0, 'dy': 0.0}]
+             for c in ('A', 'B')}
+    assert best_free_convention(peaks)[0] == 'A'
+
+
+def test_every_candidate_of_the_map_gets_the_same_reference():
+    """The wiring itself: one reference per MAP, not per convention. Only the
+    reported own-convention figure may differ between them."""
+    entry, info = synthetic_robot(K4_CUT1200)
+    assert info['reference_convention'] == 'A'
+    assert info['reference_score'] == 0.995
+    for conv in ('A', 'B'):
+        for cand in entry['conventions'][conv]['analytic_candidates']:
+            assert cand['gate']['reference_convention'] == 'A'
+            assert cand['gate']['reference_score'] == 0.995
+    assert gate_of(entry, 'A')['own_convention_score'] == 0.995
+    assert gate_of(entry, 'B')['own_convention_score'] == 0.807
+
+
+def test_a_mirrored_reading_18_pp_below_A_fails():
+    """b2maps_k4_cut1200. The old comparison and the new one, side by side."""
+    # What the gate used to do: B against B, and it passed.
+    assert candidate_gate(0.804, 0.807)['pass'] is True
+    # What it does now.
+    entry, _ = synthetic_robot(K4_CUT1200)
+    g = gate_of(entry, 'B')
+    assert g['pass'] is False
+    assert g['within_tol'] is False
+    assert g['clears_floor'] is True          # the failure is the gap, not the floor
+    assert g['score_gap'] == pytest.approx(-0.191)
+    # and the comparison it replaced is still recorded, reported-only
+    assert g['own_convention_gap'] == pytest.approx(-0.003)
+    assert gate_of(entry, 'A')['pass'] is True
+
+
+def test_the_18_pp_case_resolves_A():
+    verdict, _, _ = synthetic_verdict(K4_CUT1200)
+    assert verdict['resolved'] is True
+    assert [w['convention'] for w in verdict['winners']] == ['A']
+
+
+def test_tied_conventions_stay_ambiguous():
+    """Two readings genuinely within the tolerance of each other are a real
+    ambiguity, and must survive as one. The fix must not simply hand every map
+    to whichever convention scores higher."""
+    verdict, entry, _ = synthetic_verdict({'A': (0.990, 0.990), 'B': (0.985, 0.985)})
+    assert gate_of(entry, 'A')['pass'] is True
+    assert gate_of(entry, 'B')['pass'] is True
+    assert verdict['resolved'] is False
+    assert [w['convention'] for w in verdict['winners']] == ['A', 'B']
+
+
+def test_one_convention_alone_is_unchanged():
+    """--convention B on the very map whose B reading fails when A is fitted
+    too: with nothing to compare against, the reference is B's own optimum,
+    which is exactly what the gate read before this change."""
+    verdict, entry, info = synthetic_verdict({'B': (0.807, 0.804)})
+    assert info['reference_convention'] == 'B'
+    assert info['reference_score'] == 0.807
+    g = gate_of(entry, 'B')
+    assert g['pass'] is True
+    assert g['score_gap'] == pytest.approx(g['own_convention_gap'])
+    assert verdict['resolved'] is True
+    assert [w['convention'] for w in verdict['winners']] == ['B']
+
+
+def test_the_margin_is_reported_never_gated():
+    verdict, _, info = synthetic_verdict(K4_CUT1200)
+    assert info['convention_margin_pp'] == pytest.approx(18.8)
+    assert verdict['convention_margin_pp']['robot_4'] == pytest.approx(18.8)
+    assert 'convention_margin_pp' in verdict['gate']['reported_not_gated']
+    assert 'gate.own_convention_gap' in verdict['gate']['reported_not_gated']
+
+
+def test_the_margin_is_none_for_a_single_convention():
+    _, _, info = synthetic_verdict({'B': (0.807, 0.804)})
+    assert info['convention_margin_pp'] is None
+    assert convention_margin_pp({'A': [{'score': 0.9, 'seeded': False,
+                                        'theta': 0.0, 'dx': 0.0, 'dy': 0.0}]}) is None
+
+
+def test_a_well_fitting_convention_does_not_rescue_a_noise_map():
+    """The floor is still each candidate's own score. Raising the reference
+    cannot turn a failing candidate into a passing one, only the reverse."""
+    verdict, entry, _ = synthetic_verdict({'A': (0.99, 0.60), 'B': (0.55, 0.55)})
+    assert gate_of(entry, 'A')['clears_floor'] is False
+    assert gate_of(entry, 'B')['pass'] is False
+    assert verdict['resolved'] is False
+    assert verdict['winners'] == []
 
 
 @needs_scipy
