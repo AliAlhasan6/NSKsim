@@ -29,6 +29,7 @@ RUN="${RUN:-$(basename "$BAG")}"
 TEMPLATE="$REPO_ROOT/experiments/slam/offline_mapping.yaml.template"
 LAUNCH="$REPO_ROOT/experiments/slam/offline_slam.launch.py"
 SAVER="$REPO_ROOT/experiments/slam/save_map.py"
+SCAN_FACTS="$REPO_ROOT/experiments/slam/bag_scan_facts.py"
 MAPDIR="$REPO_ROOT/experiments/maps"
 LOGDIR="$REPO_ROOT/experiments/logs"
 
@@ -95,12 +96,44 @@ FREE_SPACE_RELAY="${FREE_SPACE_RELAY:-false}"
 # delays the replay so DDS discovery has finished before the first scan is
 # published, which is what removes the race over which scan arrives at all.
 #
+# A FOURTH mechanism, and zeroing those three does not touch it: a scan that
+# never reaches Karto at all cannot be integrated however permissive the gates
+# are. slam_toolbox subscribes through a tf2_ros::MessageFilter that holds scans
+# waiting for odom->base_footprint, and scan_queue_size -- the depth of that
+# queue -- DEFAULTS TO 1 (measured on the live node, slam_toolbox 2.8.5). So a
+# scan still waiting when the next one arrives is discarded, logged as
+# 'discarding message because the queue is full', and simply missing from the
+# map. Measured 2026-09-27 on b2maps_k0_cut1200, built with DETERMINISTIC=true:
+# 6 scans dropped that way, at sim 773.0, 796.0, 806.0, 850.8, 1217.8, 1272.8.
+# Which scans lose that race is a timing accident, so "every scan integrated"
+# was not true and the map was not reproducible after all.
+#
+# SCAN_QUEUE_SIZE fixes it, and under DETERMINISTIC=true it defaults to THE
+# SEGMENT'S OWN SCAN COUNT, read off the bag per robot (bag_scan_facts.py
+# --count). A queue that can hold every scan the replay will ever publish cannot
+# evict one, so this is sufficient by construction rather than by a margin
+# someone guessed -- and it costs nothing when unused: the filter's queue is a
+# list it appends to, not a buffer it preallocates.
+#
+# One drop survives and is expected: the segment's FIRST scan has no transform
+# behind it yet, so it is dropped either for the queue or for an empty transform
+# cache. run_b2maps_cuts.sh gates on exactly that -- at most one drop, and only
+# at the first scan.
+#
 # Each knob is also settable alone, which is how an effect is attributed to one
 # of them rather than to the group.
 #
 # THE DEFAULTS ARE THE VALUES THE TEMPLATE CARRIED AS LITERALS. A default run
 # renders a params file byte-identical to every one already in experiments/logs/
-# and passes no --delay at all, so nothing already measured moves.
+# -- including the scan_queue_size line, which is DELETED rather than defaulted,
+# so the parameter is absent exactly as it was and slam_toolbox keeps its own 1
+# -- and passes no --delay at all, so nothing already measured moves.
+#
+# The rationale for all of this lives HERE and not in the template, because a
+# comment in the template propagates into every generated params file and breaks
+# that byte-for-byte guarantee (docs/specs/SPEC_truth_pose_replay.md, "Nothing
+# was added to the template but the placeholder itself"). It had drifted back
+# into the template and was moved out again on 2026-09-27.
 #
 # Validated with the other flags in the preconditions section below, because
 # die() is not defined yet at this point in the file.
@@ -117,6 +150,14 @@ MIN_TIME_INTERVAL="${MIN_TIME_INTERVAL:-0.2}"
 # Seconds `ros2 bag play --delay` sleeps between creating its publishers and
 # publishing anything. 0 means the flag is not passed.
 PLAY_DELAY="${PLAY_DELAY:-0}"
+
+# Empty means "not chosen yet", which is NOT the same as a value: under
+# DETERMINISTIC=true the per-robot loop fills it from the bag, and otherwise it
+# stays empty and the params line is deleted. Deriving it inside the loop rather
+# than once from ROBOTS[0] because the counts genuinely differ between robots --
+# b2maps_k1_cut1200 carries 6001 scans for robot_1 and 6000 for robot_0 -- and a
+# queue one scan short of the segment is a queue that can still drop.
+SCAN_QUEUE_SIZE="${SCAN_QUEUE_SIZE:-}"
 
 # Both of these are DERIVED FROM THE BAG unless set, and that is the whole
 # point: this script replays recorded scans, and a bag's range_max is whatever
@@ -322,6 +363,16 @@ for _knob in MIN_TRAVEL_DISTANCE MIN_TRAVEL_HEADING MIN_TIME_INTERVAL PLAY_DELAY
     die "$_knob must be a non-negative number, got: ${!_knob}"
 done
 
+# Not in the loop above: this one is a message COUNT, so it is a positive integer
+# and not a non-negative number. 0 would be rejected by the filter itself, and
+# 6000.0 is not a queue depth.
+if [[ -n "$SCAN_QUEUE_SIZE" ]]; then
+  [[ "$SCAN_QUEUE_SIZE" =~ ^[1-9][0-9]*$ ]] || \
+    die "SCAN_QUEUE_SIZE must be a positive integer, got: $SCAN_QUEUE_SIZE"
+fi
+
+[[ -f "$SCAN_FACTS" ]] || die "bag_scan_facts.py not found: $SCAN_FACTS"
+
 # --delay is passed only when it is positive, so a default run's replay command
 # line is exactly what it always was.
 PLAY_DELAY_ARGS=()
@@ -333,6 +384,18 @@ echo "scan acceptance: minimum_travel_distance $MIN_TRAVEL_DISTANCE, \
 minimum_travel_heading $MIN_TRAVEL_HEADING, \
 minimum_time_interval $MIN_TIME_INTERVAL; replay --delay ${PLAY_DELAY}\
 $( [[ "$DETERMINISTIC" == "true" ]] && echo '   (DETERMINISTIC=true)' )"
+
+# The queue is stated on its own line because its value is not known yet when
+# SCAN_QUEUE_SIZE is empty: the per-robot loop reads it off the bag, and says so
+# there. Acceptance is about which scans Karto keeps; this is about which scans
+# reach it at all.
+if [[ -n "$SCAN_QUEUE_SIZE" ]]; then
+  echo "scan queue: scan_queue_size $SCAN_QUEUE_SIZE (set explicitly)"
+elif [[ "$DETERMINISTIC" == "true" ]]; then
+  echo "scan queue: scan_queue_size = the segment's own scan count, per robot"
+else
+  echo "scan queue: scan_queue_size unset -- slam_toolbox's own default of 1"
+fi
 
 if [[ "$FREE_SPACE_RELAY" == "true" ]]; then
   SCAN_SUFFIX="scan_free"
@@ -431,6 +494,31 @@ for N in "${ROBOTS[@]}"; do
   LOG="$LOGDIR/offline_slam_${RUN}_robot_$N.log"
   OUT="$MAPDIR/${RUN}_robot$N"
 
+  # This robot's queue depth. Derived here, not once at the top, because the
+  # scan counts differ between robots in the same bag and a queue one scan short
+  # of the segment can still drop one.
+  QUEUE_N="$SCAN_QUEUE_SIZE"
+  if [[ -z "$QUEUE_N" && "$DETERMINISTIC" == "true" ]]; then
+    QUEUE_ERR="$(mktemp)"
+    QUEUE_N="$(python3 "$SCAN_FACTS" "$BAG" "$N" --count 2>"$QUEUE_ERR")" || \
+      die "could not read the scan count for robot_$N out of $BAG:
+$(cat "$QUEUE_ERR")"
+    rm -f "$QUEUE_ERR"
+    [[ "$QUEUE_N" =~ ^[1-9][0-9]*$ ]] || \
+      die "scan count for robot_$N is not a positive integer: '$QUEUE_N'"
+    echo "  scan_queue_size $QUEUE_N -- every scan in the segment fits, so none \
+can be evicted"
+  fi
+
+  # Empty renders the placeholder line away entirely, which is what keeps a
+  # default run's params file byte-identical: the parameter is ABSENT, not set to
+  # slam_toolbox's default, exactly as it was before this knob existed.
+  if [[ -n "$QUEUE_N" ]]; then
+    QUEUE_SED=("-e" "s/^__SCAN_QUEUE_SIZE_LINE__$/    scan_queue_size: $QUEUE_N/")
+  else
+    QUEUE_SED=("-e" "/^__SCAN_QUEUE_SIZE_LINE__$/d")
+  fi
+
   # Params live in experiments/logs/, not /tmp -- /tmp is wiped on reboot and
   # these are the record of what produced each map.
   sed -e "s/__ROBOT__/$N/g" -e "s/__SCAN_MATCHING__/$SCAN_MATCHING/g" \
@@ -439,6 +527,7 @@ for N in "${ROBOTS[@]}"; do
       -e "s/__MIN_TRAVEL_DISTANCE__/$MIN_TRAVEL_DISTANCE/g" \
       -e "s/__MIN_TRAVEL_HEADING__/$MIN_TRAVEL_HEADING/g" \
       -e "s/__MIN_TIME_INTERVAL__/$MIN_TIME_INTERVAL/g" \
+      "${QUEUE_SED[@]}" \
       "$TEMPLATE" > "$PARAMS"
   grep -q "robot_$N/odom" "$PARAMS" || die "substitution failed in $PARAMS"
   grep -q "use_scan_matching: $SCAN_MATCHING" "$PARAMS" || \
@@ -453,6 +542,16 @@ for N in "${ROBOTS[@]}"; do
     die "minimum-travel-heading substitution failed in $PARAMS"
   grep -q "minimum_time_interval: $MIN_TIME_INTERVAL" "$PARAMS" || \
     die "minimum-time-interval substitution failed in $PARAMS"
+  # Both directions, because the interesting failure is the SILENT one: a
+  # deleted line that should have carried a value leaves slam_toolbox on its
+  # default of 1 and drops scans without anything here saying so.
+  if [[ -n "$QUEUE_N" ]]; then
+    grep -q "scan_queue_size: $QUEUE_N" "$PARAMS" || \
+      die "scan-queue-size substitution failed in $PARAMS"
+  else
+    grep -q 'scan_queue_size' "$PARAMS" && \
+      die "scan_queue_size is in $PARAMS but was never asked for"
+  fi
   # __UPPERCASE__, not bare '__': ros__parameters is not a placeholder.
   grep -qE '__[A-Z_]+__' "$PARAMS" && \
     die "unsubstituted placeholder left in $PARAMS"
