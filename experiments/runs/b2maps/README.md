@@ -366,6 +366,7 @@ python3 experiments/slam/strip_bag_for_offline_slam.py \
 
 # 3. step 4 and step 5 below, against this cut
 BAG=$LOGS/${CUTRUN}_slamin RUN=$CUTRUN SCAN_MATCHING=false FREE_SPACE_RELAY=true \
+    DETERMINISTIC=true \
     bash experiments/slam/run_offline_maps.sh $K
 
 venv/bin/python experiments/slam/fit_world_transform.py \
@@ -399,12 +400,80 @@ Once per cut, with `CUT` and `CUTRUN` set as in step 3:
 
 ```bash
 BAG=$LOGS/${CUTRUN}_slamin RUN=$CUTRUN SCAN_MATCHING=false FREE_SPACE_RELAY=true \
+    DETERMINISTIC=true \
     bash experiments/slam/run_offline_maps.sh $K
 ```
 
 Writes `experiments/maps/${CUTRUN}_robot$K.pgm` / `.yaml`. `SCAN_MATCHING=false`
 for the same reason as in T3, and it is sound for the same reason: the bag's
 `odom → base_footprint` is ground truth.
+
+**`DETERMINISTIC=true` on every B2 map, no exceptions.** Without it, replaying
+one stripped segment twice does not give one map. Measured on
+`b2maps_k4_cut60`, seven replays of a single segment — same 300 scans, and
+`free_space_relay`'s 200-scan checkpoint byte-identical at 15681/72000 beams
+filled — produced **two different maps**: five at 353 occupied cells and two at
+469, with 411 cells (3.06 % of everything either map knew) in different classes.
+It is not a rare corner: 2 in 7.
+
+The cause is that scan acceptance is a *chain*. `minimum_travel_distance` (0.1 m),
+`minimum_travel_heading` (0.1 rad) and `minimum_time_interval` (0.2 s) each
+measure from the last **accepted** scan, so losing one scan re-anchors every
+decision after it — and `minimum_time_interval` is the sharpest of the three,
+because these bags deliver scans at exactly 5 Hz, i.e. 0.2 s apart, so the
+default sits exactly on its own threshold. What is lost varies run to run with
+DDS discovery at the start of the replay: across those replays slam_toolbox
+logged `95.800 'queue is full'`, `95.800 'earlier than all the data in the
+transform cache'`, `97.000 'earlier than …'`, and in two replays no drop at all.
+
+*Which* scan is lost is what matters, not that one is. Losing the first scan
+(95.800) is harmless and provably so — the replay that dropped it is
+byte-identical to the two that dropped nothing — because at sim 95.81 the robot
+has only just been commanded and consecutive scans are the same view from the
+same place. The divergent maps are the two that lost **97.000**, six scans later,
+after motion had begun.
+
+`DETERMINISTIC=true` sets all three gates to 0, so every scan is integrated and
+there is no chain to re-anchor, and adds `ros2 bag play --delay 3.0` so DDS
+discovery finishes before the first scan is published. Under it, all ten replays
+(5 at 60 s, 3 at 240 s, 2 at 1200 s) came out **byte-identical** within their cut.
+The gates alone are what fix it — five replays with the gates zeroed and no delay
+were also byte-identical while the drop still varied between them — and the delay
+is kept because it makes the input deterministic too, at 3 s per replay.
+
+It changes the map, which is the reason it must be all or nothing: integrating
+every scan maps more of the world, so occupied cells go 353 → 369 at 60 s,
+1039 → 1126 at 240 s and 1708 → 1753 at 1200 s (4.10 %, 4.26 % and 0.22 % of
+known cells differ from the old settings). A cut built with the gates on
+therefore cannot be read against one built with them off, and **the five
+`b2maps_k<K>_cut1200` maps built before this rule have to be re-made.**
+
+It changes how much is mapped, not where the map goes. Fitted with
+`fit_world_transform.py` on the same segments, convention A — the one the
+verdict picks — reads **98.0 → 97.8 %** on-wall at 60 s, **99.1 → 99.3 %** at
+240 s and **99.4 → 99.5 %** at 1200 s. (Convention B is the wrong row
+convention and is not the answer; it moves further, 58.9 → 71.5 % at 60 s.) The
+verdict itself is unchanged in kind: `AMBIGUOUS` appears for the 1200 s map
+either way — it is the 180° world-symmetry case `fit_world_transform.py`
+documents, and it was already `b2maps_k4_cut1200`'s verdict before this change.
+
+What built a map is recorded beside it, in
+`experiments/logs/offline_mapping_${CUTRUN}_robot_$K.yaml`: all three of
+`minimum_travel_distance`, `minimum_travel_heading` and `minimum_time_interval`
+at 0 is this variant, and anything else is not.
+
+The numbers above come from `experiments/maps/replay_noise/` (25 maps),
+measured with `experiments/analysis/pgm_agreement.py`, which compares classes
+per cell in world coordinates — necessary because slam_toolbox recomputes a
+*continuous* grid origin per save, and two replays of one segment sat 0.479 and
+0.243 cells apart, so comparing by array index would report a sub-cell shift as
+wholesale disagreement.
+
+`experiments/slam/run_b2maps_cuts.sh` batches steps 3–5 and sets
+`DETERMINISTIC=true` itself, so the rule cannot be forgotten on one cut of
+fifteen; it prints the variant in its log header, and in its final table it
+reports what built every map it skipped, so a corpus half-built under the old
+gates is visible rather than silent.
 
 `FREE_SPACE_RELAY=true` (`run_offline_maps.sh:68`) replays each scan through
 the same `free_space_relay` node T3 ran online, so the offline map is built on
