@@ -214,6 +214,26 @@ def clocks(sim_seconds, rtf, start_recv=BAG_START, start_sim=0.0,
             for i in range(n)]
 
 
+def clocks_from_ns(first_ns, sim_seconds, start_recv=BAG_START, rtf=1.0,
+                   step_ns=10_000_000):
+    """/clock built the way read_clock_series() reads it: sec + nanosec / 1e9.
+
+    NOT clocks() above, whose sim values are `start_sim + i * step` and carry
+    their own float noise rather than a bag's. A Clock message holds two
+    integers, and the float that reaches sim_window() is the quotient of the
+    nanosecond half plus the integer second -- which is the only construction
+    that reproduces a boundary like b2maps_k1's, where `sim_start + 60.0` is
+    exactly a clock value and `that value - sim_start` is not 60.0.
+    """
+    n = int(round(sim_seconds / (step_ns / 1e9))) + 1
+    out = []
+    for i in range(n):
+        ns = first_ns + i * step_ns
+        sim = ns // 1_000_000_000 + (ns % 1_000_000_000) / 1e9
+        out.append((start_recv + i * (step_ns / 1e9) / rtf, sim))
+    return out
+
+
 def budget_case(sim_available, rtf=1.0, offset=55.72, strip_t0=STRIP_T0,
                 budget=BUDGET):
     """A bag whose first command lands `offset` in, on a clock boundary.
@@ -364,7 +384,9 @@ def test_overshoot_beyond_the_slack_fails():
     """A coarse or gappy /clock must not pass as if it hit the budget.
 
     One 5 s jump across the boundary overshoots by 4 s, far past the 0.1 s
-    one clock step would cost.
+    one clock step would cost. The message must NAME that 4 s: "more than one
+    /clock step" alone does not distinguish 0.11 s from 4 s, and the reader is
+    being told to go and look at /clock.
     """
     t_cmd = STRIP_T0
     series = [(t_cmd, 0.0), (t_cmd + 1.0, BUDGET + 4.0)]
@@ -372,8 +394,71 @@ def test_overshoot_beyond_the_slack_fails():
                                         BUDGET, series)
     assert not ok
     assert any('sim span of window' in ln and 'FAIL' in ln for ln in lines)
-    assert any('coarse or has a gap' in ln for ln in lines)
+    coarse = [ln for ln in lines if 'coarse or has a gap' in ln][0]
+    assert 'overshoots the budget by 4.000 s' in coarse, coarse
     assert not any('--start' in ln for ln in lines)
+
+
+# ── the window's own boundary, in floating point ─────────────────────────────
+#
+# sim_window() closes the window on `sim >= sim_start + min_sim`; check_budget()
+# then measures it as `sim_end - sim_start`. Two expressions, one set of
+# doubles, and they do not have to agree -- which is a bug in the pair of them
+# and not a fact about any bag. These pin the pair together.
+
+def test_a_window_on_a_float_boundary_is_not_an_overshoot():
+    """b2maps_k1 at --min-sim 60, which C4 failed on 2026-09-27.
+
+    sim_start is 44.32 and /clock is a flawless 100 Hz. 44.32 + 60.0 is exactly
+    the clock value 104.32, so sim_window() closes there -- and 104.32 - 44.32
+    is 59.99999999999999, which a literal `min_sim <= sim_span` rejects. The log
+    then printed 'sim span of window 60.000 s ... FAIL' and blamed a coarse or
+    gappy /clock, both halves wrong: the window was short by 1.4e-14 s and the
+    clock had no gap at all.
+    """
+    t_cmd = STRIP_T0 + 23.246
+    series = clocks_from_ns(44_320_000_000, 61.0, start_recv=t_cmd)
+    ok, lines, _ = checker.check_budget(STRIP_T0, t_cmd + 200.0, t_cmd,
+                                        60.0, series)
+    assert ok, '\n'.join(lines)
+    assert any('--start' in ln and '--duration' in ln for ln in lines)
+    # Neither failure explanation may appear: one would blame the clock, the
+    # other would blame this file.
+    assert not any('coarse or has a gap' in ln for ln in lines)
+    assert not any('SHORT of' in ln for ln in lines)
+
+
+def test_the_printed_span_never_contradicts_the_verdict():
+    """The B2 corpus's own boundaries: five bags x four cuts, all of them ok.
+
+    The five sim-at-command values are what check_run_bag.py measured on
+    b2maps_k0..k4 (105.850, 44.320, 75.820, 95.810, 96.330) and the cuts are the
+    README's. Nineteen of the twenty subtract cleanly; 44.320 with a 60 s budget
+    does not, and that one row is the whole reason the batch of 2026-09-27
+    stopped. A verdict that disagrees with the span printed beside it is the
+    failure being guarded against, so both are asserted.
+    """
+    # Every combination is measured before anything is asserted, so a failure
+    # names all of them rather than only whichever came first in the loop.
+    bad = []
+    for sim_at_cmd_ns in (105_850_000_000, 44_320_000_000, 75_820_000_000,
+                          95_810_000_000, 96_330_000_000):
+        for cut in (60.0, 120.0, 240.0, 1200.0):
+            t_cmd = STRIP_T0 + 23.246
+            series = clocks_from_ns(sim_at_cmd_ns, cut + 1.0, start_recv=t_cmd)
+            ok, lines, _ = checker.check_budget(STRIP_T0, t_cmd + 2 * cut,
+                                                t_cmd, cut, series)
+            span = [ln for ln in lines if 'sim span of window' in ln][0]
+            where = f'sim_at_cmd {sim_at_cmd_ns / 1e9:.3f} s, cut {cut:.0f} s'
+            if not ok:
+                bad.append(f'{where}: FAILED --\n' + '\n'.join(lines))
+            elif 'ok' not in span or 'FAIL' in span:
+                bad.append(f'{where}: passed but the span line says '
+                           f'otherwise --\n{span}')
+            elif f'{cut:11.6f}' not in span:
+                bad.append(f'{where}: span printed too coarsely to check '
+                           f'against its own bound --\n{span}')
+    assert not bad, '\n\n'.join(bad)
 
 
 def test_strip_keep_set_matches_the_strip_script():

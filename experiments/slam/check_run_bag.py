@@ -104,6 +104,30 @@ BUDGET_S = 2400.0
 # then not the budget it claims to be.
 SIM_SPAN_SLACK_S = 0.1
 
+# The floor under the OTHER end of that window, and it is float slop, not
+# tolerance for a short bag.
+#
+# sim_window() closes the window on `sim >= sim_start + min_sim`, and
+# check_budget() then re-derives the span as `sim_end - sim_start`. Those are two
+# different expressions over the same doubles, and binary floating point does not
+# make them agree. Measured on b2maps_k1 at --min-sim 60 (2026-09-27):
+#
+#     sim_start = 44.32   min_sim = 60.0
+#     44.32 + 60.0   == 104.32                -> the clock at 104.32 closes it
+#     104.32 - 44.32 == 59.99999999999999     -> but 60.0 <= that is False
+#
+# so a literal `min_sim <= sim_span` FAILED a window sim_window() had just
+# certified, printed it as '60.000 s' at three decimals, and blamed a /clock that
+# was a flawless 100 Hz with no gap anywhere near the boundary. One of the 20
+# (bag x cut) combinations in the B2 corpus lands on it.
+#
+# 1 ns is the resolution of a builtin_interfaces stamp, so /clock cannot express
+# a shortfall smaller than this and anything under it is residue from the
+# subtraction rather than simulation that is missing. A genuinely short bag never
+# reaches this comparison: sim_window() returns None and the branch above reports
+# the shortfall in full.
+CLOCK_EPS_S = 1e-9
+
 
 def expected_topics(k: int) -> list[str]:
     """Exactly what record_run.sh records with EXPLORER=k. Keep in step."""
@@ -435,18 +459,39 @@ def check_budget(strip_t0: float, bag_end: float, t_cmd: float | None,
     duration = t_end - t_cmd
     sim_span = sim_end - sim_start
     rtf = sim_span / duration if duration > 0 else float('nan')
-    tight = min_sim <= sim_span < min_sim + SIM_SPAN_SLACK_S
+    # Two independent conditions, reported as two, because they fail for opposite
+    # reasons and the fix for one is not the fix for the other. `reached` is
+    # sim_window()'s own postcondition re-checked with CLOCK_EPS_S of float slack
+    # -- see that constant; `overshoot` is the real gate, on a /clock too coarse
+    # to land inside the budget.
+    reached = sim_span >= min_sim - CLOCK_EPS_S
+    overshoot = sim_span - min_sim
+    tight = reached and overshoot < SIM_SPAN_SLACK_S
 
     lines.append(f'  sim at that command   {sim_start:.3f} s')
-    lines.append(f'  sim span of window    {sim_span:8.3f} s  (need >= '
+    # Six decimals, not three: at three the printed span rounds to the far side
+    # of the bound it is being gated against, which is how a 59.99999999999999 s
+    # window came to be printed as '60.000 s FAIL'.
+    lines.append(f'  sim span of window    {sim_span:11.6f} s  (need >= '
                  f'{min_sim:.0f} and < {min_sim + SIM_SPAN_SLACK_S:.1f})  '
                  f'{_verdict(tight)}')
     lines.append(f'  bag span of window    {duration:8.3f} s')
     lines.append(f'  mean RTF over window  {rtf:8.4f}')
     if not tight:
-        lines.append('  the window overshoots the budget by more than one '
-                     '/clock step, so /clock is coarse or has a gap here. '
-                     'Read it before cutting.')
+        if not reached:
+            # sim_window() only returns a window whose last clock has cleared
+            # sim_start + min_sim, so this is unreachable by its contract. Say
+            # that, rather than blaming the bag for a fault in this file.
+            lines.append(f'  the window is {min_sim - sim_span:.9f} s SHORT of '
+                         'the budget, which sim_window() should have made '
+                         'impossible -- this is a fault in C4, not in the bag. '
+                         'Do not cut on these numbers.')
+        else:
+            lines.append(f'  the window overshoots the budget by '
+                         f'{overshoot:.3f} s, more than the '
+                         f'{SIM_SPAN_SLACK_S:.1f} s one /clock step can cost, '
+                         'so /clock is coarse or has a gap here. Read it '
+                         'before cutting.')
         return False, lines, offset
 
     lines.append('  strip this segment with:')
