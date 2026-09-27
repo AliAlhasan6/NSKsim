@@ -19,9 +19,10 @@
 #      FREE_SPACE_RELAY=true) -> fit_world_transform.py --run CUTRUN --bag the
 #      RAW bag. Both env vars every time: with either one off, the online and
 #      offline maps of one run answer different questions.
-#   4  after each map, the dropped-scan count out of
-#      experiments/logs/offline_slam_${CUTRUN}_robot_K.log, and a pgrep that
-#      must find no free_space_relay and no slam_toolbox left behind.
+#   4  after each map, the dropped scans out of
+#      experiments/logs/offline_slam_${CUTRUN}_robot_K.log -- GATED: at most one,
+#      and only at the segment's first scan -- and a pgrep that must find no
+#      free_space_relay and no slam_toolbox left behind.
 #
 # The run prints five stages rather than four, because 4 is run BETWEEN the map
 # and the fit: a leaked relay or slam_toolbox has to stop the batch before the
@@ -113,6 +114,7 @@ CHECK=experiments/slam/check_run_bag.py
 STRIP=experiments/slam/strip_bag_for_offline_slam.py
 OFFLINE=experiments/slam/run_offline_maps.sh
 FIT=experiments/slam/fit_world_transform.py
+SCAN_FACTS=experiments/slam/bag_scan_facts.py
 VENV_PY=venv/bin/python
 
 # The two processes run_offline_maps.sh starts and must not leave behind.
@@ -226,19 +228,29 @@ emit_row() {
 # the old gates is spotted: a skipped row reading 'base' is a map that is not
 # reproducible and has to be re-made with --force.
 map_variant() {          # $1 = CUTRUN, $2 = robot id
-  local p="$SLAMLOGS/offline_mapping_$1_robot_$2.yaml" d h t
+  local p="$SLAMLOGS/offline_mapping_$1_robot_$2.yaml" d h t q
   [[ -f "$p" ]] || { echo '?'; return 0; }
   d="$(sed -nE 's/^ *minimum_travel_distance: *([0-9.]+).*/\1/p' "$p" | tail -1)"
   h="$(sed -nE 's/^ *minimum_travel_heading: *([0-9.]+).*/\1/p' "$p" | tail -1)"
   t="$(sed -nE 's/^ *minimum_time_interval: *([0-9.]+).*/\1/p' "$p" | tail -1)"
+  q="$(sed -nE 's/^ *scan_queue_size: *([0-9]+).*/\1/p' "$p" | tail -1)"
   # Empty means the file predates these knobs being recorded, which is not the
   # same as zero -- awk would read an empty string as 0 and call it 'det'.
   [[ -n "$d" && -n "$h" && -n "$t" ]] || { echo '?'; return 0; }
-  if awk -v a="$d" -v b="$h" -v c="$t" \
-         'BEGIN { exit !(a == 0 && b == 0 && c == 0) }'; then
-    echo det
-  else
+  if ! awk -v a="$d" -v b="$h" -v c="$t" \
+           'BEGIN { exit !(a == 0 && b == 0 && c == 0) }'; then
     echo base
+    return 0
+  fi
+  # Zeroed gates are not the whole variant. An ABSENT scan_queue_size leaves
+  # slam_toolbox on its default of 1, which drops any scan still waiting for a
+  # transform when the next one arrives -- so the map integrated whatever
+  # survived that race rather than the segment, and it is not reproducible even
+  # though every gate reads 0. b2maps_k0_cut1200 is exactly that map.
+  if [[ -z "$q" ]]; then
+    echo det/q1
+  else
+    echo det
   fi
 }
 
@@ -251,12 +263,20 @@ print_table() {
   for row in "${ROWS[@]}"; do printf '%s\n' "$row"; done
   echo "════════════════════════════════════════════════════════════════════════════════════════════════"
   echo "  variant: det = built with DETERMINISTIC=true (replays byte-identical)."
+  echo "           det/q1 = gates zeroed but no scan_queue_size, so slam_toolbox's"
+  echo "           default of 1 was in force and mid-replay scans COULD be dropped."
+  echo "           Read it with the drops column: 0 drops means nothing was lost"
+  echo "           after all; any drop past the first scan means re-make it."
   echo "           base = the old gates, NOT reproducible -- re-make it with --force."
   echo "           '?' = no params file, so what built it is not recorded."
   echo "  occupied/free/unknown: cells of ${MAPDIR}/<run>_cut<cut>_robot<K>.pgm"
   echo "  fitA%/fitB%: fit_world_transform.py free fit, conventions A and B"
-  echo "  drops: 'Message Filter dropping message' in the offline slam log --"
-  echo "         reported, not gated (b2maps_k4_cut1200 has 1, at activation)"
+  echo "  drops: 'Message Filter dropping message' in the offline slam log."
+  echo "         GATED for a map this batch built: at most one, and only at the"
+  echo "         segment's first scan, which has no transform behind it yet."
+  echo "         Any other drop is a scan missing from the map and fails the row."
+  echo "         A skipped row's count is read off the old log and NOT gated --"
+  echo "         this batch did not measure it."
   echo "  leftovers: free_space_relay / slam_toolbox processes still alive"
   echo "  batch log: $BATCH_LOG"
 }
@@ -286,6 +306,93 @@ run_step() {
   echo "    log: $log"
   "$@" 2>&1 | tee "$log"
   return "${PIPESTATUS[0]}"
+}
+
+# The drop gate. A dropped scan never reached Karto, so it is simply missing
+# from the map -- and under DETERMINISTIC=true, where every scan that arrives is
+# integrated, a drop is the only way the accepted set can still vary between two
+# replays of one segment. So it is gated, not merely counted.
+#
+# EXACTLY ONE drop is allowed, and only at the segment's FIRST scan. That one is
+# structural: the first scan has no transform behind it yet, so tf2's message
+# filter discards it either for an empty transform cache ('the timestamp on the
+# message is earlier than all the data in the transform cache', which
+# b2maps_k4_cut1200 logs) or for the queue ('discarding message because the queue
+# is full', which b2maps_k1_cut1200 and b2maps_k2_cut1200 log at 44.200 and
+# 75.800 -- both of those ARE their segment's first scan). The reason does not
+# matter; the position does.
+#
+# Any other drop fails the row. That is what b2maps_k0_cut1200 did on 2026-09-27:
+# 6 drops at sim 773.0, 796.0, 806.0, 850.8, 1217.8 and 1272.8, with the
+# segment's first scan at 106.000, every one of them 'queue is full' on a
+# scan_queue_size that slam_toolbox defaults to 1. That map was accepted and
+# tabulated as 'reported, not gated'.
+#
+# Compared NUMERICALLY with a 1 ms tolerance, not as strings: tf2 prints the
+# dropped message's time as %.3f of a double and bag_scan_facts.py prints %.3f of
+# its own reconstruction, and 1 ms is 1/200th of the 200 ms these bags space
+# scans by -- loose enough to absorb any formatting difference, far too tight to
+# mistake one scan for its neighbour.
+DROP_REASON=""
+check_drops() {           # $1 = CUTRUN, $2 = slam log, $3 = slamin bag, $4 = robot
+  local cutrun="$1" slamlog="$2" slamin="$3" k="$4"
+  local n first_scan times t
+  n="$(grep -ac 'Message Filter dropping message' "$slamlog" || true)"
+  n="${n:-0}"
+
+  if (( n == 0 )); then
+    DROP_REASON="no scan was dropped"
+    return 0
+  fi
+
+  # Read the first scan stamp only when there IS a drop to place: it opens the
+  # bag, and the common case has nothing to compare.
+  local stamp_err
+  stamp_err="$(mktemp)"
+  first_scan="$(python3 "$SCAN_FACTS" "$slamin" "$k" --first-stamp 2>"$stamp_err")"
+  if [[ ! "$first_scan" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    DROP_REASON="$n drop(s), and the segment's first scan stamp could not be
+read out of $slamin to place them: $(cat "$stamp_err")"
+    rm -f "$stamp_err"
+    return 1
+  fi
+  rm -f "$stamp_err"
+
+  # The 'at time <T>' of every drop, in log order.
+  mapfile -t times < <(grep -a 'Message Filter dropping message' "$slamlog" \
+                       | sed -nE "s/.* at time ([0-9]+\.[0-9]+) for reason .*/\1/p")
+  if (( ${#times[@]} != n )); then
+    DROP_REASON="$n drop line(s) but only ${#times[@]} carried a readable 'at
+time' -- the log format is not what this gate reads"
+    return 1
+  fi
+
+  local stray=()
+  for t in "${times[@]}"; do
+    awk -v a="$t" -v b="$first_scan" 'BEGIN { exit !((a - b < 0.001) && (b - a < 0.001)) }' \
+      || stray+=("$t")
+  done
+
+  if (( ${#stray[@]} == 0 )) && (( n == 1 )); then
+    DROP_REASON="1 drop, at the segment's first scan ($first_scan s) -- \
+structural, allowed"
+    return 0
+  fi
+  if (( ${#stray[@]} == 0 )); then
+    # All of them at the first scan, but more than one of them. tf2 logs a given
+    # message once, so this is not a shape the filter produces.
+    DROP_REASON="$n drops all at the segment's first scan ($first_scan s), which
+tf2 does not do -- at most one drop is allowed and only there"
+    return 1
+  fi
+  DROP_REASON="$n drop(s), ${#stray[@]} of them NOT at the segment's first scan
+($first_scan s): sim ${stray[*]}. A dropped scan never reached Karto, so it is
+missing from this map, and which scans lose that race is a timing accident --
+this map is not reproducible. Check scan_queue_size in
+$SLAMLOGS/offline_mapping_${cutrun}_robot_${k}.yaml: unset means slam_toolbox's
+default of 1, which drops any scan still waiting for a transform when the next
+one arrives"
+  return 1
 }
 
 # "occupied free unknown" of a nav2 trinary PGM, or nothing. One counter for the
@@ -334,7 +441,7 @@ echo "                 b2maps_k4_cut60 differed by 3.06 % of known cells."
 echo "  batch log      $BATCH_LOG"
 echo "  repo           $REPO_ROOT @ $(git rev-parse --short HEAD 2>/dev/null || echo '?')$(git diff --quiet 2>/dev/null || echo ' (dirty)')"
 
-for f in "$CHECK" "$STRIP" "$OFFLINE" "$FIT"; do
+for f in "$CHECK" "$STRIP" "$OFFLINE" "$FIT" "$SCAN_FACTS"; do
   [[ -f "$f" ]] || die "missing script: $f"
 done
 [[ -x "$VENV_PY" ]] || die "$VENV_PY not found -- fit_world_transform.py runs in the venv"
@@ -413,9 +520,19 @@ for K in "${ROBOTS[@]}"; do
         echo "  map exists: $MAP.pgm"
         R_VARIANT="$(map_variant "$CUTRUN" "$K")"
         echo "  built with: $R_VARIANT settings"
-        [[ "$R_VARIANT" == "det" ]] || \
-          echo "  NOTE: not built with DETERMINISTIC=true, so it is not reproducible" \
-               "and does not belong in the same corpus as the rest. Re-make it with --force."
+        case "$R_VARIANT" in
+          det) ;;
+          det/q1)
+            echo "  NOTE: DETERMINISTIC=true, but no scan_queue_size, so slam_toolbox's" \
+                 "default of 1 was in force and any scan still waiting for a transform" \
+                 "when the next one arrived COULD have been dropped. Read the drops" \
+                 "count below: 0, or 1 at the segment's first scan, means nothing was" \
+                 "lost and this map is what the segment contains. Anything else is a" \
+                 "scan missing from it, and re-making it with --force is the fix." ;;
+          *)
+            echo "  NOTE: not built with DETERMINISTIC=true, so it is not reproducible" \
+                 "and does not belong in the same corpus as the rest. Re-make it with --force." ;;
+        esac
         OLD_COUNTS="$(pgm_counts "$MAP.pgm" || true)"
         if [[ -n "$OLD_COUNTS" ]]; then
           read -r R_OCC R_FREE R_UNK <<< "$OLD_COUNTS"
@@ -573,8 +690,11 @@ for K in "${ROBOTS[@]}"; do
     R_DROPS="${R_DROPS:-0}"
     echo "    dropped scans: $R_DROPS  ($SLAMLOG)"
     if (( R_DROPS )); then
-      grep -a -m3 'Message Filter dropping message' "$SLAMLOG" | sed 's/^/      /'
+      grep -a 'Message Filter dropping message' "$SLAMLOG" | sed 's/^/      /'
     fi
+    check_drops "$CUTRUN" "$SLAMLOG" "$SLAMIN" "$K" || \
+      fail "$CUTRUN: $DROP_REASON ($SLAMLOG)"
+    echo "    gate: $DROP_REASON"
 
     # Retried: stop_pids SIGKILLs after 10 s and reaps, but a process can still
     # be on its way out when this looks. A single sample would make that a
