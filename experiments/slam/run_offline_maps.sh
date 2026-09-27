@@ -67,6 +67,57 @@ SCAN_MATCHING="${SCAN_MATCHING:-true}"
 # to every one already in experiments/logs/.
 FREE_SPACE_RELAY="${FREE_SPACE_RELAY:-false}"
 
+# ── determinism: one segment replayed twice is not one map ───────────────────
+# Measured 2026-09-27 on b2maps_k4_cut60: two replays of ONE stripped segment
+# gave 353 and 469 occupied cells, with 411 cells -- 3.06% of everything either
+# map knew -- in different classes. The input was identical: the same 300 scans
+# out of the same bag, and free_space_relay's 200-scan checkpoint byte-identical
+# at 15681/72000 beams filled. So the difference is in which scans slam_toolbox
+# INTEGRATED, not in what it was sent.
+#
+# Three parameters make the accepted set depend on which scan is accepted first,
+# and that first scan is decided by DDS discovery as the replay starts. The two
+# runs above logged different first drops -- 95.800 'discarding message because
+# the queue is full' against 96.800 'the timestamp on the message is earlier
+# than all the data in the transform cache' -- i.e. a different scan opened the
+# chain each time:
+#
+#   minimum_travel_distance / minimum_travel_heading accept a scan only once the
+#   robot has moved that far FROM THE LAST ACCEPTED SCAN. The accepted set is a
+#   chain, and its first link places every link after it.
+#
+#   minimum_time_interval is the same chain in time, and it is the sharpest of
+#   the three: these bags carry scans at exactly 5 Hz, 0.2 s apart, so the
+#   default 0.2 sits exactly on its own threshold.
+#
+# DETERMINISTIC=true zeroes all three -- every scan is integrated, so the
+# accepted set is the whole segment and there is no chain to anchor -- and
+# delays the replay so DDS discovery has finished before the first scan is
+# published, which is what removes the race over which scan arrives at all.
+#
+# Each knob is also settable alone, which is how an effect is attributed to one
+# of them rather than to the group.
+#
+# THE DEFAULTS ARE THE VALUES THE TEMPLATE CARRIED AS LITERALS. A default run
+# renders a params file byte-identical to every one already in experiments/logs/
+# and passes no --delay at all, so nothing already measured moves.
+#
+# Validated with the other flags in the preconditions section below, because
+# die() is not defined yet at this point in the file.
+DETERMINISTIC="${DETERMINISTIC:-false}"
+if [[ "$DETERMINISTIC" == "true" ]]; then
+  MIN_TRAVEL_DISTANCE="${MIN_TRAVEL_DISTANCE:-0.0}"
+  MIN_TRAVEL_HEADING="${MIN_TRAVEL_HEADING:-0.0}"
+  MIN_TIME_INTERVAL="${MIN_TIME_INTERVAL:-0.0}"
+  PLAY_DELAY="${PLAY_DELAY:-3.0}"
+fi
+MIN_TRAVEL_DISTANCE="${MIN_TRAVEL_DISTANCE:-0.1}"
+MIN_TRAVEL_HEADING="${MIN_TRAVEL_HEADING:-0.1}"
+MIN_TIME_INTERVAL="${MIN_TIME_INTERVAL:-0.2}"
+# Seconds `ros2 bag play --delay` sleeps between creating its publishers and
+# publishing anything. 0 means the flag is not passed.
+PLAY_DELAY="${PLAY_DELAY:-0}"
+
 # Both of these are DERIVED FROM THE BAG unless set, and that is the whole
 # point: this script replays recorded scans, and a bag's range_max is whatever
 # the sensor was when it was recorded. There are now two eras of bag -- every
@@ -263,6 +314,26 @@ trap 'stop_children; exit 143' TERM
 [[ "$FREE_SPACE_RELAY" == "true" || "$FREE_SPACE_RELAY" == "false" ]] || \
   die "FREE_SPACE_RELAY must be exactly 'true' or 'false', got: $FREE_SPACE_RELAY"
 
+[[ "$DETERMINISTIC" == "true" || "$DETERMINISTIC" == "false" ]] || \
+  die "DETERMINISTIC must be exactly 'true' or 'false', got: $DETERMINISTIC"
+
+for _knob in MIN_TRAVEL_DISTANCE MIN_TRAVEL_HEADING MIN_TIME_INTERVAL PLAY_DELAY; do
+  [[ "${!_knob}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || \
+    die "$_knob must be a non-negative number, got: ${!_knob}"
+done
+
+# --delay is passed only when it is positive, so a default run's replay command
+# line is exactly what it always was.
+PLAY_DELAY_ARGS=()
+if awk -v d="$PLAY_DELAY" 'BEGIN { exit !(d > 0) }'; then
+  PLAY_DELAY_ARGS=(--delay "$PLAY_DELAY")
+fi
+
+echo "scan acceptance: minimum_travel_distance $MIN_TRAVEL_DISTANCE, \
+minimum_travel_heading $MIN_TRAVEL_HEADING, \
+minimum_time_interval $MIN_TIME_INTERVAL; replay --delay ${PLAY_DELAY}\
+$( [[ "$DETERMINISTIC" == "true" ]] && echo '   (DETERMINISTIC=true)' )"
+
 if [[ "$FREE_SPACE_RELAY" == "true" ]]; then
   SCAN_SUFFIX="scan_free"
   ros2 pkg executables nsk_swarm 2>/dev/null | grep -q free_space_relay || \
@@ -365,6 +436,9 @@ for N in "${ROBOTS[@]}"; do
   sed -e "s/__ROBOT__/$N/g" -e "s/__SCAN_MATCHING__/$SCAN_MATCHING/g" \
       -e "s/__SCAN_SUFFIX__/$SCAN_SUFFIX/g" \
       -e "s/__MAX_LASER_RANGE__/$MAX_LASER_RANGE/g" \
+      -e "s/__MIN_TRAVEL_DISTANCE__/$MIN_TRAVEL_DISTANCE/g" \
+      -e "s/__MIN_TRAVEL_HEADING__/$MIN_TRAVEL_HEADING/g" \
+      -e "s/__MIN_TIME_INTERVAL__/$MIN_TIME_INTERVAL/g" \
       "$TEMPLATE" > "$PARAMS"
   grep -q "robot_$N/odom" "$PARAMS" || die "substitution failed in $PARAMS"
   grep -q "use_scan_matching: $SCAN_MATCHING" "$PARAMS" || \
@@ -373,6 +447,12 @@ for N in "${ROBOTS[@]}"; do
     die "scan-topic substitution failed in $PARAMS"
   grep -q "max_laser_range: $MAX_LASER_RANGE" "$PARAMS" || \
     die "max-laser-range substitution failed in $PARAMS"
+  grep -q "minimum_travel_distance: $MIN_TRAVEL_DISTANCE" "$PARAMS" || \
+    die "minimum-travel-distance substitution failed in $PARAMS"
+  grep -q "minimum_travel_heading: $MIN_TRAVEL_HEADING" "$PARAMS" || \
+    die "minimum-travel-heading substitution failed in $PARAMS"
+  grep -q "minimum_time_interval: $MIN_TIME_INTERVAL" "$PARAMS" || \
+    die "minimum-time-interval substitution failed in $PARAMS"
   # __UPPERCASE__, not bare '__': ros__parameters is not a placeholder.
   grep -qE '__[A-Z_]+__' "$PARAMS" && \
     die "unsubstituted placeholder left in $PARAMS"
@@ -447,7 +527,7 @@ for N in "${ROBOTS[@]}"; do
   # otherwise not be handled until the replay itself decided to stop -- and a
   # SIGTERM to this script would leave the replay running with nobody to kill
   # it. The replay's exit status is not consulted, exactly as before.
-  ros2 bag play "$BAG" "${CLOCK_ARGS[@]}" --rate "$RATE" \
+  ros2 bag play "$BAG" "${CLOCK_ARGS[@]}" "${PLAY_DELAY_ARGS[@]}" --rate "$RATE" \
       --start-offset "$START" --playback-duration "$DUR" \
       --topics /clock /tf /tf_static "/robot_$N/scan" "/robot_$N/odom" \
       >> "$LOG" 2>&1 &

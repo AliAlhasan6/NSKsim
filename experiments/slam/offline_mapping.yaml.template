@@ -58,8 +58,16 @@ slam_toolbox:
     # compute budget (sequential runs, no realtime constraint) and denser
     # keyframes give loop closure more to work with -- which is the entire
     # reason we chose SLAM over dead-reckoned ray-casting.
-    minimum_travel_distance: 0.1
-    minimum_travel_heading: 0.1
+    #
+    # Substituted by run_offline_maps.sh, which defaults both to the 0.1 these
+    # lines carried as literals. They are knobs now because they are two of the
+    # three reasons one segment replayed twice is not one map: a scan is
+    # accepted only once the robot has moved this far FROM THE LAST ACCEPTED
+    # SCAN, so the accepted set is a chain whose first link decides every link
+    # after it -- and which scan is first depends on DDS discovery at the start
+    # of the replay. See the DETERMINISTIC block in run_offline_maps.sh.
+    minimum_travel_distance: __MIN_TRAVEL_DISTANCE__
+    minimum_travel_heading: __MIN_TRAVEL_HEADING__
 
     # ── loop closure ─────────────────────────────────────────────────────────
     # This is the payload. Dead reckoning from the TurtleBot3 DiffDrive plugin
@@ -86,7 +94,11 @@ slam_toolbox:
     # ── scan matcher ─────────────────────────────────────────────────────────
     use_scan_matching: __SCAN_MATCHING__
     use_scan_barycenter: true
-    minimum_time_interval: 0.2
+    # The third chain, in time rather than distance, and the sharpest of the
+    # three: these bags deliver scans at exactly 5 Hz, i.e. 0.2 s apart, so the
+    # default sits exactly on its own threshold and microseconds of stamp jitter
+    # decide each scan. Substituted; defaults to the 0.2 it was.
+    minimum_time_interval: __MIN_TIME_INTERVAL__
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
