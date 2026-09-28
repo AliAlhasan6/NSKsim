@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import math
 import re
+import statistics
 import sys
 from pathlib import Path
 
@@ -301,6 +302,15 @@ assert set(WINDOW_GATED) <= set(COUNTS)
 # in full so the phrasing can be read and, if it is a real format, added to
 # PAIR_RES. Silently excusing an unrecognised warning is how a gate stops
 # being one.
+#
+# That is the whole rule for a transform WARNING, which names the pair it could
+# not get. A message-filter DROP names no pair -- it names a frame and an
+# instant -- so the three conditions above make every drop a candidate and
+# nothing more. What decides a drop is whether a link in the chain from the
+# costmap's global_frame down to the dropped message's frame actually failed to
+# supply a transform in time, which is a question for the bag and not the log:
+# see drop_verdict() and experiments/analysis/attribute_tf_drop.py.
+DROP_CATS = ('slam_drop', 'other_drop')
 #
 # The frame pair is taken from the line by precedence, because a single warning
 # can name two pairs. relay1's, in full:
@@ -554,6 +564,94 @@ def gates(key: str, pair: str | None) -> bool:
     return key in WINDOW_GATED and not is_slam_output_pair(pair)
 
 
+def drop_verdict(attribution) -> tuple[bool, str]:
+    """(gates, why) for one attributed message-filter drop. Pure.
+
+    The rule, and the whole of it:
+
+        no attribution      GATES. Fail closed: a drop nobody could attribute
+                            has not been cleared of anything. An empty
+                            attribution counts as none, because a chain with no
+                            dynamic link in it is not a chain this rule knows
+                            how to excuse.
+        no link late        advisory. Every link had a covering transform on
+                            the wire before the node gave up.
+        only map <-> odom   advisory. The same exclusion the pair rule makes
+            late            for warnings: that link is online slam_toolbox's
+                            output and no offline map reads it.
+        any other link      GATES.
+
+    'late' is attribute_tf_drop.late_links's definition and not a second one:
+    the first transform stamped at or after the dropped message reached the
+    wire after the line's own wall time, or never appeared at all. The
+    neighbour lags that tool prints beside it are scale for a reader and are no
+    part of this -- nothing here compares a lag against a number.
+
+    Imported inside the function so run_health stays importable by the tool
+    without a cycle: attribute_tf_drop's pure half imports nothing from here.
+    """
+    from attribute_tf_drop import late_links
+
+    if not attribution:
+        return True, 'not attributed: fail closed'
+    late = late_links(attribution)
+    if not late:
+        return False, 'none late'
+    rig = [ln for ln in late
+           if not is_slam_output_pair(f'{ln[0]} -> {ln[1]}')]
+    if not rig:
+        return False, 'only map <-> odom late'
+    return True, 'late: ' + ', '.join(f'{a} -> {b}' for a, b in rig)
+
+
+def final_gate(candidates):
+    """(gating, advisory), each a list of (hit, why). Pure.
+
+    count_health's candidates are what the log can convict. A message-filter
+    drop is then judged on the bag, by drop_verdict, and is demoted to advisory
+    when the bag clears it; a transform warning keeps the pair rule the log
+    already applied, unchanged. So this adds nothing to the population and only
+    ever moves drops out of it.
+    """
+    gating, advisory = [], []
+    for hit in candidates:
+        if hit['cat'] in DROP_CATS:
+            gates_, why = drop_verdict(hit.get('attribution'))
+        else:
+            gates_, why = True, f'pair {hit["pair"] or "not parsed"}'
+        (gating if gates_ else advisory).append((hit, why))
+    return gating, advisory
+
+
+def attribute_drops(bag: Path, robot: int, candidates,
+                    nav2_params: Path | None = None) -> None:
+    """Attach the bag's attribution to every drop among `candidates`.
+
+    One region read per drop, 4-8 s each on these bags, and nothing at all when
+    a run has no drop to attribute -- which is four of the six b2maps runs. The
+    attribution is attribute_tf_drop's, called through the same entry point its
+    own CLI uses, so the tool a reader runs by hand cannot disagree with the
+    gate about what it found.
+    """
+    drops = [h for h in candidates if h['cat'] in DROP_CATS]
+    if not drops:
+        return
+    from attribute_tf_drop import (attribute_hit, costmap_facts,
+                                   nav2_params_path, read_static_links)
+
+    params = nav2_params or nav2_params_path(robot)
+    facts = costmap_facts(params)
+    static_links = read_static_links(bag)
+    print(f'attributing {len(drops)} message-filter drop(s) against the bag, '
+          f'global_frame from {params.name}')
+    for hit in drops:
+        row, why = attribute_hit(bag, robot, hit, facts, static_links)
+        hit['attribution'] = None if row is None else row['attribution']
+        hit['attr'] = row
+        hit['attr_why'] = why
+    print()
+
+
 def in_window(stamp: float | None, window: dict | None) -> bool:
     """Is a log line's WALL stamp inside the analysis window? Pure.
 
@@ -578,19 +676,21 @@ def count_health(lines, window: dict | None = None) -> dict:
     Returns {'counts': {...}, 'by_proc': {cat: {proc: n}},
              'by_pair': {cat: {pair or None: n}},
              'placed': {cat: {'in': n, 'out': n, 'unstamped': n}},
-             'gated': [hit, ...], 'first', 'last', 'span_s', 'stamped'}.
+             'candidates': [hit, ...], 'first', 'last', 'span_s', 'stamped'}.
 
-    `gated` is the list that decides R9: one entry per counted line that gates
-    AND fell inside the window, each carrying the line itself so the report can
-    print it in full. Without a window it is empty and 'placed' is all
-    'unstamped'/'out' -- there is nothing to place against, which is why the
-    caller reports NOT EVALUATED rather than a pass.
+    `candidates` is everything the LOG can convict: one entry per counted line
+    that gates on the pair rule AND fell inside the window, each carrying the
+    line itself so the report can print it in full. For a transform warning
+    that is the verdict. For a message-filter drop it is only a candidacy --
+    final_gate() judges those on the bag's attribution. Without a window it is
+    empty and 'placed' is all 'unstamped'/'out': there is nothing to place
+    against, which is why the caller reports NOT EVALUATED rather than a pass.
     """
     counts = {k: 0 for k in COUNTS}
     by_proc = {k: {} for k in COUNTS}
     by_pair = {k: {} for k in COUNTS}
     placed = {k: {'in': 0, 'out': 0, 'unstamped': 0} for k in COUNTS}
-    gated = []
+    candidates = []
     first = last = None
     stamped = 0
 
@@ -621,13 +721,13 @@ def count_health(lines, window: dict | None = None) -> dict:
             placed[key][where] += 1
             if where == 'in' and gates(key, pair):
                 frame, scan = dropped_message(line)
-                gated.append({'cat': key, 'stamp': t, 'proc': proc,
-                              'pair': pair, 'line': line.rstrip(),
-                              'frame': frame, 'scan': scan})
+                candidates.append({'cat': key, 'stamp': t, 'proc': proc,
+                                   'pair': pair, 'line': line.rstrip(),
+                                   'frame': frame, 'scan': scan})
 
     span = (last - first) if (first is not None and last is not None) else 0.0
     return {'counts': counts, 'by_proc': by_proc, 'by_pair': by_pair,
-            'placed': placed, 'gated': gated, 'first': first,
+            'placed': placed, 'candidates': candidates, 'first': first,
             'last': last, 'span_s': span, 'stamped': stamped}
 
 
@@ -1480,8 +1580,10 @@ def report_health(found: dict, rates: dict, baseline_rates, verdicts,
 
     The counts are split three ways -- by node, by the frame pair the line
     names, and by where the line fell against the window -- because the verdict
-    turns on the last two and a reader has to be able to see it do so. Only the
-    'gated' population decides anything; see WINDOW_GATED.
+    turns on the last two and a reader has to be able to see it do so. Only
+    final_gate()'s `gating` population decides anything; see WINDOW_GATED for
+    which lines are candidates and drop_verdict() for how a drop leaves that
+    population.
     """
     print('R9 TF TIMING HEALTH')
     if found['first'] is None:
@@ -1557,29 +1659,68 @@ def report_health(found: dict, rates: dict, baseline_rates, verdicts,
         print('  goes depends on which log is the baseline (see VS_BASELINE), '
               'not on this run.')
 
-    print('\n  gate: a counted warning inside the window, other than '
-          'slam_toolbox\'s own drops')
-    print('        and warnings naming its map <-> odom pair. A pair that '
-          'cannot be parsed')
-    print('        gates too -- fail closed.')
+    print('\n  gate, inside the window only:')
+    print('    a TRANSFORM WARNING gates unless it names a same-namespace '
+          'map <-> odom pair.')
+    print('      A pair that cannot be parsed gates -- fail closed.')
+    print('    a MESSAGE-FILTER DROP gates only if a link in the chain was '
+          'LATE: its first')
+    print('      transform covering the dropped message reached the wire '
+          'after this line was')
+    print('      logged, or never. map <-> odom being the only late link is '
+          'advisory, on')
+    print('      the same grounds as above; an unattributed drop gates -- '
+          'fail closed. The')
+    print('      neighbour lags below are scale for a reader, compared '
+          'against nothing.')
+    print('    slam_toolbox\'s own drops never gate.')
     if window is None:
         print('  a warning cannot be placed in a window that could not be '
               'read, so nothing is gated')
         print('  -> NOT EVALUATED\n')
         return None
 
-    hits = found['gated']
-    if not hits:
-        print('  nothing gated fell inside the window')
-    for hit in hits[:10]:
-        print(f'  GATED  {hit["stamp"]:.6f}  {hit["proc"]}  '
-              f'{hit["pair"] or "(no pair named: fail closed)"}')
-        print(f'         {hit["line"]}')
-    if len(hits) > 10:
-        print(f'  ... and {len(hits) - 10} more')
-    ok = not hits
+    gating, advisory = final_gate(found['candidates'])
+    for label, population in (('GATED   ', gating),
+                              ('advisory', advisory)):
+        for hit, why in population[:10]:
+            print(f'  {label}  {hit["stamp"]:.6f}  {hit["proc"]}  {why}')
+            _print_attribution(hit)
+            print(f'            {hit["line"]}')
+        if len(population) > 10:
+            print(f'  ... and {len(population) - 10} more')
+    if not gating:
+        print('  nothing that gates fell inside the window')
+    ok = not gating
     print(f'  -> {"PASS" if ok else "FAIL"}\n')
     return ok
+
+
+def _print_attribution(hit: dict) -> None:
+    """The per-link evidence behind a drop's verdict, when there is any."""
+    row = hit.get('attr')
+    if row is None:
+        if hit['cat'] in DROP_CATS:
+            print('            not attributed'
+                  + (f': {hit["attr_why"]}' if hit.get('attr_why') else ''))
+        return
+    print(f'            chain {row["chain"][0][1]} up to '
+          f'{row["chain"][-1][0]}, {len(row["links"])} dynamic link(s), '
+          f'message stamped {row["sim"]:.3f} s sim')
+    for link in row['links']:
+        d = row['attribution'][link]
+        base = row['base'][link]
+        state = 'LATE' if d['late'] else 'ok  '
+        if d['missing']:
+            print(f'            {state} {link[0]} -> {link[1]}: no transform '
+                  'stamped at or after it in the region read')
+            continue
+        spread = ('' if not base else
+                  f', neighbours {statistics.median(base):+.3f} / '
+                  f'{max(base):+.3f} s')
+        print(f'            {state} {link[0]} -> {link[1]}: first covers '
+              f'{d["stamp"]:.3f}, on the wire {d["vs_drop_s"]:+.3f} s vs this '
+              f'line{spread}')
 
 
 def report_coverage(bag: Path, robot: int, xy, rects, reach: float,
@@ -1661,6 +1802,11 @@ def main() -> int:
     ap.add_argument('--spawn-rev', default='08617b2',
                     help='git rev whose DOT_POSES gives the anchor '
                          '(default %(default)s, the b18/b2maps era)')
+    ap.add_argument('--nav2-params', type=Path,
+                    help="the run's nav2 params, whose costmap global_frame "
+                         "R9 needs to attribute a message-filter drop "
+                         '(default: experiments/nav/nav2_robotK.yaml, which '
+                         "is explore.launch.py's own default)")
     ap.add_argument('--min-sim', type=float, default=MIN_SIM_S,
                     dest='min_sim',
                     help='SIM seconds after robot K\'s first nonzero command '
@@ -1724,6 +1870,11 @@ def main() -> int:
 
     if args.log:
         found = count_health(read_log(args.log), window)
+        # A drop is judged on the bag, so the attribution has to be read before
+        # the verdict. Costs nothing on a run with no drop inside its window.
+        if args.bag and window is not None:
+            attribute_drops(args.bag, args.robot, found['candidates'],
+                            args.nav2_params)
         rates = per_minute(found['counts'], found['span_s'])
         baseline_rates = verdicts = None
         if args.baseline_log:

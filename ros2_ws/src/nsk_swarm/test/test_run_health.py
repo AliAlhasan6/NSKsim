@@ -458,8 +458,162 @@ def test_the_counts_are_split_by_node_and_by_pair(capsys):
     assert found['by_pair']['nav2_transform'] == {
         'robot_0/odom -> robot_0/map': 1,
         'robot_0/odom -> robot_0/base_footprint': 1}
-    assert [h['pair'] for h in found['gated']] == [
+    assert [h['pair'] for h in found['candidates']] == [
         'robot_0/odom -> robot_0/base_footprint']
+
+
+# ── R9: a drop is judged on the bag, a warning on the pair ───────────────────
+# count_health can only say a drop happened inside the window. Whether it was a
+# transform fault is a question about which links supplied a covering transform
+# in time, which only the bag answers -- so R9 reads attribute_tf_drop's
+# verdict. These pin the four outcomes. Against 886af69, which could not see a
+# bag at all, the middle two were FAIL.
+
+MAP_ODOM_LINK = ('robot_0/map', 'robot_0/odom')
+ODOM_BASE_LINK = ('robot_0/odom', 'robot_0/base_footprint')
+
+
+def _entry(vs_drop=-0.5, missing=False):
+    """One link's attribution entry, as attribute_drop() builds it."""
+    if missing:
+        return {'stamp': None, 'recv': None, 'stamp_lag_ms': None,
+                'vs_drop_s': None, 'missing': True, 'late': True}
+    return {'stamp': 100.0, 'recv': 1789836010.0 + vs_drop,
+            'stamp_lag_ms': 0.0, 'vs_drop_s': vs_drop, 'missing': False,
+            'late': vs_drop > 0}
+
+
+def _drop_log(at=1789836010.0):
+    """A costmap drop inside LOG_WINDOW: a candidate whatever the bag says."""
+    return _log(_at(COSTMAP_DROP, at))
+
+
+def _r9_drop(attribution, window=LOG_WINDOW):
+    found = rh.count_health(_drop_log(), window)
+    for hit in found['candidates']:
+        hit['attribution'] = attribution
+    rates = rh.per_minute(found['counts'], found['span_s'])
+    return rh.report_health(found, rates, None, None, window)
+
+
+def test_a_drop_with_a_late_rig_link_fails():
+    """The transform this whole change is about was not available when a Nav2
+    node needed it, inside the span the map is built from.
+    """
+    attribution = {MAP_ODOM_LINK: _entry(),
+                   ODOM_BASE_LINK: _entry(vs_drop=+0.171)}
+
+    assert rh.drop_verdict(attribution)[0] is True
+    assert 'robot_0/odom -> robot_0/base_footprint' in (
+        rh.drop_verdict(attribution)[1])
+    assert _r9_drop(attribution) is False
+
+
+def test_a_drop_whose_only_late_link_is_map_odom_passes(capsys):
+    """b2maps_k2's global drop: map -> odom's stamp had frozen and its covering
+    sample reached the wire 171 ms after the line. That link is online
+    slam_toolbox's output, which no offline map reads -- the same exclusion the
+    pair rule makes for warnings.
+    """
+    attribution = {MAP_ODOM_LINK: _entry(vs_drop=+0.171),
+                   ODOM_BASE_LINK: _entry()}
+
+    assert rh.drop_verdict(attribution) == (False, 'only map <-> odom late')
+    assert _r9_drop(attribution) is True
+    out = capsys.readouterr().out
+    assert 'advisory' in out
+    assert 'only map <-> odom late' in out
+
+
+def test_a_drop_with_everything_on_the_wire_passes(capsys):
+    """b2maps_k3's and k1's shape. Nothing was missing, so there is nothing
+    here about the rig: the node did not consume in time what it already had,
+    and R9 does not fail a run for that.
+    """
+    attribution = {MAP_ODOM_LINK: _entry(), ODOM_BASE_LINK: _entry()}
+
+    assert rh.drop_verdict(attribution) == (False, 'none late')
+    assert _r9_drop(attribution) is True
+    assert 'none late' in capsys.readouterr().out
+
+
+def test_a_drop_with_no_covering_transform_fails():
+    """Fail closed. A link that supplied nothing at or after the dropped
+    message has not been shown to have done its job.
+    """
+    attribution = {MAP_ODOM_LINK: _entry(),
+                   ODOM_BASE_LINK: _entry(missing=True)}
+
+    assert rh.drop_verdict(attribution)[0] is True
+    assert _r9_drop(attribution) is False
+
+
+def test_an_unattributed_drop_fails_closed(capsys):
+    """No bag, or a bag that could not place the chain: the drop stands. An
+    attribution that came back empty counts the same way -- a chain with no
+    dynamic link in it is not a chain this rule knows how to excuse.
+    """
+    assert rh.drop_verdict(None) == (True, 'not attributed: fail closed')
+    assert rh.drop_verdict({}) == (True, 'not attributed: fail closed')
+    assert _r9_drop(None) is False
+    assert 'not attributed' in capsys.readouterr().out
+
+
+def test_the_lag_numbers_are_printed_and_gate_nothing(capsys):
+    """Requirement, not decoration: the gate reads late_links and nothing else.
+    A link 900 ms behind its neighbours still passes while it reached the wire
+    before the line, and the figures are on the page for a reader to judge.
+    """
+    on_time = _entry(vs_drop=-0.001)          # only 1 ms to spare
+    attribution = {ODOM_BASE_LINK: on_time}
+
+    assert rh.drop_verdict(attribution) == (False, 'none late')
+    assert _r9_drop(attribution) is True
+
+
+def test_the_gate_reads_late_links_itself():
+    """Not a second definition of late. attribute_tf_drop owns it, and a reader
+    running that tool by hand has to get the same answer as the gate.
+    """
+    from attribute_tf_drop import late_links
+
+    attribution = {MAP_ODOM_LINK: _entry(),
+                   ODOM_BASE_LINK: _entry(vs_drop=+0.171)}
+    assert late_links(attribution) == [ODOM_BASE_LINK]
+    # drop_verdict's rig set is late_links minus the map <-> odom exclusion.
+    assert rh.drop_verdict(attribution)[1].endswith(
+        'robot_0/odom -> robot_0/base_footprint')
+
+
+def test_a_transform_warning_is_unaffected_by_any_attribution():
+    """The pair rule is unchanged. A warning naming the transform under test
+    gates whatever the bag later says about the links around it, because the
+    warning IS the consumer reporting that it could not get it.
+    """
+    found = rh.count_health(_log(ODOM_BASE_TOO_OLD), LOG_WINDOW)
+    for hit in found['candidates']:
+        hit['attribution'] = {ODOM_BASE_LINK: _entry()}      # nothing late
+    gating, advisory = rh.final_gate(found['candidates'])
+
+    assert [h['cat'] for h, _w in gating] == ['nav2_transform']
+    assert advisory == []
+
+
+def test_final_gate_moves_drops_out_and_never_in():
+    """Its whole contract: the candidate list is what the log convicted, and
+    this only ever acquits a drop.
+    """
+    found = rh.count_health(_log(_at(COSTMAP_DROP, 1789836010.0),
+                                 ODOM_BASE_TOO_OLD), LOG_WINDOW)
+    assert len(found['candidates']) == 2
+
+    for hit in found['candidates']:
+        hit['attribution'] = {ODOM_BASE_LINK: _entry()}
+    gating, advisory = rh.final_gate(found['candidates'])
+
+    assert len(gating) + len(advisory) == 2
+    assert [h['cat'] for h, _w in gating] == ['nav2_transform']
+    assert [h['cat'] for h, _w in advisory] == ['other_drop']
 
 
 def test_an_unstamped_warning_is_reported_as_unplaceable():
@@ -475,7 +629,7 @@ def test_an_unstamped_warning_is_reported_as_unplaceable():
     assert found['counts']['nav2_transform'] == 1
     assert found['placed']['nav2_transform'] == {'in': 0, 'out': 0,
                                                  'unstamped': 1}
-    assert found['gated'] == []
+    assert found['candidates'] == []
 
 
 # ── coverage: closest approach ───────────────────────────────────────────────

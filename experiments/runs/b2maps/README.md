@@ -57,11 +57,46 @@ or incomplete bag as green.
    maps are built offline from the stripped bag, so neither can reach them. They
    are reported by node and by pair, never gated.
 
-   **Everything else inside the window fails the run**, above all
-   `robot_K/odom → robot_K/base_footprint` — the transform `truth_odom_tf`
-   publishes. A warning whose frame pair cannot be parsed also fails, and is
-   printed in full: an unrecognised phrasing is not an excused one. The same
-   warning **outside** the window is counted and printed, not gated.
+   **A drop is then judged on the bag, not on the log.** A message-filter drop
+   names a frame and an instant, not a pair, so being inside the window only
+   makes it a *candidate*. `attribute_tf_drop.py` reads the chain from that
+   costmap's `global_frame` down to the dropped message's frame — links derived
+   from `/tf_static`, `global_frame` read from `nav2_robotK.yaml` — and asks of
+   each dynamic link whether its first transform covering that instant reached
+   the wire before the line was logged. The drop **fails the run** only if some
+   link other than `map ↔ odom` was late, or supplied nothing at all (fail
+   closed, as does a drop that cannot be attributed). "None late" and "only
+   `map ↔ odom` late" are advisory, printed with the per-link evidence. The
+   neighbour lags printed beside it are scale for a reader and are compared
+   against nothing.
+
+   Why: of the four in-window drops in this corpus, one (k2's global costmap at
+   scan 629.400) is a real transform stall — `robot_2/map → robot_2/odom` froze
+   at stamp 629.300 for 1.502 s of wall, 5.7× its normal dwell, then skipped to
+   630.300 — and three had every link on the wire 0.5–0.9 s *before* the line.
+   Those three are the node not consuming in time what it already had, which is
+   load, not the rig. Failing a run for it would fail k2 and k3 for something no
+   map can be wrong about.
+
+   **The blind spot, stated.** A drop is only logged after the filter's own wait
+   expires — `buffer_timeout`, which nav2 sets from `transform_tolerance`, 0.5 s
+   in both costmaps here (`nav2_robotK.yaml:163` and `:236`). So the comparison
+   is against a deadline 0.5 s later than the instant the transform was needed:
+   a rig transform late by **less than that wait**, on a node slow enough to
+   have missed it anyway, reaches the wire before the line is logged and reads
+   "none late". This rule cannot see such a case, and neither could the old
+   count — it is the reason criterion 2 is a floor and not a proof of
+   timeliness. A direct gate on `robot_K/odom → base_footprint` wire lag inside
+   the window would close it; that is not built, and until it is, a "none late"
+   drop means *no link missed the 0.5 s deadline*, not *every transform was
+   on time*.
+
+   **Every other transform warning inside the window fails the run**, above all
+   one naming `robot_K/odom → robot_K/base_footprint` — the transform
+   `truth_odom_tf` publishes. A warning whose frame pair cannot be parsed also
+   fails, and is printed in full: an unrecognised phrasing is not an excused
+   one. The same warning **outside** the window is counted and printed, not
+   gated.
 
    The split matters because pooling hid it. All 8 `Transform data too old`
    lines in this corpus (e0t's 7, k2's 1) name `map ↔ odom` and trace to
@@ -392,7 +427,7 @@ reports its counts and exits NOT EVALUATED.
 
 | gate | what it must say | rehearsal 5 |
 |---|---|---|
-| R9 | nothing gated inside the window: no transform warning on a pair other than `map ↔ odom`, no message-filter drop from a logger other than slam_toolbox's | rehearsal 5 logged 0 and 0 over 12.14 min, so it passes on either rule. k2 and k3 do not: two in-window costmap drops each, which the old count never counted at all |
+| R9 | nothing gated inside the window: no transform warning on a pair other than `map ↔ odom`, and no message-filter drop whose attribution names a late link other than `map ↔ odom` | rehearsal 5 logged 0 and 0 over 12.14 min. k0–k4 all pass: k2's and k3's two in-window costmap drops each are advisory once attributed — k2's on `map ↔ odom`, the other three with every link on the wire before the line. relay1 FAILS, on a `collision_monitor` warning naming `robot_0/odom → base_footprint` |
 | R2 | robot K ≈ 20 Hz, parked control ≈ 50 Hz | 20.001 / 50.001 Hz |
 | R4 | inside `[t_cmd, t_cmd + 1200 s]` sim: 0 transforms on no truth stamp, worst \|dxy\| ≤ 1e-6 m, \|dyaw\| ≤ 1e-6°, \|z\| = 0. Outside it: reported, never gated | k2, the awkward one: 24000 compared inside the window with 0 unmatched and worst dyaw 2.5e-14°; before `t_cmd`, 721 transforms of which 20 on no truth stamp, and a 200 ms pose hole at sim 61.850 — all of it outside the window, none of it gated |
 | R5 | median \|dYaw\| > 1° | 81.1° |

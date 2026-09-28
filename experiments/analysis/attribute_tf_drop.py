@@ -365,6 +365,61 @@ def neighbour_baseline(links, tf, scans, idx):
     return out
 
 
+def attribute_hit(bag: Path, robot: int, hit: dict, facts: dict,
+                  static_links: set):
+    """Everything the table and R9's gate need for one candidate line.
+
+    (row, None), or (None, why it cannot be attributed). One region read per
+    call -- 4-8 s on these bags -- so the caller decides which lines are worth
+    it. R9 calls this for the drops among its candidates and the CLI calls it
+    for all of them, which is what keeps the tool a reader runs by hand and the
+    gate from disagreeing about what 'late' means.
+    """
+    which = costmap_of(hit['line'])
+    if which is not None:
+        if hit.get('scan') is None:
+            return None, 'names no dropped message stamp'
+        frame, sim = hit['frame'], hit['scan']
+        target = facts[which]['global_frame']
+        kind = f'{which} costmap'
+    else:
+        # A transform warning. Attributable only when the line states the time
+        # it asked for: tf2's extrapolation error does, and the tf_help
+        # 'Transform data too old' phrasing carries no time at all.
+        m = REQUESTED_TIME_RE.search(hit['line'])
+        if m is None or hit['pair'] is None:
+            return None, ('states no requested time, so there is no instant '
+                          'to ask the bag about')
+        frame, sim = hit['pair'].split(' -> ')[1], float(m.group(1))
+        target = hit['pair'].split(' -> ')[0]
+        kind = f'{hit["proc"]} warning'
+
+    lo = hit['stamp'] - REGION_BEFORE_S
+    hi = hit['stamp'] + REGION_AFTER_S
+    tf, scans = read_region(bag, f'/robot_{robot}/scan', lo, hi)
+    chain = chain_from(parent_map(tf, static_links), frame, target)
+    if chain is None:
+        return None, f'no tf chain from {frame} up to {target} in this region'
+    links = dynamic_links(chain, static_links)
+    attribution = attribute_drop(links, tf, sim, hit['stamp'])
+
+    wire = idx = None
+    if scans:
+        near = min(range(len(scans)), key=lambda i: abs(scans[i][0] - sim))
+        if abs(scans[near][0] - sim) < 5e-4:
+            idx, wire = near, scans[near][1]
+    base = (neighbour_baseline(links, tf, scans, idx) if idx is not None
+            else {link: [] for link in links})
+    own = (covering_vs_scan(links, tf, sim, wire) if wire is not None
+           else {link: None for link in links})
+
+    return dict(hit=hit, kind=kind, sim=sim, wire=wire, links=links,
+                attribution=attribution, base=base, own=own,
+                late=late_links(attribution),
+                last=last_to_arrive(attribution), region=(lo, hi),
+                chain=chain), None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--bag', type=Path, required=True)
@@ -391,12 +446,11 @@ def main() -> int:
     if window is None:
         raise SystemExit(f'FATAL: no analysis window for {args.bag}: {why}')
     found = count_health(read_log(args.log), window)
-    hits = found['gated']
+    hits = found['candidates']
 
     params = args.nav2_params or nav2_params_path(args.robot)
     facts = costmap_facts(params)
     static_links = read_static_links(args.bag)
-    scan_topic = f'/robot_{args.robot}/scan'
 
     print(f'bag    {args.bag}')
     print(f'log    {args.log}')
@@ -407,63 +461,23 @@ def main() -> int:
               f'{f["transform_tolerance"]} (:{f["tol_line"]})')
     print(f'window sim [{window["sim_lo"]:.3f}, {window["sim_hi"]:.3f}], wall '
           f'[{window["recv_lo"]:.6f}, {window["recv_hi"]:.6f}]')
-    print(f'gated  {len(hits)} line(s) inside it')
+    print(f'candidates  {len(hits)} line(s) inside the window that R9 '
+          'gates on the pair rule alone')
     print(f'static links in /tf_static: {len(static_links)}')
     print()
 
     rows = []
     for hit in hits:
-        which = costmap_of(hit['line'])
-        if which is not None:
-            frame, sim = hit['frame'], hit['scan']
-            target = facts[which]['global_frame']
-            kind = f'{which} costmap'
-        else:
-            # A transform warning. Attributable only when the line states the
-            # time it asked for: tf2's extrapolation error does, and the
-            # tf_help 'Transform data too old' phrasing carries no time at
-            # all, so that one is reported and skipped.
-            m = REQUESTED_TIME_RE.search(hit['line'])
-            if m is None or hit['pair'] is None:
-                print(f'not attributable: {hit["cat"]} at {hit["stamp"]:.6f} '
-                      'states no requested time, so there is no instant to '
-                      'ask the bag about')
-                print(f'    {hit["line"]}')
-                continue
-            frame, sim = hit['pair'].split(' -> ')[1], float(m.group(1))
-            target = hit['pair'].split(' -> ')[0]
-            kind = f'{hit["proc"]} warning'
-
-        lo = hit['stamp'] - REGION_BEFORE_S
-        hi = hit['stamp'] + REGION_AFTER_S
-        tf, scans = read_region(args.bag, scan_topic, lo, hi)
-        chain = chain_from(parent_map(tf, static_links), frame, target)
-        if chain is None:
-            print(f'no tf chain from {frame} up to {target} in this region')
+        row, why = attribute_hit(args.bag, args.robot, hit, facts,
+                                 static_links)
+        if row is None:
+            print(f'not attributable: {hit["cat"]} at '
+                  f'{hit["stamp"]:.6f} {why}')
+            print(f'    {hit["line"]}')
             continue
-        links = dynamic_links(chain, static_links)
-        attribution = attribute_drop(links, tf, sim, hit['stamp'])
-
-        wire = None
-        idx = None
-        if scans:
-            idx = min(range(len(scans)), key=lambda i: abs(scans[i][0] - sim))
-            if abs(scans[idx][0] - sim) < 5e-4:
-                wire = scans[idx][1]
-            else:
-                idx = None
-        base = (neighbour_baseline(links, tf, scans, idx)
-                if idx is not None else {link: [] for link in links})
-        own = (covering_vs_scan(links, tf, sim, wire) if wire is not None
-               else {link: None for link in links})
-
-        late = [ln for ln in late_links(attribution)]
-        rig = [ln for ln in late
-               if not is_slam_output_pair(f'{ln[0]} -> {ln[1]}')]
-        rows.append(dict(hit=hit, kind=kind, sim=sim, wire=wire, links=links,
-                         attribution=attribution, base=base, own=own,
-                         late=late, rig=rig, last=last_to_arrive(attribution),
-                         region=(lo, hi), chain=chain))
+        row['rig'] = [ln for ln in row['late']
+                      if not is_slam_output_pair(f'{ln[0]} -> {ln[1]}')]
+        rows.append(row)
 
     def _s(v, unit=' s', fmt='+.3f'):
         return '-' if v is None else f'{v:{fmt}}{unit}'
