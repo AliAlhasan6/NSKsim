@@ -127,11 +127,14 @@ COSTMAP_DROP = (
 
 # ── R9: what gets counted ────────────────────────────────────────────────────
 
-def test_the_three_asked_for_categories_plus_the_reported_one_exist():
-    assert set(rh.COUNTS) == {'nav2_transform', 'slam_drop', 'no_progress',
-                              'loop_rate'}
-    # Only the first two decide the run.
-    assert set(rh.GATED) == {'nav2_transform', 'slam_drop'}
+def test_the_categories_and_which_of_them_decide_the_run():
+    assert set(rh.COUNTS) == {'nav2_transform', 'slam_drop', 'other_drop',
+                              'no_progress', 'loop_rate'}
+    # Compared against the baseline and printed; none of it gates.
+    assert set(rh.VS_BASELINE) == {'nav2_transform', 'slam_drop', 'other_drop'}
+    # Gated, and only inside the window. slam_drop is NOT here: those are
+    # slam_toolbox's own drops and the product maps are built offline.
+    assert set(rh.WINDOW_GATED) == {'nav2_transform', 'other_drop'}
 
 
 def test_each_transform_phrasing_is_counted():
@@ -147,15 +150,31 @@ def test_a_slam_toolbox_drop_is_counted():
 
 
 def test_a_costmap_drop_is_not_a_slam_toolbox_drop():
-    """The same sentence comes out of libtoolbox_common.so and liblayers.so.
+    """The same sentence comes out of libtoolbox_common.so and liblayers.so,
+    and the two mean entirely different things here: slam_toolbox's own queue
+    is advisory, a Nav2 node's is not.
 
-    Counting the costmap's copy as a slam_toolbox drop would make the gate
-    fire on a costmap that is merely catching up, which has nothing to do
-    with the transform this change moves.
+    So the costmap's copy is counted -- it used to be counted as nothing at all
+    -- but never as slam_toolbox's. The logger is what separates them.
     """
     found = rh.count_health([COSTMAP_DROP])
     assert found['counts']['slam_drop'] == 0
+    assert found['counts']['other_drop'] == 1
     assert found['counts']['nav2_transform'] == 0
+    assert found['by_proc']['other_drop'] == {'controller_server': 1}
+
+
+def test_the_drop_is_identified_by_the_logger_not_the_process_tag():
+    """[async_slam_toolbox_node-2] is the process; [robot_0.slam_toolbox] is
+    the logger. Matching the substring 'slam_toolbox' anywhere in the line
+    would accept either, which is a weaker claim about who dropped the
+    message -- so the pattern matches the logger field alone.
+    """
+    assert rh.SLAM_LOGGER_RE.search(SLAM_DROP)
+    assert rh.SLAM_LOGGER_RE.search('[foo-1] [INFO] [slam_toolbox]: x')
+    assert not rh.SLAM_LOGGER_RE.search(
+        '[async_slam_toolbox_node-1] [INFO] [robot_0.local_costmap]: x')
+    assert not rh.SLAM_LOGGER_RE.search(COSTMAP_DROP)
 
 
 def test_the_real_e0_lines_land_in_the_right_categories():
@@ -202,18 +221,24 @@ def test_a_burst_inside_a_zero_span_is_infinite_not_a_crash():
     assert rates['b'] == 0.0
 
 
-def test_a_zero_baseline_makes_any_occurrence_a_failure():
-    """b2maps_e0 logged zero transform warnings in 98.96 minutes, so the
-    limit is zero and the first warning is the signal. This is the gate that
-    will actually run at the rehearsal.
-    """
-    baseline = {'nav2_transform': 0.0, 'slam_drop': 0.0}
+def test_a_zero_baseline_puts_any_occurrence_over_the_limit():
+    """b2maps_e0 logged zero transform warnings in 98.96 minutes, so the limit
+    is zero and the first warning is over it.
 
-    clean = rh.judge({'nav2_transform': 0.0, 'slam_drop': 0.0}, baseline)
+    REPORTED, not gated, since 2026-09-28: which way this goes depends on which
+    log is handed to --baseline-log. relay1's 0.107/min is over e0's limit,
+    under e0t's and over rehearsal5's -- one run, three answers, none of them
+    about the run. R9's verdict is the window gate below.
+    """
+    baseline = {'nav2_transform': 0.0, 'slam_drop': 0.0, 'other_drop': 0.0}
+
+    clean = rh.judge({'nav2_transform': 0.0, 'slam_drop': 0.0,
+                      'other_drop': 0.0}, baseline)
     assert clean['nav2_transform'][0] is True
     assert clean['slam_drop'][0] is True
 
-    one_warning = rh.judge({'nav2_transform': 0.01, 'slam_drop': 0.0}, baseline)
+    one_warning = rh.judge({'nav2_transform': 0.01, 'slam_drop': 0.0,
+                            'other_drop': 0.0}, baseline)
     assert one_warning['nav2_transform'][0] is False
     assert one_warning['slam_drop'][0] is True
 
@@ -230,12 +255,227 @@ def test_exactly_twice_the_baseline_passes_and_more_fails():
     assert over['slam_drop'][0] is False
 
 
-def test_the_ungated_categories_are_not_judged():
+def test_the_uncompared_categories_are_not_judged():
     verdicts = rh.judge({'nav2_transform': 0.0, 'slam_drop': 0.0,
-                         'no_progress': 99.0, 'loop_rate': 99.0},
+                         'other_drop': 0.0, 'no_progress': 99.0,
+                         'loop_rate': 99.0},
                         {'nav2_transform': 0.0, 'slam_drop': 0.0,
-                         'no_progress': 0.0, 'loop_rate': 0.0})
-    assert set(verdicts) == set(rh.GATED)
+                         'other_drop': 0.0, 'no_progress': 0.0,
+                         'loop_rate': 0.0})
+    assert set(verdicts) == set(rh.VS_BASELINE)
+
+
+# ── R9: the frame pair a warning names ───────────────────────────────────────
+# The whole corpus of transform warnings this rig has produced is 9 lines in
+# three shapes. All of them are reproduced verbatim below, because the pair is
+# what decides the run and a regex that stopped matching one of them would
+# excuse a warning rather than fail to count it.
+
+K2_ODOM_MAP = (
+    '[controller_server-3] [ERROR] [1789836010.000000000] [tf_help]: '
+    'Transform data too old when converting from robot_0/odom to robot_0/map')
+E0T_MAP_ODOM = (
+    '[controller_server-2] [ERROR] [1789836010.000000000] [tf_help]: '
+    'Transform data too old when converting from robot_0/map to robot_0/odom')
+ODOM_BASE_TOO_OLD = (
+    '[controller_server-3] [ERROR] [1789836010.000000000] [tf_help]: '
+    'Transform data too old when converting from robot_0/odom to '
+    'robot_0/base_footprint')
+RELAY1_EXTRAPOLATION = (
+    '[collision_monitor-11] [ERROR] [1789836020.000000000] [getTransform]: '
+    'Failed to get "robot_0/base_scan"->"robot_0/base_footprint" frame '
+    'transform: Lookup would require extrapolation into the future.  '
+    'Requested time 463.070000 but the latest data is at time 463.050000, '
+    'when looking up transform from frame [robot_0/odom] to frame '
+    '[robot_0/base_footprint]')
+NO_PAIR_NAMED = (
+    '[controller_server-2] [WARN] [1789836010.000000000] '
+    '[robot_0.controller_server]: Timed out waiting for transform')
+
+
+def test_the_pair_is_read_out_of_each_real_phrasing():
+    assert rh.frame_pair(K2_ODOM_MAP) == 'robot_0/odom -> robot_0/map'
+    assert rh.frame_pair(E0T_MAP_ODOM) == 'robot_0/map -> robot_0/odom'
+    assert rh.frame_pair(COSTMAP_TIMEOUT) == (
+        'robot_0/base_footprint -> robot_0/odom')
+    assert rh.frame_pair(SLAM_DROP) is None       # one frame, not a pair
+    assert rh.frame_pair(NO_PAIR_NAMED) is None
+
+
+def test_tf2s_own_detail_wins_over_the_pair_the_node_asked_for():
+    """relay1's line names two pairs. The quoted one is what collision_monitor
+    asked for; tf2's trailing bracket form is the link whose lookup actually
+    failed, and that is truth_odom_tf's -- the transform under test.
+
+    Reading the quoted pair instead would file this warning under
+    base_scan -> base_footprint, which nothing in this change touches.
+    """
+    assert rh.frame_pair(RELAY1_EXTRAPOLATION) == (
+        'robot_0/odom -> robot_0/base_footprint')
+
+
+def test_only_a_same_namespace_map_odom_pair_is_slam_toolbox_output():
+    assert rh.is_slam_output_pair('robot_0/odom -> robot_0/map') is True
+    assert rh.is_slam_output_pair('robot_0/map -> robot_0/odom') is True
+    # The transform under test, and everything below it.
+    assert rh.is_slam_output_pair(
+        'robot_0/odom -> robot_0/base_footprint') is False
+    # A cross-robot link is a real fault and must not be excused by a
+    # substring hit on 'map'.
+    assert rh.is_slam_output_pair('robot_0/map -> robot_1/odom') is False
+    # Unnamespaced frames cannot occur in this stack, so they are not a case
+    # that has been reasoned about: fail closed.
+    assert rh.is_slam_output_pair('map -> odom') is False
+    assert rh.is_slam_output_pair(None) is False
+
+
+# ── R9: the window gate ──────────────────────────────────────────────────────
+# The fixtures above are stamped on one synthetic wall clock; this window
+# covers [1789836000, 1789836100] of it, so every one of them is inside unless
+# _at() moves it. The receive half of a window is what R9 uses -- a log line
+# carries a wall stamp, and the bag's receive stamps are the same machine's
+# clock.
+
+LOG_WINDOW = rh.window_from(100.0, 1200.0, 1789836000.0, 1789836100.0,
+                            1300.0, '/robot_0/cmd_vel')
+LOG_HEAD = '[INFO] [1789835990.000000000] [launch]: all 26 subscriptions up'
+LOG_TAIL = ('[controller_server-2] [INFO] [1789836300.000000000] '
+            '[robot_0.controller_server]: goal reached')
+_STAMP_SUB = re.compile(r'\[1[0-9]{9}\.[0-9]+\]')
+
+
+def _at(line, stamp):
+    """The same line, restamped -- for moving one fixture out of the window."""
+    return _STAMP_SUB.sub(f'[{stamp:.9f}]', line, count=1)
+
+
+def _log(*fixtures):
+    """A log with a real span around the fixtures, so the per-minute rates the
+    report prints are finite the way a real log's are.
+    """
+    return [LOG_HEAD, *fixtures, LOG_TAIL]
+
+
+def _r9(lines, window=LOG_WINDOW):
+    found = rh.count_health(lines, window)
+    rates = rh.per_minute(found['counts'], found['span_s'])
+    return rh.report_health(found, rates, None, None, window,
+                            None if window else 'no --bag given')
+
+
+def test_an_online_slam_toolbox_drop_inside_the_window_is_advisory(capsys):
+    """The product maps are built offline from the stripped bag, so
+    slam_toolbox's own message-filter queue cannot reach them. b2maps_k3 has
+    four of these inside its window and one outside, and they are the only
+    reason it failed R9.
+    """
+    assert _r9(_log(SLAM_DROP)) is True
+    out = capsys.readouterr().out
+    assert 'advisory' in out
+    assert re.search(r'where inside the window 1, outside it 0', out)
+
+
+def test_a_costmap_drop_inside_the_window_fails(capsys):
+    """The identical wording from any other logger names no pair, so it gates:
+    fail closed. b2maps_k2 and k3 have two each inside their windows, and until
+    now nothing counted them at all.
+    """
+    assert _r9(_log(COSTMAP_DROP)) is False
+    out = capsys.readouterr().out
+    assert 'GATED' in out
+    assert 'local_costmap' in out
+
+
+def test_a_warning_naming_map_odom_inside_the_window_is_advisory(capsys):
+    """k2's real failure, in the robot_0 namespace the other fixtures use: the
+    map <-> odom link is online slam_toolbox's output, the same class as its
+    drops.
+    """
+    assert _r9(_log(K2_ODOM_MAP)) is True
+    assert _r9(_log(E0T_MAP_ODOM)) is True
+    out = capsys.readouterr().out
+    assert 'robot_0/map -> robot_0/odom' in out
+    assert 'advisory' in out
+
+
+def test_a_warning_naming_the_transform_under_test_inside_the_window_fails(
+        capsys):
+    """THE discriminator. relay1's collision_monitor line is this case on real
+    data, at sim 463 of a 638 s run -- six minutes into driving, not a startup
+    artefact.
+    """
+    assert _r9(_log(ODOM_BASE_TOO_OLD)) is False
+    assert _r9(_log(RELAY1_EXTRAPOLATION)) is False
+    out = capsys.readouterr().out
+    assert 'robot_0/odom -> robot_0/base_footprint' in out
+    assert 'GATED' in out
+
+
+def test_the_same_warning_outside_the_window_passes_and_is_reported(capsys):
+    """Same line, same log, 100 s later: past the end of the span the map is
+    cut from. Reported with its node and its pair, and not gated.
+    """
+    assert _r9(_log(_at(ODOM_BASE_TOO_OLD, 1789836200.0))) is True
+    out = capsys.readouterr().out
+    assert re.search(r'where inside the window 0, outside it 1', out)
+    assert 'robot_0/odom -> robot_0/base_footprint' in out
+    assert 'GATED' not in out
+
+
+def test_an_unparseable_warning_gates_and_is_printed_in_full(capsys):
+    """A phrasing none of PAIR_RES matches cannot be shown to be one of the two
+    excused cases, so it fails and the line is printed -- if it is a real
+    format, that is how it gets added.
+    """
+    assert _r9(_log(NO_PAIR_NAMED)) is False
+    out = capsys.readouterr().out
+    assert 'no pair named: fail closed' in out
+    assert NO_PAIR_NAMED in out
+
+
+def test_without_a_window_r9_is_not_evaluated_rather_than_passed(capsys):
+    """--log with no --bag beside it cannot place a warning, so it cannot
+    judge one. NOT EVALUATED, which exits 3.
+    """
+    assert _r9(_log(ODOM_BASE_TOO_OLD), window=None) is None
+    out = capsys.readouterr().out
+    assert 'NO ANALYSIS WINDOW' in out
+    assert '-> NOT EVALUATED' in out
+
+
+def test_the_counts_are_split_by_node_and_by_pair(capsys):
+    """Two warnings about different links, from different nodes, in one run:
+    pooled they are '2 transform warnings' and the verdict is a coin toss on
+    which baseline was handed in. Split, one is slam_toolbox's estimate and the
+    other is the transform under test.
+    """
+    found = rh.count_health(_log(K2_ODOM_MAP, RELAY1_EXTRAPOLATION),
+                            LOG_WINDOW)
+
+    assert found['counts']['nav2_transform'] == 2
+    assert found['by_proc']['nav2_transform'] == {'controller_server': 1,
+                                                  'collision_monitor': 1}
+    assert found['by_pair']['nav2_transform'] == {
+        'robot_0/odom -> robot_0/map': 1,
+        'robot_0/odom -> robot_0/base_footprint': 1}
+    assert [h['pair'] for h in found['gated']] == [
+        'robot_0/odom -> robot_0/base_footprint']
+
+
+def test_an_unstamped_warning_is_reported_as_unplaceable():
+    """A counted line with no timestamp is nowhere, not inside. It is counted
+    and shown as unstamped rather than assumed into the span that decides the
+    run.
+    """
+    found = rh.count_health(['[controller_server-2] [WARN] '
+                             '[robot_0.controller_server]: Transform data too '
+                             'old when converting from robot_0/odom to '
+                             'robot_0/base_footprint'], LOG_WINDOW)
+
+    assert found['counts']['nav2_transform'] == 1
+    assert found['placed']['nav2_transform'] == {'in': 0, 'out': 0,
+                                                 'unstamped': 1}
+    assert found['gated'] == []
 
 
 # ── coverage: closest approach ───────────────────────────────────────────────

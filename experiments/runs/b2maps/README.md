@@ -42,9 +42,39 @@ or incomplete bag as green.
    within lidar range of the perimeter is still definitively bad — but passing
    it is no longer evidence that the map reached the boundary, only that the
    robot could in principle have seen it.
-2. **R9's two gated counts are 0** — Nav2/tf2 transform warnings and
-   slam_toolbox message-filter drops. e0's baseline is 0.000/min over
-   98.96 min, so the limit is 0.000 and the first warning fails the run.
+2. **R9 gates nothing inside the analysis window.** Zero Nav2/tf2 transform
+   warnings and zero message-filter drops inside `[t_cmd, t_cmd + 1200 s]` —
+   the same window as criterion 3, read once from the bag and shared between
+   the two gates — with exactly two exclusions:
+
+   * warnings naming `robot_K/map ↔ robot_K/odom`, in either direction, and
+   * message-filter drops whose **logger** is slam_toolbox's
+     (`[robot_K.slam_toolbox]`, not the `[async_slam_toolbox_node-N]` process
+     tag).
+
+   Both exclusions are the same exclusion twice: that pair *is* online
+   slam_toolbox's output, and so is its message-filter queue, and the product
+   maps are built offline from the stripped bag, so neither can reach them. They
+   are reported by node and by pair, never gated.
+
+   **Everything else inside the window fails the run**, above all
+   `robot_K/odom → robot_K/base_footprint` — the transform `truth_odom_tf`
+   publishes. A warning whose frame pair cannot be parsed also fails, and is
+   printed in full: an unrecognised phrasing is not an excused one. The same
+   warning **outside** the window is counted and printed, not gated.
+
+   The split matters because pooling hid it. All 8 `Transform data too old`
+   lines in this corpus (e0t's 7, k2's 1) name `map ↔ odom` and trace to
+   slam_toolbox's estimate running ~0.55 s stale; the one line naming the
+   transform under test is `b2maps_relay1`'s `collision_monitor`
+   extrapolation error at sim 463 — six minutes into driving, not a bring-up
+   artefact. Counted together, warnings about a transform this work does not
+   touch set the budget for the one it does.
+
+   `--baseline-log` still prints e0's rates beside this run's, and that
+   comparison is now **advisory**: relay1's 0.107 warnings/min is over e0's
+   limit, under e0t's and over rehearsal5's — one run, three verdicts, none of
+   them about the run.
 3. **R4 exact, inside the analysis window**: 0 transforms falling on no truth
    stamp, worst |dxy| ≤ 1e-6 m, worst |dyaw| ≤ 1e-6 deg, worst |z| = 0.
 
@@ -355,12 +385,14 @@ same reason: it is the span the map is cut from, so it is the span R4 gates.
 It is also this script's default, and is written out here because the number is
 the recording rule rather than a setting.
 
-The baseline log is the run being replaced, and without it R9 reports but gates
-nothing.
+The baseline log is the run being replaced. Its rates are printed beside this
+run's and are **advisory** (criterion 2); R9's verdict is the window gate, which
+needs `--bag` rather than a baseline. Without `--bag` there is no window, so R9
+reports its counts and exits NOT EVALUATED.
 
 | gate | what it must say | rehearsal 5 |
 |---|---|---|
-| R9 | 0 transform warnings, 0 slam drops | 0 and 0 over 12.14 min |
+| R9 | nothing gated inside the window: no transform warning on a pair other than `map ↔ odom`, no message-filter drop from a logger other than slam_toolbox's | rehearsal 5 logged 0 and 0 over 12.14 min, so it passes on either rule. k2 and k3 do not: two in-window costmap drops each, which the old count never counted at all |
 | R2 | robot K ≈ 20 Hz, parked control ≈ 50 Hz | 20.001 / 50.001 Hz |
 | R4 | inside `[t_cmd, t_cmd + 1200 s]` sim: 0 transforms on no truth stamp, worst \|dxy\| ≤ 1e-6 m, \|dyaw\| ≤ 1e-6°, \|z\| = 0. Outside it: reported, never gated | k2, the awkward one: 24000 compared inside the window with 0 unmatched and worst dyaw 2.5e-14°; before `t_cmd`, 721 transforms of which 20 on no truth stamp, and a 200 ms pose hole at sim 61.850 — all of it outside the window, none of it gated |
 | R5 | median \|dYaw\| > 1° | 81.1° |

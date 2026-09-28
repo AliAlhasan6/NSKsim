@@ -17,9 +17,14 @@ Why this exists (2026-09-20):
   A slower transform published one process hop further away is exactly the
   kind of change that shows up as transform-timeout warnings rather than as
   anything obvious, and this rig is already known to starve under load: RViz
-  alone once collapsed /clock from 99 Hz to 0.5 Hz. So the run is gated on
-  counted warnings per minute, against the same counts taken from the run
-  being replaced.
+  alone once collapsed /clock from 99 Hz to 0.5 Hz. So the warnings are
+  counted -- and, since 2026-09-28, gated on WHERE they fell rather than on how
+  many there were: a consumer that could not get a transform inside the window
+  the map is built from fails the run, and the same warning outside it is
+  reported. Two exclusions, both because the product maps are built offline
+  from the stripped bag: slam_toolbox's own message-filter drops, and warnings
+  naming its map <-> odom output. See WINDOW_GATED for the rule and VS_BASELINE
+  for why the old rate-against-a-baseline comparison is now advisory.
 
   COVERAGE. b2maps_e0's explorer declared exploration complete having never
   seen the outer boundary. "It reached the boundary" is only a criterion if it
@@ -208,35 +213,128 @@ PGM_OCC, PGM_FREE, PGM_UNKNOWN = 0, 254, 205
 #   'Failed to make progress'             libcontroller_server_core.so
 #
 # 'Message Filter dropping message' is emitted by BOTH slam_toolbox and the
-# costmap layers, so the slam_toolbox count additionally requires the line to
-# name slam_toolbox -- true of both the process tag
-# ([async_slam_toolbox_node-1]) and the logger ([robot_0.slam_toolbox]).
-GATED = ('nav2_transform', 'slam_drop')
+# costmap layers, and the two mean entirely different things here, so the line
+# has to say which. It is identified by the LOGGER -- [robot_3.slam_toolbox] --
+# and not by the wording and not by the process tag:
+#
+#   [async_slam_toolbox_node-2] [INFO] [...] [robot_3.slam_toolbox]:
+#       Message Filter dropping message: frame 'robot_3/base_scan' ...
+#   [planner_server-5] [INFO] [...] [robot_3.global_costmap.global_costmap]:
+#       Message Filter dropping message: frame 'robot_3/base_scan' ...
+#
+# Matching on the wording alone would put those in one bucket; matching on the
+# substring 'slam_toolbox' anywhere in the line would also accept the process
+# tag, which is a weaker claim about who dropped the message. SLAM_LOGGER_RE
+# matches the logger field and nothing else -- [robot_3.slam_toolbox] and a
+# bare [slam_toolbox], never [async_slam_toolbox_node-2].
+SLAM_LOGGER_RE = re.compile(r'\[(?:[A-Za-z0-9_.]+\.)?slam_toolbox\]')
+
+# Compared against the baseline run's rates, and REPORTED. Nothing here is
+# gated on the comparison: which way it goes depends entirely on which log is
+# handed to --baseline-log, and the b2maps corpus makes that concrete. relay1's
+# 0.107 transform warnings/min is a FAIL against e0 (0 in 98.96 min, limit
+# 0.000), a PASS against e0t (0.063/min, limit 0.126) and a FAIL again against
+# rehearsal5 (0). One run, three verdicts, none of them about the run. The
+# comparison is still worth printing -- "is this worse than the run it
+# replaces?" is a real question -- so it stays, labelled advisory.
+VS_BASELINE = ('nav2_transform', 'slam_drop', 'other_drop')
+
+# Gated, and only inside the analysis window. See WINDOW_GATE_NOTE.
+WINDOW_GATED = ('nav2_transform', 'other_drop')
 
 COUNTS = {
     'nav2_transform': dict(
         label='Nav2/tf2 transform warnings',
         any_of=('Timed out waiting for transform', 'Transform data too old',
                 'Lookup would require extrapolation', 'extrapolation into the'),
-        require=None),
+        require=None, exclude=None),
     'slam_drop': dict(
-        label='slam_toolbox message-filter drops',
+        label='message-filter drops, slam_toolbox',
         any_of=('Message Filter dropping message',),
-        require='slam_toolbox'),
+        require=SLAM_LOGGER_RE, exclude=None),
+    'other_drop': dict(
+        label='message-filter drops, any other logger',
+        any_of=('Message Filter dropping message',),
+        require=None, exclude=SLAM_LOGGER_RE),
     'no_progress': dict(
         label='controller "Failed to make progress"',
         any_of=('Failed to make progress',),
-        require=None),
+        require=None, exclude=None),
     'loop_rate': dict(
         label='control/planner loop missed its rate',
         any_of=('missed its desired rate',),
-        require=None),
+        require=None, exclude=None),
 }
 
-# Reported, never gated. The amendment gates the first two; 'no_progress' is a
-# navigation outcome rather than a timing fault, and 'loop_rate' is a load
-# symptom worth seeing next to the others on a rig with this one's history.
-assert set(GATED) <= set(COUNTS)
+# 'no_progress' is a navigation outcome rather than a timing fault, and
+# 'loop_rate' is a load symptom worth seeing next to the others on a rig with
+# this one's history. Neither is gated on any terms.
+assert set(VS_BASELINE) <= set(COUNTS)
+assert set(WINDOW_GATED) <= set(COUNTS)
+
+# ── R9: which counted lines decide the run ───────────────────────────────────
+# A counted line is GATED when all three hold:
+#
+#   1. its category is in WINDOW_GATED,
+#   2. its stamp is inside the analysis window -- Part 1's window, the span the
+#      map is built from, reused rather than recomputed, and
+#   3. it does not name robot_K/map <-> robot_K/odom.
+#
+# Everything else is reported. The two exclusions are the same exclusion twice:
+# that pair IS online slam_toolbox's output, and so is its message-filter
+# queue, and no offline map reads either. The product maps are built by
+# run_offline_maps.sh from the stripped bag, so a stale online map -> odom
+# estimate cannot reach them.
+#
+# What that leaves gated is every consumer that could not get a transform it
+# needed, inside the window, about any other link -- robot_K/odom ->
+# robot_K/base_footprint above all, the transform truth_odom_tf publishes and
+# this whole change is about. The corpus shows the distinction is real and that
+# pooling destroyed it: all 8 'Transform data too old' lines in it (e0t's 7,
+# k2's 1) name map <-> odom and were traced to slam_toolbox's estimate running
+# ~0.55 s stale, while the one line naming the transform under test is relay1's
+# collision_monitor extrapolation error at sim 463. One count for both let
+# warnings about a transform this change does not touch set the budget for the
+# one it does.
+#
+# A line whose pair cannot be parsed FAILS CLOSED: it gates, and it is printed
+# in full so the phrasing can be read and, if it is a real format, added to
+# PAIR_RES. Silently excusing an unrecognised warning is how a gate stops
+# being one.
+#
+# The frame pair is taken from the line by precedence, because a single warning
+# can name two pairs. relay1's, in full:
+#
+#   [collision_monitor-11] [ERROR] [...] [getTransform]: Failed to get
+#   "robot_0/base_scan"->"robot_0/base_footprint" frame transform: Lookup would
+#   require extrapolation into the future. Requested time 463.070000 but the
+#   latest data is at time 463.050000, when looking up transform from frame
+#   [robot_0/odom] to frame [robot_0/base_footprint]
+#
+# The quoted pair is what the node ASKED for; tf2's own trailing detail is the
+# link whose lookup actually failed, and that is the one worth gating on --
+# here robot_0/odom -> robot_0/base_footprint, truth_odom_tf's. So tf2's
+# bracket form wins whenever it is present.
+PAIR_RES = (
+    # libtf2.so, tf2's extrapolation detail: the link that failed.
+    re.compile(r'looking up transform from frame \[([^\]]+)\] to frame '
+               r'\[([^\]]+)\]'),
+    # libtf_help.so (nav2_util getTransform): the transform asked for.
+    re.compile(r'"([^"]+)"->"([^"]+)" frame transform'),
+    # libtf_help.so: 'Transform data too old when converting from A to B'.
+    re.compile(r'converting from (\S+) to (\S+)'),
+    # libnav2_costmap_2d_core.so: 'Timed out waiting for transform from A to B
+    # to become available ...'.
+    re.compile(r'waiting for transform from (\S+) to (\S+)'),
+)
+
+# <ns>/map and <ns>/odom, one common namespace, either direction. The namespace
+# has to MATCH: robot_0/map <-> robot_1/odom is a cross-robot link and a real
+# fault, and it must not be excused by a substring hit on 'map'. A pair with no
+# namespace at all does not match either, and so gates -- every frame in this
+# stack is namespaced (all 9 real lines, and slam_robot0.yaml), so an
+# unnamespaced one is not a case that has been reasoned about.
+MAP_ODOM_RE = re.compile(r'^(.+)/(map|odom)$')
 
 STAMP_RE = re.compile(r'\[(1[0-9]{9}\.[0-9]+)\]')
 PROC_RE = re.compile(r'^\[([A-Za-z0-9_]+)-[0-9]+\]')
@@ -395,14 +493,84 @@ def stamp_of(line: str) -> float | None:
     return float(m.group(1)) if m else None
 
 
-def count_health(lines) -> dict:
-    """Counts per category plus the log's timestamp span. Pure.
+def frame_pair(line: str) -> str | None:
+    """'A -> B', the frame pair the line names, or None. Pure.
 
-    Returns {'counts': {...}, 'by_proc': {cat: {proc: n}}, 'first', 'last',
-             'span_s', 'stamped'}.
+    By precedence over PAIR_RES -- see it for why a line can name two pairs and
+    which one wins. None means no phrasing matched, which is not a shrug: the
+    caller gates on it.
+    """
+    for rx in PAIR_RES:
+        m = rx.search(line)
+        if m:
+            a, b = (g.strip().rstrip('.,') for g in m.groups())
+            return f'{a} -> {b}'
+    return None
+
+
+def is_slam_output_pair(pair: str | None) -> bool:
+    """True for <ns>/map <-> <ns>/odom, in either direction. Pure.
+
+    That transform is online slam_toolbox's output. A warning about it says the
+    online SLAM estimate was stale, which the offline maps do not read -- the
+    same reason slam_toolbox's own message-filter drops are advisory.
+    """
+    if pair is None:
+        return False
+    a, _, b = pair.partition(' -> ')
+    ma, mb = MAP_ODOM_RE.match(a), MAP_ODOM_RE.match(b)
+    if not (ma and mb):
+        return False
+    return (ma.group(1) == mb.group(1)
+            and {ma.group(2), mb.group(2)} == {'map', 'odom'})
+
+
+def gates(key: str, pair: str | None) -> bool:
+    """Would a counted line of this category and pair gate, if in the window?
+
+    Pure, and the whole rule in one place: category, then pair. See
+    WINDOW_GATED's comment block for why these two exclusions and no others.
+    """
+    return key in WINDOW_GATED and not is_slam_output_pair(pair)
+
+
+def in_window(stamp: float | None, window: dict | None) -> bool:
+    """Is a log line's WALL stamp inside the analysis window? Pure.
+
+    The bag's receive stamps and a ROS log's stamps are the same machine's
+    epoch clock, which is what makes this comparison possible at all:
+    window['recv_*'] comes from the bag, `stamp` from the log beside it.
+    Checked on b2maps_relay1, where the bag's /clock reads sim 463.050 at wall
+    1789943495.572 and the collision_monitor line at wall 1789943495.800 says
+    it asked for sim 463.070.
+
+    An unstamped line is not in the window -- it is nowhere, and reported as
+    such rather than assumed into the span that decides the run.
+    """
+    return (window is not None and stamp is not None
+            and window['recv_lo'] <= stamp <= window['recv_hi'])
+
+
+def count_health(lines, window: dict | None = None) -> dict:
+    """Counts per category, split by node and by frame pair, placed against the
+    analysis window. Pure.
+
+    Returns {'counts': {...}, 'by_proc': {cat: {proc: n}},
+             'by_pair': {cat: {pair or None: n}},
+             'placed': {cat: {'in': n, 'out': n, 'unstamped': n}},
+             'gated': [hit, ...], 'first', 'last', 'span_s', 'stamped'}.
+
+    `gated` is the list that decides R9: one entry per counted line that gates
+    AND fell inside the window, each carrying the line itself so the report can
+    print it in full. Without a window it is empty and 'placed' is all
+    'unstamped'/'out' -- there is nothing to place against, which is why the
+    caller reports NOT EVALUATED rather than a pass.
     """
     counts = {k: 0 for k in COUNTS}
     by_proc = {k: {} for k in COUNTS}
+    by_pair = {k: {} for k in COUNTS}
+    placed = {k: {'in': 0, 'out': 0, 'unstamped': 0} for k in COUNTS}
+    gated = []
     first = last = None
     stamped = 0
 
@@ -417,14 +585,27 @@ def count_health(lines) -> dict:
         proc = PROC_RE.match(line)
         proc = proc.group(1) if proc else '?'
         for key, spec in COUNTS.items():
-            if spec['require'] and spec['require'] not in line:
+            if spec['require'] and not spec['require'].search(line):
                 continue
-            if any(p in line for p in spec['any_of']):
-                counts[key] += 1
-                by_proc[key][proc] = by_proc[key].get(proc, 0) + 1
+            if spec['exclude'] and spec['exclude'].search(line):
+                continue
+            if not any(p in line for p in spec['any_of']):
+                continue
+
+            counts[key] += 1
+            by_proc[key][proc] = by_proc[key].get(proc, 0) + 1
+            pair = frame_pair(line)
+            by_pair[key][pair] = by_pair[key].get(pair, 0) + 1
+            where = ('unstamped' if t is None
+                     else 'in' if in_window(t, window) else 'out')
+            placed[key][where] += 1
+            if where == 'in' and gates(key, pair):
+                gated.append({'cat': key, 'stamp': t, 'proc': proc,
+                              'pair': pair, 'line': line.rstrip()})
 
     span = (last - first) if (first is not None and last is not None) else 0.0
-    return {'counts': counts, 'by_proc': by_proc, 'first': first,
+    return {'counts': counts, 'by_proc': by_proc, 'by_pair': by_pair,
+            'placed': placed, 'gated': gated, 'first': first,
             'last': last, 'span_s': span, 'stamped': stamped}
 
 
@@ -438,17 +619,21 @@ def per_minute(counts: dict, span_s: float) -> dict:
 
 
 def judge(rates: dict, baseline: dict, factor: float = FAIL_FACTOR) -> dict:
-    """Per gated category: (ok, limit). More than `factor` times baseline fails.
+    """Per compared category: (within, limit). ADVISORY -- see VS_BASELINE.
 
-    A zero baseline makes the limit zero, so ANY occurrence fails. That is not
-    a degenerate case to work around -- b2maps_e0 ran 98.96 minutes and logged
-    not one transform warning, so zero is what this stack does when it is
-    healthy, and the first one is the signal.
+    More than `factor` times the baseline rate is "over". A zero baseline makes
+    the limit zero, so any occurrence is over it -- b2maps_e0 ran 98.96 minutes
+    and logged not one transform warning, so zero is what this stack does when
+    it is healthy.
+
+    This used to be R9's verdict, and the 'ok' it returned is now 'within': the
+    run is decided by where the warnings fell, not by how a second log's rates
+    compare.
     """
     out = {}
-    for key in GATED:
+    for key in VS_BASELINE:
         limit = baseline.get(key, 0.0) * factor
-        out[key] = (rates[key] <= limit, limit)
+        out[key] = (rates.get(key, 0.0) <= limit, limit)
     return out
 
 
@@ -1267,7 +1452,15 @@ def report_map(robot: int, found: dict | None, out_stem: Path) -> bool:
 
 # ──────────────────────────────── reporting ──────────────────────────────────
 
-def report_health(found: dict, rates: dict, baseline_rates, verdicts) -> bool:
+def report_health(found: dict, rates: dict, baseline_rates, verdicts,
+                  window: dict | None, window_why: str | None = None):
+    """R9: no consumer failed to get a transform inside the mapped window.
+
+    The counts are split three ways -- by node, by the frame pair the line
+    names, and by where the line fell against the window -- because the verdict
+    turns on the last two and a reader has to be able to see it do so. Only the
+    'gated' population decides anything; see WINDOW_GATED.
+    """
     print('R9 TF TIMING HEALTH')
     if found['first'] is None:
         print('  no ROS timestamps in this log, so there is no runtime to '
@@ -1280,36 +1473,89 @@ def report_health(found: dict, rates: dict, baseline_rates, verdicts) -> bool:
           f'{found["stamped"]} timestamped lines')
     print(f'  first stamp        {found["first"]:.6f}')
     print(f'  last stamp         {found["last"]:.6f}')
+    if window is None:
+        print(f'  NO ANALYSIS WINDOW: {window_why}')
+    else:
+        print(f'  gated window       [{window["recv_lo"]:.6f}, '
+              f'{window["recv_hi"]:.6f}] wall')
+        print(f'                     = sim [{window["sim_lo"]:.3f}, '
+              f'{window["sim_hi"]:.3f}], {window["min_sim"]:g} s of sim after '
+              f'the first command on {window["cmd_topic"]}')
+        print('                     (Part 1\'s window, read once from the bag '
+              'and shared with R4)')
     print()
     head = f'  {"":<38}{"count":>8}{"per min":>10}'
     if baseline_rates is not None:
-        head += f'{"limit":>10}{"":>8}'
+        head += f'{"limit":>10}{"":>10}'
     print(head)
 
-    ok = True
     for key, spec in COUNTS.items():
-        gated = key in GATED and baseline_rates is not None
         line = (f'  {spec["label"]:<38}{found["counts"][key]:>8}'
                 f'{rates[key]:>10.3f}')
         if baseline_rates is not None:
-            if gated:
-                passed, limit = verdicts[key]
-                line += f'{limit:>10.3f}{"ok" if passed else "FAIL":>11}'
-                ok = ok and passed
+            if key in VS_BASELINE:
+                within, limit = verdicts[key]
+                line += f'{limit:>10.3f}{"within" if within else "OVER":>10}'
             else:
-                line += f'{"-":>10}{"ungated":>11}'
+                line += f'{"-":>10}{"":>10}'
         print(line)
+        if not found['counts'][key]:
+            continue
         for proc, n in sorted(found['by_proc'][key].items(),
                               key=lambda kv: -kv[1]):
-            print(f'      {proc:<36}{n:>8}')
+            print(f'      node  {proc:<45}{n:>4}')
+        # The pair split for every category the gate classifies, so that
+        # "advisory" and "gated" are visible per line rather than inferred, and
+        # for the two purely reported ones only if a pair was actually named.
+        # 'Failed to make progress' names no frames and never will.
+        if key in VS_BASELINE or any(found['by_pair'][key]):
+            for pair, n in sorted(found['by_pair'][key].items(),
+                                  key=lambda kv: -kv[1]):
+                if key == 'slam_drop':
+                    note = "advisory: slam_toolbox's own queue"
+                elif is_slam_output_pair(pair):
+                    note = "advisory: slam_toolbox's own map <-> odom"
+                elif key in WINDOW_GATED:
+                    note = ('gates when inside the window' if pair else
+                            'no pair named: fail closed, gates when inside')
+                else:
+                    note = 'reported, never gated'
+                print(f'      pair  {pair or "(none named)":<45}{n:>4}  '
+                      f'{note}')
+        p = found['placed'][key]
+        print(f'      where inside the window {p["in"]}, outside it '
+              f'{p["out"]}, unstamped {p["unstamped"]}')
 
     if baseline_rates is None:
-        print('\n  no --baseline-log given: counts reported, NOTHING GATED.')
+        print('\n  no --baseline-log given, so no rate comparison. The gate '
+              'below does not need one.')
+    else:
+        print(f'\n  the limit column is {FAIL_FACTOR:g}x the baseline rate, '
+              'REPORTED and not gated: which way it')
+        print('  goes depends on which log is the baseline (see VS_BASELINE), '
+              'not on this run.')
+
+    print('\n  gate: a counted warning inside the window, other than '
+          'slam_toolbox\'s own drops')
+    print('        and warnings naming its map <-> odom pair. A pair that '
+          'cannot be parsed')
+    print('        gates too -- fail closed.')
+    if window is None:
+        print('  a warning cannot be placed in a window that could not be '
+              'read, so nothing is gated')
         print('  -> NOT EVALUATED\n')
         return None
 
-    print(f'\n  gate: more than {FAIL_FACTOR:g}x the baseline rate on '
-          f'{" or ".join(GATED)} is a FAIL')
+    hits = found['gated']
+    if not hits:
+        print('  nothing gated fell inside the window')
+    for hit in hits[:10]:
+        print(f'  GATED  {hit["stamp"]:.6f}  {hit["proc"]}  '
+              f'{hit["pair"] or "(no pair named: fail closed)"}')
+        print(f'         {hit["line"]}')
+    if len(hits) > 10:
+        print(f'  ... and {len(hits) - 10} more')
+    ok = not hits
     print(f'  -> {"PASS" if ok else "FAIL"}\n')
     return ok
 
@@ -1361,9 +1607,9 @@ def main() -> int:
     ap.add_argument('--log', type=Path,
                     help='explore.launch.py console log to count warnings in')
     ap.add_argument('--baseline-log', type=Path,
-                    help='log whose rates set the limit (the run being '
-                         'replaced). Without it --log reports but gates '
-                         'nothing.')
+                    help='log whose rates are printed beside this run\'s (the '
+                         'run being replaced). ADVISORY: R9\'s verdict is the '
+                         'window gate and does not need it.')
     ap.add_argument('--bag', type=Path,
                     help='run bag holding /model/robot_K/pose')
     ap.add_argument('--robot', type=int, default=0,
@@ -1440,30 +1686,39 @@ def main() -> int:
 
     results = {}
 
-    # Read before any of the heavy passes: it costs ~4 s (cmd_vel, then /clock
-    # only as far as the window's end), and a bag that cannot place a window
-    # should say so in seconds rather than after a full read of /tf.
+    # ONE window, read once, for both R4 and R9: the sim half places
+    # transforms, the receive half places log lines, and they have to be the
+    # same span or the two gates are judging different runs. Read before any of
+    # the heavy passes -- it costs ~4 s (cmd_vel, then /clock only as far as
+    # the window's end) against ~40 s for /tf.
     window = window_why = None
-    if args.bag and args.truth_tf:
+    if args.bag and (args.log or args.truth_tf):
         window, window_why = read_analysis_window(args.bag, args.robot,
                                                   args.min_sim)
+    elif args.log:
+        window_why = ('no --bag given, and the two things that place the '
+                      'window -- the first nonzero command and /clock -- are '
+                      'only in the bag')
 
     if args.log:
-        found = count_health(read_log(args.log))
+        found = count_health(read_log(args.log), window)
         rates = per_minute(found['counts'], found['span_s'])
         baseline_rates = verdicts = None
         if args.baseline_log:
+            # The baseline is a log without a bag beside it here, so its counts
+            # are over its whole runtime: a rate to compare, never a gate.
             base = count_health(read_log(args.baseline_log))
             baseline_rates = per_minute(base['counts'], base['span_s'])
             verdicts = judge(rates, baseline_rates, args.factor)
             print(f'baseline: {args.baseline_log} '
                   f'({base["span_s"] / 60.0:.2f} min)')
-            for key in GATED:
+            for key in VS_BASELINE:
                 print(f'  {COUNTS[key]["label"]:<38}'
                       f'{base["counts"][key]:>8}{baseline_rates[key]:>10.3f}'
                       ' per min')
             print()
-        results['R9'] = report_health(found, rates, baseline_rates, verdicts)
+        results['R9'] = report_health(found, rates, baseline_rates, verdicts,
+                                      window, window_why)
 
     if args.bag and args.tf_rates:
         pair_k = (f'robot_{args.robot}/odom',
