@@ -336,6 +336,12 @@ PAIR_RES = (
 # unnamespaced one is not a case that has been reasoned about.
 MAP_ODOM_RE = re.compile(r'^(.+)/(map|odom)$')
 
+# The frame and the instant a dropped message carried, from tf2_ros's one
+# format string (libtf2_ros): "Message Filter dropping message: frame '%s' at
+# time %.3f for reason '%s'".
+DROP_RE = re.compile(r"dropping message: frame '([^']+)' at time "
+                     r'([0-9]+\.[0-9]+)')
+
 STAMP_RE = re.compile(r'\[(1[0-9]{9}\.[0-9]+)\]')
 PROC_RE = re.compile(r'^\[([A-Za-z0-9_]+)-[0-9]+\]')
 
@@ -508,6 +514,20 @@ def frame_pair(line: str) -> str | None:
     return None
 
 
+def dropped_message(line: str):
+    """(frame, stamp in sim seconds) of the message a filter dropped, or
+    (None, None). Pure.
+
+    tf2_ros's MessageFilter writes one format, from libtf2_ros:
+        Message Filter dropping message: frame '%s' at time %.3f for reason ...
+    so a drop names the frame it could not transform and the instant it needed.
+    Attribution needs both; attribute_tf_drop.py takes them from here rather
+    than parsing the line a second time.
+    """
+    m = DROP_RE.search(line)
+    return (m.group(1), float(m.group(2))) if m else (None, None)
+
+
 def is_slam_output_pair(pair: str | None) -> bool:
     """True for <ns>/map <-> <ns>/odom, in either direction. Pure.
 
@@ -600,8 +620,10 @@ def count_health(lines, window: dict | None = None) -> dict:
                      else 'in' if in_window(t, window) else 'out')
             placed[key][where] += 1
             if where == 'in' and gates(key, pair):
+                frame, scan = dropped_message(line)
                 gated.append({'cat': key, 'stamp': t, 'proc': proc,
-                              'pair': pair, 'line': line.rstrip()})
+                              'pair': pair, 'line': line.rstrip(),
+                              'frame': frame, 'scan': scan})
 
     span = (last - first) if (first is not None and last is not None) else 0.0
     return {'counts': counts, 'by_proc': by_proc, 'by_pair': by_pair,
