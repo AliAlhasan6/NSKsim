@@ -23,6 +23,13 @@ no longer be blamed on the odometry.
 A run counts when all five hold. Nothing here is judged by eye; each is a
 number a script prints.
 
+**A criterion that could not be evaluated is not a passed one.** `run_health.py`
+exits 0 only when every gate that ran passed *and* none was skipped; a gate that
+was asked for and could not be judged — most often a bag too short to place the
+analysis window below — prints `NOT EVALUATED` and exits **3**, distinct from the
+1 a failure exits with. So nothing chaining on the exit status can read a short
+or incomplete bag as green.
+
 1. **COVERAGE ≤ 8.00 m.** The *true* trajectory passes within the lidar's
    maximum range of an outer boundary wall at least once. `run_health.py`
    reads the range from `BURGER_RANGE_MAX` in `swarm_sim.launch.py`, not from
@@ -38,22 +45,37 @@ number a script prints.
 2. **R9's two gated counts are 0** — Nav2/tf2 transform warnings and
    slam_toolbox message-filter drops. e0's baseline is 0.000/min over
    98.96 min, so the limit is 0.000 and the first warning fails the run.
-3. **R4 exact, inside the pose series**: 0 transforms falling *between* two
-   pose samples, worst |dxy| ≤ 1e-6 m, worst |dyaw| ≤ 1e-6 deg, worst |z| = 0.
+3. **R4 exact, inside the analysis window**: 0 transforms falling on no truth
+   stamp, worst |dxy| ≤ 1e-6 m, worst |dyaw| ≤ 1e-6 deg, worst |z| = 0.
 
-   The qualifier is the rule `e7e2abb` settled, and it is not a loosening.
-   Transforms whose stamps land outside the recorded pose series are the
-   **recording edge**, not a second publisher: rosbag2 subscribes to `/tf` and
-   to `/model/robot_K/pose` at different moments, and whichever it gets first
-   is a discovery race. `b2maps_relay1` recorded `/tf` 142.4 ms early and so
-   carried 3 transforms ahead of its first pose — with worst |dxy| 0.000 m
-   across the other 11 268. `b2maps_rehearsal5` won the race the other way and
-   has none. Those transforms are admitted only as a contiguous prefix or
-   suffix of the stream, within `EDGE_GRACE_PERIODS` (20) in both count and
-   span, and only while the pose series itself is gapless — conditions a
-   publisher that ran *during* the run cannot meet, because it would leave
-   transforms inside the series where nothing is forgiven. Poses carrying no
-   transform are printed and not gated; that is a rate question and R2 owns it.
+   The window is `[t_cmd, t_cmd + 1200 s]` in **sim** time, where `t_cmd` is the
+   first nonzero command on `/robot_K/cmd_vel` — the same command C3 and C4
+   place their windows on, computed by importing `check_run_bag.py`'s own
+   `first_nonzero_cmd` and `sim_window`, so R4 gates exactly the span step 3
+   cuts the map from. `--min-sim` sets the length and defaults to 1200; pass the
+   same number to both scripts.
+
+   **Inside the window nothing is forgiven** — every transform must land on a
+   truth stamp and match `inv(spawn) · truth` to 1e-6. That is the rule the gate
+   exists for: a surviving DiffDrive broadcast publishes *through* the run, so
+   its transforms land inside. **Outside the window nothing is gated**, because
+   no map is built from that time; the counts, the unmatched and the worst error
+   are printed for both ends anyway.
+
+   This replaces the `EDGE_GRACE_PERIODS` rule (`e7e2abb`), which gated the
+   recorder rather than the transform. rosbag2 subscribes to `/tf` and to
+   `/model/robot_K/pose` at different moments and whichever wins is a discovery
+   race: relay1 +142.4 ms (3 transforms), rehearsal5 −224 ms (none), k0…k4 32,
+   0, 20, 34 and 28 periods. Every one of those edges ended *before* the first
+   command — k0's at sim 57.150 against a command at 105.850 — and a pose hole
+   anywhere in the series withheld the grace outright, so k2 failed on a 200 ms
+   hole 14 s before its own first command while every compared transform agreed
+   to 0.000 m and 2.5e-14°.
+
+   Poses carrying no transform are printed and not gated; that is a rate
+   question and R2 owns it. A pose hole is likewise not itself a failure — it
+   fails only if it strands transforms inside the window, which is the same rule
+   as everything else there, not a special case.
 4. **R5 median wheel-vs-truth |dYaw| > 1°** — `/robot_K/odom` must still be
    independent wheel odometry, or arm D cannot be built from these bags.
 5. **The offline truth map has occupied cells on the outer boundary.**
@@ -324,9 +346,14 @@ python3 experiments/analysis/run_health.py \
     --log $LOGS/${RUN}_explore.log \
     --baseline-log $LOGS/b2maps_e0_explore.log \
     --bag $LOGS/$RUN --robot $K \
-    --truth-tf --tf-rates \
+    --truth-tf --tf-rates --min-sim 1200 \
     --save-map experiments/maps/${RUN}_online_robot$K
 ```
+
+`--min-sim 1200` is the same number step 1 gave `check_run_bag.py`, and for the
+same reason: it is the span the map is cut from, so it is the span R4 gates.
+It is also this script's default, and is written out here because the number is
+the recording rule rather than a setting.
 
 The baseline log is the run being replaced, and without it R9 reports but gates
 nothing.
@@ -335,7 +362,7 @@ nothing.
 |---|---|---|
 | R9 | 0 transform warnings, 0 slam drops | 0 and 0 over 12.14 min |
 | R2 | robot K ≈ 20 Hz, parked control ≈ 50 Hz | 20.001 / 50.001 Hz |
-| R4 | 0 transforms between two pose samples; any recording edge a short contiguous prefix/suffix | 14471 compared, 0 between, 0 leading and 0 trailing, 16 poses with no transform, worst dyaw 2.5e-14° |
+| R4 | inside `[t_cmd, t_cmd + 1200 s]` sim: 0 transforms on no truth stamp, worst \|dxy\| ≤ 1e-6 m, \|dyaw\| ≤ 1e-6°, \|z\| = 0. Outside it: reported, never gated | k2, the awkward one: 24000 compared inside the window with 0 unmatched and worst dyaw 2.5e-14°; before `t_cmd`, 721 transforms of which 20 on no truth stamp, and a 200 ms pose hole at sim 61.850 — all of it outside the window, none of it gated |
 | R5 | median \|dYaw\| > 1° | 81.1° |
 | R7 | writes the final online map | 11.95 × 8.00 m, 779 occupied |
 | COVERAGE | ≤ 8.00 m | rehearsal 5 read 5.621 m, which FAILED the 3.50 m gate it ran under and PASSES the 8.00 m one. The number is the rehearsal's; the verdict is not comparable across the change |

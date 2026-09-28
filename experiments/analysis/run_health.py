@@ -41,9 +41,20 @@ Usage (ROS sourced only for --bag; --log needs nothing):
     python3 experiments/analysis/run_health.py --bag B --robot 0 \
         --save-map experiments/maps/<name>
 
-Exit status is 0 when every gate that ran passed, 1 if any failed, 2 on an
-input error. A gate whose input was not given does not run and does not
-affect the status.
+Exit status:
+
+    0  every gate that ran passed, and none was skipped
+    1  a gate FAILED. Also what bag_overlap.die() exits with, so a bad input
+       and a bad run share a code; the output says which.
+    2  argparse rejected the command line
+    3  nothing failed, but a gate could not run. NOT EVALUATED is not a pass:
+       a bag too short to place the analysis window, or a log with no bag
+       beside it, must not be read as green by anything chaining on the
+       status.
+
+A gate whose input was not given does not run at all and does not affect the
+status -- that is different from a gate that was asked for and could not be
+evaluated, which is the 3 above.
 """
 
 from __future__ import annotations
@@ -58,6 +69,7 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'analysis'))
+sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'slam'))
 
 from bag_overlap import (  # noqa: E402
     NUM_ROBOTS,
@@ -66,6 +78,27 @@ from bag_overlap import (  # noqa: E402
     dist_to_nearest_wall,
     resolve_spawn_poses,
     world_walls_named,
+)
+
+# The analysis window is check_run_bag.py's window, imported rather than
+# rebuilt. first_nonzero_cmd defines what "commanded to move" means and
+# sim_window defines how a budget of SIM seconds after that command maps back
+# onto the bag's receive clock; C3 and C4 place their own windows with exactly
+# these two, and the cut that produces the offline map is C4's --start /
+# --duration. Reimplementing either here is how R4 would come to judge a
+# different span from the one the map is built from.
+#
+# Safe at module scope: check_run_bag imports only yaml and bag_overlap up
+# front and keeps rosbag2_py inside the functions that read a bag, so the log
+# half of this script still runs without a sourced ROS.
+from check_run_bag import (  # noqa: E402
+    CMD_EPS_ANGULAR,
+    CMD_EPS_LINEAR,
+    _ClockTrace,
+    first_nonzero_cmd,
+    read_clock_series,
+    read_prologue_series,
+    sim_window,
 )
 
 BURGER_SDF = Path('/opt/ros/jazzy/share/turtlebot3_gazebo/models/'
@@ -101,41 +134,46 @@ FAIL_FACTOR = 2.0
 # make_namespaced_burger_sdf failed to take.
 TF_RATE_TOL = 0.20
 
-# ── R4: how much of the recording edge is not a finding ──────────────────────
-# A transform whose stamp lies OUTSIDE the recorded pose series is not evidence
-# of a second publisher; it is usually evidence that rosbag2 attached to /tf
-# and to /model/robot_K/pose at different moments. b2maps_relay1's record log:
+# ── R4: the span of the run a map is actually built from ─────────────────────
+# Offline mapping replays from the first nonzero command onward, for the number
+# of SIM seconds the recording rule fixed. Before that command the robot is
+# sitting at spawn; after the cut is simulation no map ever reads. So the
+# window [t_cmd, t_cmd + MIN_SIM] in sim time is the only span whose transforms
+# a map can be wrong about, and it is what R4 gates.
+#
+# 1200 s is the b2maps rule and the longest of its four cuts
+# (experiments/runs/b2maps/README.md). --min-sim is the same knob as
+# check_run_bag.py's, by the same name and with the same meaning, so the two
+# scripts can be handed the same number and judge the same span. Only the
+# DEFAULT differs: check_run_bag's is still its original 2400 and the b2maps
+# README tells people to pass 1200 to it explicitly. This default IS that
+# instruction, not a second knob.
+#
+# What this replaces, and why. R4 used to gate every recorded transform from
+# the first one in the bag, forgiving 20 PosePublisher periods at each end. The
+# leading edge is not a property of the run: it is the gap between rosbag2
+# subscribing to /tf and to /model/robot_K/pose. b2maps_relay1's record log --
 #
 #     [1789943096.804587] Subscribed to topic '/tf'
 #     [1789943096.947029] Subscribed to topic '/model/robot_0/pose'
 #
-# 142.4 ms apart, which at the PosePublisher's 20 Hz is 2.85 sample periods --
-# and exactly 3 transforms in that bag carry stamps (75.250, 75.300, 75.350)
-# earlier than the first recorded pose (75.400). The order is a discovery race
-# and swings both ways run to run: e0t +44.6 ms, e0 +2824 ms, and rehearsal5
-# subscribed to the pose topic FIRST, at -224 ms, so it has no leading edge at
-# all. Gating on it gates the recorder, not the transform.
+# 142.4 ms, which at 20 Hz is 2.85 sample periods, and exactly 3 transforms in
+# that bag carry stamps (75.250, 75.300, 75.350) earlier than the first
+# recorded pose (75.400). The race swings both ways and its width is arbitrary:
+# rehearsal5 -224 ms (pose first, no edge at all), e0t +44.6 ms, relay1
+# +142.4 ms, b2maps_k0..k4 0, 20, 28, 32 and 34 periods, e0 +2824 ms. Gating on
+# that gated the recorder. Worse, a pose hole anywhere in the series withheld
+# the grace entirely, so k2 failed on a 200 ms hole at sim 61.850 -- 14 s
+# before its first command, in a run whose every compared transform agreed
+# to 0.000e+00 m and 2.5e-14 deg.
 #
-# The grace is a count and a span, both in PosePublisher periods, at each end.
-# 20 periods is 1.0 s at 20 Hz. Measured against the runs R4 actually applies
-# to -- the truth_odom_tf ones -- that is about seven times the widest edge
-# seen: relay1 3, e0t 1, rehearsal5 0.
-#
-# It is NOT seven times every attach gap this rig has produced. b2maps_e0 took
-# 2824 ms to subscribe, which would be 57 periods; R4 does not run on it (e0 is
-# the DiffDrive run being replaced, so it has no truth transform to check), but
-# a truth run that attached that slowly WOULD fail here. That is the intended
-# behaviour and not a number to raise on sight: an edge that long is no longer
-# a negligible artefact, and the record log beside the bag says in two lines
-# whether the recorder or a publisher produced it.
-#
-# The bound is deliberately belt-and-braces. Contiguity and an unbroken pose
-# series already make a second publisher implausible here, and R2 catches one
-# outright by reading the 70 Hz sum on the pair. What the bound adds is that
-# "outside the pose series" cannot become an unexamined place to put
-# transforms. The case R4 exists for puts them INSIDE the series, where the
-# comparison is unchanged and unmatched is still a hard failure.
-EDGE_GRACE_PERIODS = 20
+# Nothing is forgiven inside the window now, and nothing is gated outside it.
+# The case R4 exists for -- a surviving DiffDrive broadcast -- publishes
+# THROUGH the run, so it lands inside, where a transform on no truth stamp is
+# still a hard failure. A publisher confined to the time before the first
+# command cannot reach a map; and R2 catches one that ran the whole bag by
+# reading the 70 Hz sum on the pair.
+MIN_SIM_S = 1200.0
 
 # A truth sample is MISSING, rather than merely jittered, when the step to the
 # next one exceeds this many nominal periods. b2maps_relay1's pose series steps
@@ -509,38 +547,128 @@ def read_truth_tf_series(bag: Path, robot: int):
     return truth, tf_pairs, wheel, other_publishers
 
 
-def split_at_truth_span(tf_pairs, truth):
-    """Recorded transforms partitioned by stamp against the truth series' span.
+def window_from(sim_start: float, min_sim: float, t_cmd_recv: float,
+                t_end_recv: float, sim_end: float, cmd_topic: str) -> dict:
+    """The analysis window, in both of the clocks this file needs. Pure.
+
+    SIM nanoseconds, because that is what a transform's header stamp carries
+    and R4 compares stamps. RECEIVE seconds, because a ROS log line carries a
+    wall-clock stamp off the same machine clock the recorder stamped messages
+    with, and that is what R9 has to place a warning in.
+
+    The two spans are not quite the same length. sim_hi is exactly
+    t_cmd + min_sim; recv_hi is the receive time of the first /clock whose
+    VALUE reached it, so the wall span can run up to one clock step (10 ms at
+    these runs' 100 Hz) past the sim span. C4 already gates that overshoot
+    against SIM_SPAN_SLACK_S; nothing here is decided at that resolution.
+
+    round(), not int(): sim_start arrives as a float built from a Clock's
+    sec + nanosec/1e9, and truncating it could land a transform stamped at
+    exactly t_cmd outside its own window. A double holds sim 5000 s to about
+    1e-12 s, so the rounded nanosecond is the one the clock published.
+    """
+    lo_ns = round(sim_start * 1e9)
+    return {
+        'sim_lo': sim_start,
+        'sim_hi': sim_start + min_sim,
+        'sim_lo_ns': lo_ns,
+        'sim_hi_ns': lo_ns + round(min_sim * 1e9),
+        'sim_end': sim_end,
+        'recv_lo': t_cmd_recv,
+        'recv_hi': t_end_recv,
+        'min_sim': min_sim,
+        'cmd_topic': cmd_topic,
+        'src': (f'the first |v| > {CMD_EPS_LINEAR} m/s or '
+                f'|w| > {CMD_EPS_ANGULAR} rad/s on {cmd_topic}'),
+    }
+
+
+def read_analysis_window(bag: Path, robot: int, min_sim: float):
+    """(window, None) for one bag, or (None, why it could not be placed).
+
+    Both halves are check_run_bag.py's -- see the import. _ClockTrace is what
+    lets the failure say how much sim the bag DID hold after the command,
+    which is the one number a short bag most needs reported, and it is the same
+    use C4 puts it to.
+    """
+    cmd_topic = f'/robot_{robot}/cmd_vel'
+    cmds, _poses = read_prologue_series(bag, robot)
+    t_cmd = first_nonzero_cmd(cmds)
+    if t_cmd is None:
+        return None, (f'no command over {CMD_EPS_LINEAR} m/s or '
+                      f'{CMD_EPS_ANGULAR} rad/s anywhere on {cmd_topic}, so '
+                      'this run never began exploring and has no window')
+
+    trace = _ClockTrace(read_clock_series(bag), t_cmd)
+    found = sim_window(trace, t_cmd, min_sim)
+    if found is None:
+        have = trace.sim_available
+        if have is None:
+            return None, ('no /clock arrived at or before the first command, '
+                          'so there is no sim time to place the window from')
+        return None, (f'/clock never advances {min_sim:.0f} s of sim after '
+                      f'the first command: the bag holds {have:.3f} s, short '
+                      f'by {min_sim - have:.3f} s')
+
+    sim_start, t_end, sim_end = found
+    return window_from(sim_start, min_sim, t_cmd, t_end, sim_end,
+                       cmd_topic), None
+
+
+def split_at_window(tf_pairs, lo_ns: int, hi_ns: int):
+    """Recorded transforms partitioned by stamp against the analysis window.
 
     Returns (before, inside, after), each a list of (stream index, row), where
     the stream index is the transform's position in the order it was recorded.
-    The indices are what makes the contiguity test below possible: an edge is
-    only an edge if it sits at an END of the stream.
+    Both bounds are inclusive: a transform stamped exactly at the first command
+    is inside the span the map is built from.
 
     Pure. `tf_pairs` must be in recorded order, which read_truth_tf_series
     guarantees by appending as it reads.
     """
-    if not truth or not tf_pairs:
-        return [], [], []
-    lo, hi = min(truth), max(truth)
     before, inside, after = [], [], []
     for i, row in enumerate(tf_pairs):
         ns = row[0]
-        bucket = before if ns < lo else after if ns > hi else inside
+        bucket = before if ns < lo_ns else after if ns > hi_ns else inside
         bucket.append((i, row))
     return before, inside, after
+
+
+def compare_window(rows, truth, anchor):
+    """(matched, unmatched, worst |dxy| m, worst |dyaw| deg, worst |z| m) for
+    one population of transforms against the truth poses. Pure.
+
+    A transform whose stamp is not one the pose series carries is UNMATCHED and
+    contributes to no maximum: there is nothing to compare it against. The node
+    copies the pose's stamp verbatim, so inside the window that is the finding
+    R4 exists for, and outside it is the recorder's attach order.
+
+    One function for both populations so the numbers printed for the ungated
+    one are the same arithmetic as the numbers the gate is decided on.
+    """
+    matched = unmatched = 0
+    worst_xy = worst_yaw = worst_z = 0.0
+    for _i, (ns, x, y, yaw, z) in rows:
+        want = truth.get(ns)
+        if want is None:
+            unmatched += 1
+            continue
+        matched += 1
+        ex, ey, eyaw = _inv_compose(anchor, want)
+        worst_xy = max(worst_xy, abs(x - ex), abs(y - ey))
+        worst_yaw = max(worst_yaw, abs(math.degrees(_wrap(yaw - eyaw))))
+        worst_z = max(worst_z, abs(z))
+    return matched, unmatched, worst_xy, worst_yaw, worst_z
 
 
 def truth_gaps(truth, truth_hz: float):
     """Adjacent truth stamps more than TRUTH_GAP_PERIODS apart. Pure.
 
-    This is what separates the two readings of "the transform's stamp is
-    outside the pose series". If the series is unbroken from its first sample
-    to its last, then outside means the recorder had not attached yet. If the
-    series has holes, poses went missing DURING the run and an unmatched
-    transform can no longer be attributed to the edge -- so the edge grace
-    below is withheld entirely rather than applied to a series that cannot
-    support it.
+    Reported, never gated. R4 judges the transform, not the pose stream: a hole
+    with no transform stranded in it is a question about the rate, and R2 owns
+    rates. A hole that DOES strand transforms inside the analysis window fails
+    R4 already, as transforms on no truth stamp -- which is the same rule
+    everything else inside the window is held to, not a special case for gaps.
     """
     period_ns = 1e9 / truth_hz
     ks = sorted(truth)
@@ -548,40 +676,9 @@ def truth_gaps(truth, truth_hz: float):
             if (b - a) > TRUTH_GAP_PERIODS * period_ns]
 
 
-def judge_edge(edge, n_tf: int, truth_hz: float, leading: bool):
-    """(ok, reason, span_periods) for one end's out-of-span transforms. Pure.
-
-    Admissible only as a contiguous run at its own end of the stream, no longer
-    than EDGE_GRACE_PERIODS in both count and span. A publisher that ran during
-    the run cannot satisfy the first condition, and one that burst inside the
-    attach window cannot satisfy the second.
-    """
-    if not edge:
-        return True, 'none', 0.0
-    idx = [i for i, _row in edge]
-    want = (list(range(len(edge))) if leading
-            else list(range(n_tf - len(edge), n_tf)))
-    where = 'prefix' if leading else 'suffix'
-    if idx != want:
-        return (False,
-                f'not a contiguous {where} of the recorded stream (indices '
-                f'{idx[0]}..{idx[-1]} of {n_tf}), so these were published '
-                'during the run, not before the recorder attached', 0.0)
-
-    period_ns = 1e9 / truth_hz
-    stamps = [row[0] for _i, row in edge]
-    span = (max(stamps) - min(stamps)) / period_ns + 1.0
-    if len(edge) > EDGE_GRACE_PERIODS:
-        return (False, f'{len(edge)} transforms is more than the '
-                       f'{EDGE_GRACE_PERIODS}-period grace', span)
-    if span > EDGE_GRACE_PERIODS:
-        return (False, f'spans {span:.1f} periods, more than the '
-                       f'{EDGE_GRACE_PERIODS}-period grace', span)
-    return True, 'within grace', span
-
-
 def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel,
-                    truth_hz: float) -> bool:
+                    truth_hz: float, window: dict | None,
+                    window_why: str | None = None) -> bool | None:
     """R4 and R5 together: the transform IS the truth, and the wheel odometry
     is still the wheel's.
 
@@ -592,25 +689,25 @@ def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel,
     by something else -- a surviving DiffDrive broadcast being the case this
     guards. That comparison, and its 1e-6 tolerances, are unchanged.
 
-    What changed (2026-09-21) is which transforms it is asked of. The rule used
-    to require that EVERY recorded transform land on a pose stamp, and
-    b2maps_relay1 failed it on 3 of 11271 while the other 11268 agreed to
-    0.000 m and 2.5e-14 deg. Those 3 were the first three in the stream,
-    contiguous, stamped 75.250/75.300/75.350 against a first recorded pose of
-    75.400 -- the window in which the recorder held a /tf subscription and not
-    yet a /model/robot_0/pose one. See EDGE_GRACE_PERIODS for the evidence.
-
-    So the transforms are split at the pose series' span. INSIDE it the old
-    rule stands unweakened: land on a stamp, match it to 1e-6, or fail. OUTSIDE
-    it they are the recording edge, and are admitted only if they sit at an end
-    of the stream, are short, and the pose series itself has no holes -- three
-    conditions a second publisher cannot meet, because a publisher that ran
-    during the run leaves transforms inside the span, where nothing here
-    forgives them.
+    What changed (2026-09-28) is WHICH transforms it is asked of: the ones
+    inside the analysis window, [t_cmd, t_cmd + --min-sim] in sim time, which
+    is the span the offline map is built from. Inside it the rule is absolute:
+    land on a truth stamp, match it to 1e-6, or fail, with no grace at all.
+    Outside it every number is still computed and printed, and none of it is
+    gated: no map reads that time. See MIN_SIM_S for what this replaces and for
+    the measured evidence that the old edge rule was gating the recorder's
+    subscription order rather than the transform.
 
     Poses carrying no transform are counted and printed but not gated: a
     transform that was never published is a question about the rate, and R2
     already answers that against /clock.
+
+    Without a window -- no cmd_vel, no /clock, no nonzero command, or a bag too
+    short to hold --min-sim of sim after the command -- R4 returns None, NOT
+    EVALUATED, after printing the ungated comparison. It does not fall back to
+    judging the whole bag: that is the rule this change removed. R5 needs no
+    window, so a failing R5 still returns False and cannot hide behind a
+    missing one.
 
     R5 is the C4 discriminator from rewrite_odom_from_truth, pointed the other
     way: if /robot_K/odom had quietly become a copy of the truth, the two yaw
@@ -619,6 +716,24 @@ def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel,
     print('R4 THE TRANSFORM IS THE TRUTH')
     print(f'  anchor A = spawn of robot_{robot}: ({anchor[0]:+.4f}, '
           f'{anchor[1]:+.4f}, {math.degrees(anchor[2]):+.4f} deg)')
+    if window is None:
+        print(f'  NO ANALYSIS WINDOW: {window_why}')
+        print('  the numbers below are over the whole recording and are NOT '
+              'gated')
+    else:
+        print(f'  analysis window  sim [{window["sim_lo"]:.3f}, '
+              f'{window["sim_hi"]:.3f}]   (t_cmd + {window["min_sim"]:g} s, '
+              '--min-sim)')
+        print(f'      t_cmd        {window["sim_lo"]:.3f} s sim, bag receive '
+              f'{window["recv_lo"]:.6f}')
+        print(f'                   {window["src"]}')
+        print('                   -- check_run_bag.first_nonzero_cmd, the '
+              'command C3 and C4')
+        print('                   place their own windows on, so this is the '
+              'span the map is cut to')
+        print(f'      wall span    [{window["recv_lo"]:.6f}, '
+              f'{window["recv_hi"]:.6f}]  (the same window on the log\'s '
+              'clock)')
     print(f'  truth poses {len(truth)}   recorded transforms {len(tf_pairs)}')
     if not tf_pairs:
         print(f'  no robot_{robot}/odom -> robot_{robot}/base_footprint in '
@@ -638,59 +753,47 @@ def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel,
           f'{truth_hz:g} Hz ({period_ms:g} ms)')
     for a, b in gaps[:5]:
         print(f'      {(b - a) / 1e6:.1f} ms with no pose, after '
-              f'{a / 1e9:.3f} s sim')
+              f'{a / 1e9:.3f} s sim{_where(a, window)}')
 
-    before, inside, after = split_at_truth_span(tf_pairs, truth)
+    if window is None:
+        rows = list(enumerate(tf_pairs))
+        matched, unmatched, worst_xy, worst_yaw, worst_z = compare_window(
+            rows, truth, anchor)
+        _print_comparison('  ', matched, unmatched, worst_xy, worst_yaw,
+                          worst_z)
+        ok = None
+    else:
+        before, inside, after = split_at_window(tf_pairs, window['sim_lo_ns'],
+                                                window['sim_hi_ns'])
+        matched, unmatched, worst_xy, worst_yaw, worst_z = compare_window(
+            inside, truth, anchor)
+        print('  INSIDE the window -- gated')
+        _print_comparison('    ', matched, unmatched, worst_xy, worst_yaw,
+                          worst_z)
+        print('  OUTSIDE the window -- reported, never gated: no map is built '
+              'from this time')
+        for label, rows in (('before t_cmd    ', before),
+                            ('after the window', after)):
+            _m, um, wxy, wyaw, wz = compare_window(rows, truth, anchor)
+            print(f'    {label}  {len(rows):>7} transforms, {um} on no truth '
+                  f'stamp, worst |dxy| {wxy:.3e} m, |dyaw| {wyaw:.3e} deg, '
+                  f'|z| {wz:.3e} m')
+            if rows:
+                stamps = [row[0] for _i, row in rows]
+                print(f'                        {min(stamps) / 1e9:.3f} .. '
+                      f'{max(stamps) / 1e9:.3f} s sim')
+        ok = (unmatched == 0 and matched > 0 and worst_xy <= 1e-6
+              and worst_yaw <= 1e-6 and worst_z == 0.0)
 
-    unmatched = 0
-    worst_xy = worst_yaw = worst_z = 0.0
-    for _i, (ns, x, y, yaw, z) in inside:
-        want = truth.get(ns)
-        if want is None:
-            unmatched += 1
-            continue
-        ex, ey, eyaw = _inv_compose(anchor, want)
-        worst_xy = max(worst_xy, abs(x - ex), abs(y - ey))
-        worst_yaw = max(worst_yaw, abs(math.degrees(_wrap(yaw - eyaw))))
-        worst_z = max(worst_z, abs(z))
-
-    matched = len(inside) - unmatched
-    print(f'  compared      {matched:>9}  transforms inside the pose series')
-    print(f'  worst |dxy|   {worst_xy:.3e} m    (tolerance 1e-6)')
-    print(f'  worst |dyaw|  {worst_yaw:.3e} deg  (tolerance 1e-6)')
-    print(f'  worst |z|     {worst_z:.3e} m    (must be 0: planar transform)')
-    print(f'  BETWEEN two pose samples      {unmatched:>9}  '
-          '(must be 0: another publisher)')
-
-    lead_ok, lead_why, lead_span = judge_edge(before, len(tf_pairs), truth_hz,
-                                              leading=True)
-    trail_ok, trail_why, trail_span = judge_edge(after, len(tf_pairs),
-                                                 truth_hz, leading=False)
-    print(f'  at the recording edge         '
-          f'{len(before):>9} leading, {len(after)} trailing  '
-          f'(grace {EDGE_GRACE_PERIODS} periods each)')
-    for label, edge, why, span, passed in (
-            ('leading ', before, lead_why, lead_span, lead_ok),
-            ('trailing', after, trail_why, trail_span, trail_ok)):
-        if not edge:
-            continue
-        stamps = [row[0] for _i, row in edge]
-        print(f'      {label}  {min(stamps) / 1e9:.3f} .. '
-              f'{max(stamps) / 1e9:.3f} s sim, {len(edge)} transforms over '
-              f'{span:.1f} periods')
-        print(f'                {"ok" if passed else "FAIL"}: {why}')
-    if gaps and (before or after):
-        print('      the pose series has holes, so an out-of-span transform '
-              'cannot be charged to the recorder: grace WITHHELD')
-
-    orphans = len(set(truth) - {row[0] for row in tf_pairs})
-    print(f'  poses with no transform       {orphans:>9}  '
+    orphans = sorted(set(truth) - {row[0] for row in tf_pairs})
+    print(f'  poses with no transform       {len(orphans):>9}  '
           '(reported, not gated: a missing transform is R2\'s rate question)')
+    if orphans and window is not None:
+        n_in = sum(1 for ns in orphans
+                   if window['sim_lo_ns'] <= ns <= window['sim_hi_ns'])
+        print(f'      of those, inside the window {n_in}')
 
-    edges_ok = lead_ok and trail_ok and not (gaps and (before or after))
-    ok = (unmatched == 0 and matched > 0 and worst_xy <= 1e-6
-          and worst_yaw <= 1e-6 and worst_z == 0.0 and edges_ok)
-    print(f'  -> {"PASS" if ok else "FAIL"}\n')
+    print(f'  -> {_verdict(ok)}\n')
 
     print('R5 THE WHEEL ODOMETRY IS STILL THE WHEEL\'S')
     if not wheel:
@@ -718,7 +821,40 @@ def report_truth_tf(robot: int, anchor, truth, tf_pairs, wheel,
     print('  need median > 1 deg (else the wheel stream is not independent)')
     wheel_ok = median > 1.0
     print(f'  -> {"PASS" if wheel_ok else "FAIL"}\n')
-    return ok and wheel_ok
+    # ok is None when no window could be placed, and R5 does not need one. A
+    # failing R5 is still a failure; otherwise the pair is NOT EVALUATED,
+    # because R4 -- the gate this bag was read for -- has not been answered.
+    if not wheel_ok:
+        return False
+    return ok
+
+
+def _print_comparison(indent: str, matched: int, unmatched: int,
+                      worst_xy: float, worst_yaw: float,
+                      worst_z: float) -> None:
+    """The five numbers R4 is decided on, in one shape wherever they appear."""
+    print(f'{indent}compared      {matched:>9}  transforms')
+    print(f'{indent}worst |dxy|   {worst_xy:.3e} m    (tolerance 1e-6)')
+    print(f'{indent}worst |dyaw|  {worst_yaw:.3e} deg  (tolerance 1e-6)')
+    print(f'{indent}worst |z|     {worst_z:.3e} m    (must be 0: planar '
+          'transform)')
+    print(f'{indent}on no truth stamp {unmatched:>5}  (must be 0: another '
+          'publisher)')
+
+
+def _where(stamp_ns: int, window: dict | None) -> str:
+    """"  (before t_cmd)" and friends, for a sim stamp. '' without a window."""
+    if window is None:
+        return ''
+    if stamp_ns < window['sim_lo_ns']:
+        return '  (before t_cmd)'
+    if stamp_ns > window['sim_hi_ns']:
+        return '  (after the window)'
+    return '  (INSIDE the window)'
+
+
+def _verdict(ok: bool | None) -> str:
+    return {True: 'PASS', False: 'FAIL', None: 'NOT EVALUATED'}[ok]
 
 
 def _wrap(rad: float) -> float:
@@ -1205,6 +1341,21 @@ def report_coverage(bag: Path, robot: int, xy, rects, reach: float,
     return ok
 
 
+def summarise(results: dict) -> int:
+    """The exit code for a set of gate verdicts. Pure.
+
+    NOT EVALUATED is not a pass and not a failure: it is its own outcome with
+    its own code, because a script chaining on the status must not read a bag
+    that could not be judged as a green one. A FAIL outranks a skip -- if
+    anything failed, 1 is the louder and truer answer.
+    """
+    if any(v is False for v in results.values()):
+        return 1
+    if any(v is None for v in results.values()):
+        return 3
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--log', type=Path,
@@ -1242,6 +1393,13 @@ def main() -> int:
     ap.add_argument('--spawn-rev', default='08617b2',
                     help='git rev whose DOT_POSES gives the anchor '
                          '(default %(default)s, the b18/b2maps era)')
+    ap.add_argument('--min-sim', type=float, default=MIN_SIM_S,
+                    dest='min_sim',
+                    help='SIM seconds after robot K\'s first nonzero command '
+                         'that R4 gates: the span the offline map is built '
+                         'from (default %(default)s, the b2maps cut). Same '
+                         'name and meaning as check_run_bag.py\'s --min-sim, '
+                         'whose own default is 2400.')
     args = ap.parse_args()
 
     if not args.log and not args.bag:
@@ -1282,6 +1440,14 @@ def main() -> int:
 
     results = {}
 
+    # Read before any of the heavy passes: it costs ~4 s (cmd_vel, then /clock
+    # only as far as the window's end), and a bag that cannot place a window
+    # should say so in seconds rather than after a full read of /tf.
+    window = window_why = None
+    if args.bag and args.truth_tf:
+        window, window_why = read_analysis_window(args.bag, args.robot,
+                                                  args.min_sim)
+
     if args.log:
         found = count_health(read_log(args.log))
         rates = per_minute(found['counts'], found['span_s'])
@@ -1315,7 +1481,7 @@ def main() -> int:
         truth, tf_pairs, wheel, _ = read_truth_tf_series(args.bag, args.robot)
         results['R4/R5'] = report_truth_tf(
             args.robot, (sx, sy, 0.0), truth, tf_pairs, wheel,
-            facts['truth_hz'])
+            facts['truth_hz'], window, window_why)
 
     if args.bag and args.save_map:
         results['R7'] = report_map(args.robot,
@@ -1332,13 +1498,14 @@ def main() -> int:
     skipped = [k for k, v in results.items() if v is None]
     print('=' * 70)
     for k, v in results.items():
-        print(f'  {k:<10}'
-              + {True: 'PASS', False: 'FAIL', None: 'NOT EVALUATED'}[v])
+        print(f'  {k:<10}{_verdict(v)}')
     if skipped and not failed:
         print(f'\nno gate failed, but {", ".join(skipped)} could not run -- '
-              'the run is not verified')
+              'the run is not verified, and this is not a pass')
+    code = summarise(results)
+    print(f'exit {code}')
     print('=' * 70)
-    return 1 if failed else 0
+    return code
 
 
 if __name__ == '__main__':

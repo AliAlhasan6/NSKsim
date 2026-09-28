@@ -24,6 +24,7 @@ import functools
 import importlib.util
 import math
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +44,12 @@ def _load():
 
 
 rh = _load()
+
+# R4's analysis window is check_run_bag.py's window -- run_health imports
+# first_nonzero_cmd and sim_window from it rather than restating either. Taken
+# out of sys.modules, not loaded again by location: a second copy of the module
+# would make the identity assertions below pass against nothing.
+checker = sys.modules['check_run_bag']
 
 # ── the stock TurtleBot3 model, and what to do without it ────────────────────
 # run_health reads three numbers out of files: the lidar range and the two
@@ -432,15 +439,79 @@ def test_inv_compose_matches_the_hand_calculated_vector():
 
 PERIOD_NS = 50_000_000  # 1 / TRUTH_HZ, the spacing _truth_driven() uses
 
+# ── the analysis window R4 gates ─────────────────────────────────────────────
+# [t_cmd, t_cmd + --min-sim] in SIM time: the span the offline map is built
+# from. _truth_driven() runs sim 1.000 .. 10.950 s, so two windows cover every
+# case below.
+#
+#   FULL_WINDOW  the whole series. The default, so that every test about the
+#                COMPARISON keeps saying what it always said.
+#   MID_WINDOW   t_cmd at sample 20 (sim 2.000), 5 s long, closing at sample
+#                120 (sim 7.000). 20 samples sit before t_cmd and 79 after the
+#                window, which is what makes "outside" testable at all.
+SERIES_LO, SERIES_HI = 1.0, 10.95
+T_CMD_I, WINDOW_S = 20, 5.0
+BAG_T_CMD = 1790203872.243517       # b2maps_k2's, whose window shape this is
 
-def _r4(truth, tf_pairs, wheel, anchor=SPAWN0):
+
+def _window(sim_start, min_sim, robot=0):
+    """A window as read_analysis_window() builds it, without a bag.
+
+    The receive-clock half is R9's, not R4's, so any plausible pair of epoch
+    stamps does here; these are b2maps_k2's t_cmd and a 0.97 RTF over the
+    window, which is what that run measured.
+    """
+    return rh.window_from(sim_start, min_sim, BAG_T_CMD,
+                          BAG_T_CMD + min_sim / 0.97, sim_start + min_sim,
+                          f'/robot_{robot}/cmd_vel')
+
+
+FULL_WINDOW = _window(SERIES_LO, SERIES_HI - SERIES_LO)
+MID_WINDOW = _window(SERIES_LO + T_CMD_I * PERIOD_NS / 1e9, WINDOW_S)
+
+
+def _r4(truth, tf_pairs, wheel, anchor=SPAWN0, window=FULL_WINDOW, why=None):
     """report_truth_tf at the PosePublisher rate the synthetic series runs at.
 
     TRUTH_HZ is the literal;
     test_the_transform_rates_come_from_the_files_that_set_them is what keeps it
     honest against swarm_sim.launch.py.
     """
-    return rh.report_truth_tf(0, anchor, truth, tf_pairs, wheel, TRUTH_HZ)
+    return rh.report_truth_tf(0, anchor, truth, tf_pairs, wheel, TRUTH_HZ,
+                              window, why)
+
+
+def test_the_window_is_exactly_min_sim_long_in_nanoseconds():
+    """The bound a transform's header stamp is compared against.
+
+    Both ends in integer nanoseconds, because that is what the stamp carries
+    and because a float sim_hi would put a transform stamped at the closing
+    instant on whichever side the last bit fell.
+    """
+    w = _window(75.82, 1200.0)                      # b2maps_k2's own window
+
+    assert w['sim_lo_ns'] == 75_820_000_000
+    assert w['sim_hi_ns'] - w['sim_lo_ns'] == 1_200_000_000_000
+    assert w['sim_hi'] == pytest.approx(1275.82)
+    assert w['recv_lo'] == BAG_T_CMD
+    # The provenance travels with the window: the topic and both thresholds,
+    # so the report can say where t_cmd came from without retyping them.
+    assert '/robot_0/cmd_vel' in w['src']
+    assert str(rh.CMD_EPS_LINEAR) in w['src']
+    assert str(rh.CMD_EPS_ANGULAR) in w['src']
+
+
+def test_the_window_thresholds_are_check_run_bags_own():
+    """Not a second opinion about what "commanded to move" means.
+
+    C3, C4 and R4 have to place their windows on the same command, or R4 gates
+    a span the map was not cut to. The import is the mechanism; this is the
+    assertion that it is still an import.
+    """
+    assert rh.first_nonzero_cmd is checker.first_nonzero_cmd
+    assert rh.sim_window is checker.sim_window
+    assert (rh.CMD_EPS_LINEAR, rh.CMD_EPS_ANGULAR) == (
+        checker.CMD_EPS_LINEAR, checker.CMD_EPS_ANGULAR)
 
 
 def test_a_correct_truth_driven_run_passes_r4_and_r5():
@@ -456,30 +527,51 @@ def test_the_wrong_anchor_fails_r4():
     assert _r4(truth, tf_pairs, wheel, anchor=(0.0, 0.90, 0.0)) is False
 
 
-def test_a_transform_between_two_pose_samples_fails_r4():
-    """Every transform the node publishes carries the pose's own stamp, so a
-    transform on any other stamp came from somewhere else -- a surviving
-    DiffDrive broadcast being the case this guards.
+def test_a_transform_between_two_pose_samples_inside_the_window_fails_r4():
+    """THE discriminator, and the one case the window must not weaken.
 
-    The foreign stamp has to sit INSIDE the pose series, which is where a
-    publisher that ran during the run would put it. Outside the series is the
-    recording edge, and b2maps_relay1 showed that is the recorder's attach
-    order rather than a publisher -- see EDGE_GRACE_PERIODS.
+    Every transform the node publishes carries the pose's own stamp, so a
+    transform on any other stamp came from somewhere else -- a surviving
+    DiffDrive broadcast being what this guards. Such a publisher runs THROUGH
+    the run, so it lands inside the window, where nothing is forgiven.
+
+    Asserted against both windows deliberately: the same fixture fails whether
+    the window is the whole series or the 5 s in the middle of it, so the
+    change of rule cannot be what makes it fail.
     """
     truth, tf_pairs, wheel = _truth_driven()
     mid = tf_pairs[100][0] + PERIOD_NS // 2      # between samples 100 and 101
     tf_pairs.insert(101, (mid, 0.0, 0.0, 0.0, 0.0))
+
     assert _r4(truth, tf_pairs, wheel) is False
+    assert _r4(truth, tf_pairs, wheel, window=MID_WINDOW) is False
 
 
-def test_a_tilted_transform_fails_r4():
+def test_a_tilted_transform_inside_the_window_fails_r4():
     """z must stay 0: base_footprint is the ground-projected frame, and a
     non-planar transform would tilt every scan drawn through it.
     """
     truth, tf_pairs, wheel = _truth_driven()
+    ns, x, y, t, _z = tf_pairs[100]
+    tf_pairs[100] = (ns, x, y, t, 0.01)
+    assert _r4(truth, tf_pairs, wheel) is False
+    assert _r4(truth, tf_pairs, wheel, window=MID_WINDOW) is False
+
+
+def test_the_same_tilt_before_t_cmd_is_reported_not_gated():
+    """The mirror of the test above, and the whole change in two lines: one
+    perturbation, judged by WHERE it is.
+
+    Sample 5 is sim 1.250, before MID_WINDOW's t_cmd at 2.000. No map is built
+    from that time -- the robot has not been commanded to move yet -- so a
+    tilted transform there is printed and not gated.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
     ns, x, y, t, _z = tf_pairs[5]
     tf_pairs[5] = (ns, x, y, t, 0.01)
-    assert _r4(truth, tf_pairs, wheel) is False
+
+    assert _r4(truth, tf_pairs, wheel, window=MID_WINDOW) is True
+    assert _r4(truth, tf_pairs, wheel) is False      # inside FULL_WINDOW
 
 
 def test_no_transforms_at_all_fails_r4():
@@ -496,12 +588,15 @@ def test_no_truth_poses_at_all_fails_r4():
     assert _r4({}, tf_pairs, wheel) is False
 
 
-# ── R4's recording edge ──────────────────────────────────────────────────────
-# b2maps_relay1 failed the old rule on 3 of 11271 transforms while the other
-# 11268 matched to 0.000 m and 2.5e-14 deg. The 3 were the first three in the
-# stream, stamped one pose period apart, all before the first RECORDED pose:
-# rosbag2 subscribed to /tf 142.4 ms before /model/robot_0/pose. These tests
-# pin the line between that and the publisher R4 actually hunts.
+# ── outside the window: reported, never gated ────────────────────────────────
+# Four of the five B2 runs failed R4 on transforms recorded before their robot
+# was ever commanded to move. The count is a property of the recorder, not of
+# the run: rosbag2 subscribes to /tf and to /model/robot_K/pose at different
+# moments, and whichever wins is a discovery race -- relay1 +142.4 ms (3
+# transforms), rehearsal5 -224 ms (none), k0/k1/k2/k3/k4 32, 0, 20, 34 and 28
+# periods. Every one of those edges ended before the first command: k0's at sim
+# 57.150 against a command at 105.850. No map is built from that time, so
+# nothing there is gated now. These tests pin that, and pin what still fails.
 
 def _leading(truth, tf_pairs, n=3, step=PERIOD_NS):
     """n transforms before the pose series, at its own rate, as the recorder's
@@ -512,17 +607,74 @@ def _leading(truth, tf_pairs, n=3, step=PERIOD_NS):
     return lead + tf_pairs
 
 
-def test_three_leading_transforms_are_the_recording_edge_and_pass():
-    """relay1's exact shape: 3 transforms one period apart ahead of the first
-    recorded pose, the pose series itself unbroken.
+def test_unmatched_transforms_before_t_cmd_pass_and_are_reported(capsys):
+    """k0's shape, which the old rule failed: 32 transforms on no truth stamp,
+    ahead of the first recorded pose and well before the first command.
     """
     truth, tf_pairs, wheel = _truth_driven()
-    assert _r4(truth, _leading(truth, tf_pairs), wheel) is True
+
+    assert _r4(truth, _leading(truth, tf_pairs, n=32), wheel,
+               window=MID_WINDOW) is True
+    out = capsys.readouterr().out
+    assert re.search(r'before t_cmd\s+52 transforms, 32 on no truth stamp',
+                     out)
+    assert 'never gated: no map is built from this time' in out
+
+
+def test_a_long_leading_edge_is_no_longer_a_failure():
+    """The measured edges of the four runs that failed, one assertion each.
+
+    Under the old 20-period grace, 28, 32 and 34 were failures and 20 was not.
+    The length of a recorder's attach window is not a fact about the transform,
+    so none of them is a failure now.
+    """
+    for n in (20, 28, 32, 34):
+        truth, tf_pairs, wheel = _truth_driven()
+        assert _r4(truth, _leading(truth, tf_pairs, n=n), wheel,
+                   window=MID_WINDOW) is True, n
+
+
+def test_however_many_transforms_before_t_cmd_are_not_gated():
+    """An edge as long as the run, and a sparse one reaching a minute back --
+    both failures under the old count and span bounds.
+
+    Neither is gated now, and the reason is not that they are believed
+    harmless: it is that a transform published before the robot was commanded
+    to move cannot reach a map cut from [t_cmd, t_cmd + --min-sim]. A publisher
+    that ran DURING the run leaves transforms inside the window, where they
+    still fail, and one that ran through the whole bag reads as the 20 + 50 =
+    70 Hz sum on the pair, which R2 rejects outright.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    assert _r4(truth, _leading(truth, tf_pairs, n=len(tf_pairs)), wheel,
+               window=MID_WINDOW) is True
+
+    truth, tf_pairs, wheel = _truth_driven()
+    first = min(truth)
+    sparse = [(first - n * PERIOD_NS, 0.0, 0.0, 0.0, 0.0)
+              for n in (1200, 800, 400)]
+    assert _r4(truth, sparse + tf_pairs, wheel, window=MID_WINDOW) is True
+
+
+def test_out_of_window_transforms_need_not_sit_at_an_end_of_the_stream():
+    """The old rule also required the out-of-span transforms to be a contiguous
+    prefix or suffix of the RECORDED stream. Stream order is the order rosbag2
+    happened to write messages in; it says nothing about which of them a map
+    reads. The window does, so contiguity is gone.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    first = min(truth)
+    mixed = list(tf_pairs)
+    for i in range(3):
+        mixed.insert(50 * (i + 1), (first - (3 - i) * PERIOD_NS,
+                                    0.0, 0.0, 0.0, 0.0))
+    assert _r4(truth, mixed, wheel, window=MID_WINDOW) is True
 
 
 def test_a_trailing_edge_passes_the_same_way():
     """The race can leave the edge at either end -- rehearsal5 subscribed to
-    the pose topic FIRST -- so a suffix has to be admitted on the same terms.
+    the pose topic FIRST -- and the far end of the bag is past the window in
+    any case: relay1's last 4 transforms are after its window closes.
     """
     truth, tf_pairs, wheel = _truth_driven()
     last = max(truth)
@@ -531,71 +683,22 @@ def test_a_trailing_edge_passes_the_same_way():
     assert _r4(truth, tf_pairs, wheel) is True
 
 
-def test_an_edge_longer_than_the_grace_fails():
-    """The grace is bounded so that "outside the series" cannot become a place
-    to hide an arbitrary number of transforms.
-    """
-    truth, tf_pairs, wheel = _truth_driven()
-    over = rh.EDGE_GRACE_PERIODS + 1
-    assert _r4(truth, _leading(truth, tf_pairs, n=over), wheel) is False
-
-
-def test_the_grace_is_short_against_a_run():
-    """Pins the SIZE of the grace, not just the comparison against it.
-
-    The test above scales with EDGE_GRACE_PERIODS, so it stays green however
-    large the constant grows. This one does not: an edge as long as the run
-    itself has to fail, which is what makes the grace an allowance for an
-    attach window rather than a hole in R4.
-    """
-    truth, tf_pairs, wheel = _truth_driven()
-    assert rh.EDGE_GRACE_PERIODS < len(tf_pairs)
-    whole_run = _leading(truth, tf_pairs, n=len(tf_pairs))
-    assert _r4(truth, whole_run, wheel) is False
-
-
-def test_a_sparse_edge_fails_on_its_span_even_when_few():
-    """Count and span are both bounded, and they are not the same bound.
-
-    A handful of transforms reaching far back before the pose series is not an
-    attach window -- a recorder that took a second to subscribe cannot produce
-    a stamp from a minute earlier. This is the shape a slow SECOND publisher
-    makes: few enough to sit inside the count grace, spread far too wide.
-    """
-    truth, tf_pairs, wheel = _truth_driven()
-    first = min(truth)
-    sparse = [(first - n * PERIOD_NS, 0.0, 0.0, 0.0, 0.0)
-              for n in (1200, 800, 400)]
-    assert len(sparse) <= rh.EDGE_GRACE_PERIODS      # the count is fine
-    assert _r4(truth, sparse + tf_pairs, wheel) is False
-
-
-def test_out_of_span_transforms_that_are_not_at_an_end_fail():
-    """Contiguity is what makes the edge an edge. A publisher whose transforms
-    are interleaved through the recorded stream is not an attach artefact, even
-    when every one of its stamps happens to fall outside the pose series.
-    """
-    truth, tf_pairs, wheel = _truth_driven()
-    first = min(truth)
-    mixed = list(tf_pairs)
-    for i in range(3):
-        mixed.insert(50 * (i + 1), (first - (3 - i) * PERIOD_NS,
-                                    0.0, 0.0, 0.0, 0.0))
-    assert _r4(truth, mixed, wheel) is False
-
-
 def _punch_hole(truth, tf_pairs, lo=100, hi=104):
-    """Drop four consecutive samples from BOTH series.
-
-    Both, deliberately. Dropping the poses alone would leave four transforms
-    stranded inside the span with no pose to match, and the run would fail as
-    "another publisher" -- the right verdict for the wrong reason, and a test
-    that cannot tell whether the gap rule works at all.
+    """Drop four consecutive samples from BOTH series -- a pose dropout in
+    which no transform was published either, which is k1's and k2's shape.
     """
     doomed = set(sorted(truth)[lo:hi])
     for ns in doomed:
         del truth[ns]
     return [row for row in tf_pairs if row[0] not in doomed]
+
+
+def _drop_poses(truth, lo, hi):
+    """Drop poses only, leaving their transforms stranded with nothing to
+    match. This is the hole that can fail R4, and only inside the window.
+    """
+    for ns in sorted(truth)[lo:hi]:
+        del truth[ns]
 
 
 def test_a_gap_in_the_pose_series_is_not_itself_a_failure():
@@ -608,20 +711,36 @@ def test_a_gap_in_the_pose_series_is_not_itself_a_failure():
     assert _r4(truth, tf_pairs, wheel) is True
 
 
-def test_a_gapped_pose_series_withholds_the_edge_grace():
-    """If poses went missing DURING the run, "before the first pose" no longer
-    means "before the recorder attached", so the same 3 transforms that pass on
-    an unbroken series must not pass here.
+def test_a_pose_hole_before_t_cmd_passes():
+    """k2's shape, which the old rule failed for a reason it never stated
+    clearly: a 200 ms hole at sim 61.850 -- 14 s BEFORE its first command --
+    withheld the edge grace from 20 leading transforms, and the run failed
+    while every compared transform agreed to 0.000e+00 m and 2.5e-14 deg.
 
-    The two assertions differ only in whether the pose series has a hole: same
-    transforms, same anchor, same edge.
+    Here: 20 leading transforms, and five poses dropped at samples 5..9
+    (sim 1.250 .. 1.450), both before MID_WINDOW's t_cmd at 2.000.
     """
     truth, tf_pairs, wheel = _truth_driven()
-    assert _r4(truth, _leading(truth, tf_pairs), wheel) is True
+    _drop_poses(truth, 5, 10)
+    assert rh.truth_gaps(truth, TRUTH_HZ) != []
 
+    assert _r4(truth, _leading(truth, tf_pairs, n=20), wheel,
+               window=MID_WINDOW) is True
+
+
+def test_the_same_pose_hole_inside_the_window_fails():
+    """The pair that makes the rule, one hole in two places.
+
+    Identical perturbation to the test above -- five poses dropped, their
+    transforms left stranded -- moved to samples 60..64 (sim 4.000 .. 4.200),
+    inside MID_WINDOW. Those five transforms now sit on no truth stamp in the
+    span the map is built from, which is the one thing R4 fails on.
+    """
     truth, tf_pairs, wheel = _truth_driven()
-    tf_pairs = _punch_hole(truth, tf_pairs)
-    assert _r4(truth, _leading(truth, tf_pairs), wheel) is False
+    _drop_poses(truth, 60, 65)
+
+    assert _r4(truth, _leading(truth, tf_pairs, n=20), wheel,
+               window=MID_WINDOW) is False
 
 
 def test_a_pose_with_no_transform_is_reported_not_gated(capsys):
@@ -637,24 +756,81 @@ def test_a_pose_with_no_transform_is_reported_not_gated(capsys):
     assert re.search(r'poses with no transform\s+1', out)
 
 
-def test_the_edge_population_is_named_in_the_report(capsys):
+def test_the_window_and_its_provenance_are_named_in_the_report(capsys):
+    """A reader has to be able to see WHICH span was judged, and on what
+    grounds it starts where it does -- otherwise the verdict is unfalsifiable.
+    """
     truth, tf_pairs, wheel = _truth_driven()
-    _r4(truth, _leading(truth, tf_pairs), wheel)
+    _r4(truth, _leading(truth, tf_pairs, n=32), wheel, window=MID_WINDOW)
     out = capsys.readouterr().out
-    assert re.search(r'compared\s+200\s+transforms inside the pose series',
+
+    assert re.search(r'analysis window\s+sim \[2\.000, 7\.000\]', out)
+    assert '--min-sim' in out
+    assert re.search(rf't_cmd\s+2\.000 s sim, bag receive {BAG_T_CMD:.6f}',
                      out)
-    assert re.search(r'at the recording edge\s+3 leading, 0 trailing', out)
+    assert '/robot_0/cmd_vel' in out
+    assert 'check_run_bag.first_nonzero_cmd' in out
+    # The three populations, each with its own count.
+    assert re.search(r'compared\s+101\s+transforms', out)
+    assert re.search(r'before t_cmd\s+52 transforms', out)
+    assert re.search(r'after the window\s+79 transforms', out)
 
 
-def test_split_at_truth_span_buckets_by_the_pose_interval():
-    """The partition itself, without the report around it."""
-    truth = {100: (0.0, 0.0, 0.0), 200: (0.0, 0.0, 0.0)}
+def test_split_at_window_buckets_by_the_window(capsys):
+    """The partition itself, without the report around it. Both bounds are
+    inclusive: a transform stamped at the closing instant of the window is
+    inside the span the map is cut to.
+    """
     rows = [(50, 0, 0, 0, 0), (100, 0, 0, 0, 0), (150, 0, 0, 0, 0),
             (200, 0, 0, 0, 0), (250, 0, 0, 0, 0)]
-    before, inside, after = rh.split_at_truth_span(rows, truth)
+    before, inside, after = rh.split_at_window(rows, 100, 200)
     assert [i for i, _r in before] == [0]
-    assert [i for i, _r in inside] == [1, 2, 3]   # endpoints are INSIDE
+    assert [i for i, _r in inside] == [1, 2, 3]
     assert [i for i, _r in after] == [4]
+
+
+def test_without_a_window_r4_is_not_evaluated_rather_than_passed(capsys):
+    """A bag too short to place the window, or one with no command in it, has
+    not been judged. It must not read as a pass -- that is what put four runs'
+    R4 verdicts in doubt in the first place -- and it must not read as a
+    failure of the transform either.
+    """
+    truth, tf_pairs, wheel = _truth_driven()
+    got = _r4(truth, tf_pairs, wheel, window=None,
+              why='/clock never advances 1200 s of sim after the first command')
+
+    assert got is None
+    out = capsys.readouterr().out
+    assert 'NO ANALYSIS WINDOW' in out
+    assert 'never advances 1200 s' in out
+    assert 'NOT gated' in out
+    assert '-> NOT EVALUATED' in out
+
+
+def test_a_failing_r5_still_fails_without_a_window():
+    """NOT EVALUATED must not become a place for a real failure to hide. R5
+    needs no window, so its verdict stands on its own.
+    """
+    truth, tf_pairs, _wheel = _truth_driven()
+    same_as_truth = [(ns, t) for ns, _x, _y, t, _z in tf_pairs]
+    assert _r4(truth, tf_pairs, same_as_truth, window=None,
+               why='no /clock') is False
+
+
+# ── the exit code ────────────────────────────────────────────────────────────
+
+def test_not_evaluated_is_its_own_exit_code():
+    """Three outcomes, three codes. A skip that exited 0 would let a script
+    chaining on the status treat a bag that could not be judged as a green one.
+    """
+    assert rh.summarise({'R4/R5': True, 'R9': True}) == 0
+    assert rh.summarise({'R4/R5': None, 'R9': True}) == 3
+    assert rh.summarise({'R4/R5': False, 'R9': True}) == 1
+    # A failure outranks a skip: 1 is the louder and truer answer.
+    assert rh.summarise({'R4/R5': None, 'R9': False}) == 1
+    # No gate ran at all is not a pass either way -- but an empty result set
+    # cannot happen from main(), which requires --log or --bag.
+    assert rh.summarise({}) == 0
 
 
 def test_truth_gaps_finds_only_a_missing_sample():
