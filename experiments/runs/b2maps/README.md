@@ -280,11 +280,8 @@ Expect `pre-flight: all 25 required topic(s) advertised, on attempt N of 5`
 (rehearsal 5: attempt 1). An abort after 5 attempts means a stack really is
 down — fix it, do not retry blindly.
 
-**Do not start T3 until the recorder has 26 subscriptions:**
-
-```bash
-grep -ac 'Subscribed to topic' $LOGS/${RUN}_record.log     # must print 26
-```
+**Do not start T3 until the recorder has 26 subscriptions.** The T3 block below
+checks that itself and refuses to launch, so it is not a step to remember.
 
 26 is the 25 required topics plus `/robot_K/cmd_vel`, whose publisher
 `robot_node` creates unconditionally. The last two — `/robot_K/map` and
@@ -294,11 +291,30 @@ taking the bag to 28.
 
 ### T3 — the explorer
 
+**Guarded: it refuses to launch below 26 recorder subscriptions.** k3 attempt 1
+was lost to launching without that check — the recorder joined 32 s after goal
+#1, so the bag opened on a robot that had already been commanded to move and
+could anchor nothing.
+
 ```bash
-ros2 launch nsk_swarm explore.launch.py robot_id:=$K scan_matching:=false \
-    free_space_relay:=true \
-    > $LOGS/${RUN}_explore.log 2>&1
+N=$(grep -ac 'Subscribed to topic' $LOGS/${RUN}_record.log 2>/dev/null); N=${N:-0}
+if [ "$N" -lt 26 ]; then
+  echo "STOP: recorder shows $N subscriptions, need 26. Wait 10 s and re-run this block."
+else
+  date '+%T' | tee $LOGS/${RUN}_explorer_start.txt
+  ros2 launch nsk_swarm explore.launch.py robot_id:=$K scan_matching:=false \
+      free_space_relay:=true \
+      > $LOGS/${RUN}_explore.log 2>&1
+fi
 ```
+
+It expects `K`, `RUN` and `LOGS` from the block at the top of this section, like
+every other terminal here. A tab where they are unset finds no log, reads
+`N=0` and stops, which is the direction this should fail in.
+
+`date '+%T' | tee` leaves the explorer's start time in
+`${RUN}_explorer_start.txt`. Nothing gates on it; it is the one record of when
+T3 began that does not depend on a log surviving.
 
 `scan_matching:=false` is what makes this a known-pose run: slam_toolbox never
 calls `MatchScan`, every scan keeps the pose it was handed, and `map → odom`
@@ -380,27 +396,49 @@ and R7 comes out of the bag afterwards. Every check below is offline.
    flush that decides whether the bag's last seconds exist.
 2. **T3, the explorer.** Ctrl-C, wait for the process to exit.
 3. **T1, the simulator.** Ctrl-C, wait for `process has finished cleanly`.
-4. **The bridge, by name** — it does not always go with the sim:
+4. **Block B — the bridge, and the check that nothing survived.** Only after
+   steps 1–3. **Guarded: it refuses to run while gz sim is alive.** k1 attempt 1
+   was lost to running it early — `pkill -f parameter_bridge` also kills the
+   `/clock` bridge, and with the sim still up that freezes sim time under a run
+   that looks alive.
+
    ```bash
-   pkill -INT -f parameter_bridge
-   ```
-5. Then this must print `clean`:
-   ```bash
-   pgrep -fa '[g]z sim|[p]arameter_bridge|[s]lam_toolbox|[n]sk_swarm|[r]osbag2|[b]ag record|[r]ecord_run' \
+   if pgrep -f '[g]z sim' > /dev/null; then
+     echo "STOP: the sim is still running. Block B is only for after teardown."
+   else
+     pkill -INT -f parameter_bridge; sleep 5
+     pgrep -fa '[g]z sim|[p]arameter_bridge|[s]lam_toolbox|[n]sk_swarm|[b]ag record|[r]ecord_run|[c]ontroller_server|[l]ifecycle_manager|[b]t_navigator|[r]obot_node|[n]sk_engine' \
        || echo clean
+     ls -la $LOGS/$RUN/
+   fi
    ```
+
+   It must print `clean`, and then the bag's own files. The `sleep 5` is the
+   bridge's own shutdown: without it the `pgrep` can catch a bridge that is
+   already on its way out and report the teardown as unclean.
+
    The brackets are not decoration. `pgrep -f` matches full command lines,
    including the line that is running `pgrep` itself, so the unbracketed
    spelling always finds one process and never says `clean`. `[g]z` matches
-   `gz` in a real process and not the literal `[g]z` in this command.
+   `gz` in a real process and not the literal `[g]z` in this command — which is
+   also why the guard above can ask about `[g]z sim` without answering itself.
 
-   **`[r]osbag2` alone does not find the recorder.** `record_run.sh:142` ends
-   in `exec ros2 bag record -o …`, and `exec` means the surviving command line
-   is exactly that — it contains `ros2` and `bag record`, and the string
-   `rosbag2` appears nowhere in it. `rosbag2_recorder` is the ROS *node* name,
-   which is what the log shows and what `pgrep -f` never sees. The aborted k0
-   run printed `clean` with a recorder still writing. `[b]ag record` catches
-   the recorder itself and `[r]ecord_run` catches the wrapper script if it is
+   **The nav2 nodes are named one by one** — `[c]ontroller_server`,
+   `[l]ifecycle_manager`, `[b]t_navigator` — because nothing else in the
+   pattern reaches them: they are installed under `/opt/ros/jazzy/lib/nav2_*`
+   and their command lines contain no `nsk_swarm`. `[r]obot_node` and
+   `[n]sk_engine` are this package's own, so `[n]sk_swarm` already matches
+   their paths; they are listed because the runs listed them.
+
+   **`[r]osbag2` was in this pattern and has been removed, because it never
+   matched the recorder.** `record_run.sh:142` ends in
+   `exec ros2 bag record -o …`, and `exec` means the surviving command line is
+   exactly that — it contains `ros2` and `bag record`, and the string `rosbag2`
+   appears nowhere in it. `rosbag2_recorder` is the ROS *node* name, which is
+   what the log shows and what `pgrep -f` never sees. The aborted k0 run
+   printed `clean` with a recorder still writing, against a pattern that had
+   `[r]osbag2` and nothing else that could find it. `[b]ag record` is what
+   catches the recorder now, and `[r]ecord_run` the wrapper script if it is
    ever run without `exec`.
 
 A surviving bridge or gz server poisons the next run quietly: the next boot
