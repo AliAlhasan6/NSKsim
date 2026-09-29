@@ -65,6 +65,7 @@ evaluated, which is the 3 above.
 from __future__ import annotations
 
 import argparse
+import bisect
 import math
 import re
 import statistics
@@ -766,6 +767,261 @@ def read_log(path: Path):
     if not path.is_file():
         die(f'log not found: {path}')
     return path.read_text(errors='replace').splitlines()
+
+
+# ── R10: is the rig transform itself on time? (REPORT ONLY, no gate) ─────────
+# R9 is consumer-reported all the way down: a transform warning is a node
+# saying it could not get one, and a message-filter drop is judged on whether a
+# link answered before that node gave up. Both fire only if a consumer happened
+# to look, and only after its own wait expired -- 0.5 s for the costmaps. So a
+# rig transform late by less than that wait is invisible to R9 however slow the
+# rest of the stack was, and one late by more is invisible unless somebody
+# asked. That is the blind spot b2maps README criterion 2 now states.
+#
+# R10 measures the link directly instead, over the same window, and REPORTS. It
+# is not a gate and contributes nothing to the exit status: the threshold is to
+# be decided from the numbers it prints, not fitted here. Two quantities,
+# because they are not the same question:
+#
+#   wire lag    per transform, in WALL seconds: its receive time minus the wall
+#               instant of its own header stamp. "Did the publisher get it out
+#               on time." A publisher-side diagnostic.
+#   staleness   at each arrival, in SIM seconds: the sim time then, minus the
+#               newest stamp already on the wire. "How old was the best answer
+#               a consumer could have got."
+#
+# Staleness is the quantity a transform_tolerance governs, and the units are
+# the reason: every node here runs use_sim_time, so tf2's "now" and every
+# stamp are sim time, and a tolerance bounds sim-time age. The wire lag is
+# wall, and the two are NOT interchangeable -- b2maps_k4's worst transform is
+# 151.9 ms of wall late and only 139.6 ms of sim stale, because sim was
+# advancing at about 0.4x wall through that stretch. Comparing the wall lag
+# against a tolerance would be a unit error, so the counts below mark which
+# column a tolerance can be read against.
+#
+# Staleness never reaches zero: it is the lag plus up to one publication
+# period, so a healthy 20 Hz link sits near 50-60 ms.
+#
+# Both are measured against /clock by interpolation rather than by taking the
+# nearest sample, because /clock is 100 Hz here and the numbers of interest are
+# tens of milliseconds.
+RECOVERY_RE = re.compile(
+    r'^\[behavior_server-[0-9]+\].*?: Running (?!Nav2 LifecycleNode)(\S+)')
+
+
+def _interp(xs, ys, x: float):
+    """y at x, linearly between the bracketing samples. None outside. Pure.
+
+    `xs` must be sorted. Used both ways round the /clock series: sim from a
+    receive time, and a receive time from sim.
+    """
+    i = bisect.bisect_left(xs, x)
+    if i < len(xs) and xs[i] == x:
+        return ys[i]        # an exact sample, and the only use of xs[0]
+    if i == 0 or i >= len(xs):
+        return None
+    x0, x1, y0, y1 = xs[i - 1], xs[i], ys[i - 1], ys[i]
+    if x1 == x0:
+        return y0
+    return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+
+
+def rig_timeliness(tf_rows, clock, sim_lo: float, sim_hi: float) -> dict:
+    """Wire lags and staleness for one link over a sim span. Pure.
+
+    `tf_rows` is [(stamp, receive)] in publication order, `clock` is
+    [(receive, sim)] in read order.
+
+    Staleness is sampled at every arrival, which is where it peaks: between two
+    arrivals nothing new is available, so the age of the newest stamp grows
+    until the next one lands. One sample per arrival over a near-uniform 50 ms
+    grid, so the p99 of the samples is the p99 of the continuous function to
+    within a period.
+    """
+    recvs = [r for r, _s in clock]
+    sims = [s for _r, s in clock]
+    lags, stale, newest = [], [], None
+    for stamp, recv in tf_rows:
+        if newest is not None:
+            now = _interp(recvs, sims, recv)
+            if now is not None and sim_lo <= stamp <= sim_hi:
+                stale.append((now, now - newest, recv))
+        if sim_lo <= stamp <= sim_hi:
+            w = _interp(sims, recvs, stamp)
+            if w is not None:
+                lags.append((stamp, recv, recv - w))
+        newest = stamp if newest is None else max(newest, stamp)
+    return {'lags': lags, 'stale': stale}
+
+
+def quantiles(values) -> dict:
+    """median, p99 and max of a list, or Nones. Pure."""
+    if not values:
+        return {'n': 0, 'median': None, 'p99': None, 'max': None}
+    ordered = sorted(values)
+    return {'n': len(ordered), 'median': statistics.median(ordered),
+            'p99': ordered[int(0.99 * (len(ordered) - 1))],
+            'max': ordered[-1]}
+
+
+def recovery_starts(lines) -> list:
+    """[(wall stamp, behaviour name)] for every recovery behavior_server ran.
+
+    nav2_behaviors logs exactly one INFO line when a behaviour begins --
+    "Running %s" at timed_behavior.hpp:213 -- and NONE when it ends:
+    succeeded_current() reports through debug_msg
+    (simple_action_server.hpp:507), which is below the log's level. So a
+    recovery's start is on the record and its end is not, and R10 reports the
+    nearest preceding start rather than claiming a span it cannot close.
+
+    The lifecycle line "Running Nav2 LifecycleNode rcl preshutdown
+    (behavior_server)" also begins with Running and is excluded by name.
+    """
+    out = []
+    for line in lines:
+        m = RECOVERY_RE.match(line)
+        if m:
+            t = stamp_of(line)
+            if t is not None:
+                out.append((t, m.group(1)))
+    return out
+
+
+def read_rig_tf(bag: Path, robot: int, window: dict):
+    """([(stamp, receive)] for the rig link, [(receive, sim)] for /clock) over
+    the window's receive span. seek()s to the window rather than reading the
+    bag end to end.
+    """
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from rosgraph_msgs.msg import Clock
+    from tf2_msgs.msg import TFMessage
+
+    pair = (f'robot_{robot}/odom', f'robot_{robot}/base_footprint')
+    reader = rosbag2_py.SequentialReader()
+    reader.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id='mcap'),
+                rosbag2_py.ConverterOptions('', ''))
+    available = {t.name for t in reader.get_all_topics_and_types()}
+    if '/tf' not in available or '/clock' not in available:
+        die(f'{bag} needs /tf and /clock for R10')
+    reader.set_filter(rosbag2_py.StorageFilter(topics=['/tf', '/clock']))
+    reader.seek(int(window['recv_lo'] * 1e9))
+
+    clock, tf = [], []
+    while reader.has_next():
+        topic, data, recv_ns = reader.read_next()
+        recv = recv_ns / 1e9
+        if recv < window['recv_lo']:
+            continue
+        if recv > window['recv_hi']:
+            break
+        if topic == '/clock':
+            c = deserialize_message(data, Clock).clock
+            clock.append((recv, c.sec + c.nanosec / 1e9))
+        else:
+            for tr in deserialize_message(data, TFMessage).transforms:
+                if (tr.header.frame_id, tr.child_frame_id) == pair:
+                    tf.append((tr.header.stamp.sec
+                               + tr.header.stamp.nanosec / 1e9, recv))
+    return tf, clock
+
+
+def report_rig_timeliness(robot: int, window: dict, measured: dict,
+                          tols: list, starts: list, truth_hz: float,
+                          params: Path) -> None:
+    """R10. Prints; decides nothing. See the comment block above."""
+    print('R10 IS THE RIG TRANSFORM ITSELF ON TIME?  (REPORT ONLY -- not a '
+          'gate, and no')
+    print('    part of the exit status. The threshold is to be decided from '
+          'these numbers.)')
+    print(f'  link           robot_{robot}/odom -> robot_{robot}/'
+          'base_footprint')
+    print(f'  window         sim [{window["sim_lo"]:.3f}, '
+          f'{window["sim_hi"]:.3f}]')
+
+    lags = [lag for _s, _r, lag in measured['lags']]
+    stale = [age for _now, age, _recv in measured['stale']]
+    q_lag, q_stale = quantiles(lags), quantiles(stale)
+    period_ms = 1000.0 / truth_hz
+    print(f'  transforms     {q_lag["n"]}   nominal {truth_hz:g} Hz, one '
+          f'period {period_ms:g} ms')
+    if not lags:
+        print('  no transform on this link inside the window, so there is '
+              'nothing to measure')
+        print('  -> REPORTED (nothing)\n')
+        return
+    print('  wire lag, WALL seconds  = receive time - the wall instant of the '
+          'transform\'s own stamp')
+    print(f'      median {q_lag["median"] * 1e3:7.1f} ms   '
+          f'p99 {q_lag["p99"] * 1e3:7.1f} ms   '
+          f'max {q_lag["max"] * 1e3:7.1f} ms')
+    print('  staleness, SIM seconds  = at each arrival, sim now - the newest '
+          'stamp already on the wire')
+    print(f'      median {q_stale["median"] * 1e3:7.1f} ms   '
+          f'p99 {q_stale["p99"] * 1e3:7.1f} ms   '
+          f'max {q_stale["max"] * 1e3:7.1f} ms   '
+          f'(floor is one period, {period_ms:g} ms)')
+
+    print(f'  transform_tolerance declared in {params.name}, smallest first:')
+    for decl in sorted(tols, key=lambda d: d['tol']):
+        frames = ', '.join(f'{k}={v}' for k, v in decl['frames'].items())
+        print(f'      {decl["tol"]:.2f} s  {decl["block"]:<32} '
+              f'(:{decl["line"]})  {frames or "declares no frames"}')
+    print(f'      exceeding each, of {q_lag["n"]} transforms and '
+          f'{q_stale["n"]} staleness samples. Everything runs use_sim_time,')
+    print('      so a tolerance bounds SIM age: the staleness column is the '
+          'one it can be read')
+    print('      against, and the wall column is there to show the publisher '
+          'side.')
+    for tol in sorted({d['tol'] for d in tols}):
+        n_lag = sum(1 for v in lags if v > tol)
+        n_stale = sum(1 for v in stale if v > tol)
+        print(f'      > {tol:.2f} s   staleness (sim) {n_stale:>6}   '
+              f'wire lag (wall) {n_lag:>6}')
+
+    smallest = min(d['tol'] for d in tols)
+    over = [(now, age, recv) for now, age, recv in measured['stale']
+            if age > smallest]
+    print(f'  staleness excursions over the smallest declared tolerance '
+          f'({smallest:.2f} s): {len(over)}')
+    for now, age, recv in over[:20]:
+        print(f'      sim {now:9.3f}  wire {recv:.6f}  stale '
+              f'{age * 1e3:6.1f} ms   behaviour: '
+              f'{_recovery_context(recv, starts)}')
+    if len(over) > 20:
+        print(f'      ... and {len(over) - 20} more')
+    n_lag_over = sum(1 for v in lags if v > smallest)
+    if n_lag_over != len(over):
+        print(f'      ({n_lag_over} transforms exceed {smallest:.2f} s of '
+              'WALL lag, which is the')
+        print('       other column and not the same set -- see the units '
+              'note above)')
+    if over and not starts:
+        print('      behavior_server ran no behaviour at all in this log, so '
+              'the one consumer')
+        print(f'      declaring {smallest:.2f} s never looked up this link '
+              'while any of these')
+        print('      excursions was in force. That is a fact about this run, '
+              'not a defence:')
+        print('      the transform was late whether or not anything asked for '
+              'it.')
+    print('  -> REPORTED (not a gate)\n')
+
+
+def _recovery_context(recv: float, starts: list) -> str:
+    """What behavior_server was last seen starting before a wall instant.
+
+    No end marker exists at INFO level -- see recovery_starts -- so this says
+    how long ago a behaviour began and never that one was still running.
+    """
+    if not starts:
+        return 'none ran in this log'
+    before = [(t, name) for t, name in starts if t <= recv]
+    if not before:
+        nxt = min(t for t, _n in starts)
+        return f'none yet; first one {nxt - recv:.1f} s later'
+    t, name = before[-1]
+    return f'{name} started {recv - t:.1f} s earlier (no end line is logged)'
 
 
 # ─────────────────────── coverage: closest approach ──────────────────────────
@@ -1802,6 +2058,12 @@ def main() -> int:
     ap.add_argument('--spawn-rev', default='08617b2',
                     help='git rev whose DOT_POSES gives the anchor '
                          '(default %(default)s, the b18/b2maps era)')
+    ap.add_argument('--rig-lag', action='store_true',
+                    help='also run R10: how long robot K\'s odom -> '
+                         'base_footprint transforms take to reach the wire '
+                         'inside the window, and how stale the newest one '
+                         'ever got. REPORT ONLY -- it gates nothing and does '
+                         'not affect the exit status.')
     ap.add_argument('--nav2-params', type=Path,
                     help="the run's nav2 params, whose costmap global_frame "
                          "R9 needs to attribute a message-filter drop "
@@ -1860,7 +2122,7 @@ def main() -> int:
     # the heavy passes -- it costs ~4 s (cmd_vel, then /clock only as far as
     # the window's end) against ~40 s for /tf.
     window = window_why = None
-    if args.bag and (args.log or args.truth_tf):
+    if args.bag and (args.log or args.truth_tf or args.rig_lag):
         window, window_why = read_analysis_window(args.bag, args.robot,
                                                   args.min_sim)
     elif args.log:
@@ -1910,6 +2172,25 @@ def main() -> int:
         results['R4/R5'] = report_truth_tf(
             args.robot, (sx, sy, 0.0), truth, tf_pairs, wheel,
             facts['truth_hz'], window, window_why)
+
+    # R10 is deliberately NOT in `results`: it has no verdict to contribute, so
+    # it can neither pass nor be NOT EVALUATED. A reporting block that quietly
+    # entered the summary as a pass would be the worst of both.
+    if args.bag and args.rig_lag:
+        from attribute_tf_drop import nav2_params_path, tolerance_facts
+        params = args.nav2_params or nav2_params_path(args.robot)
+        if window is None:
+            print('R10 IS THE RIG TRANSFORM ITSELF ON TIME?')
+            print(f'  no analysis window: {window_why}')
+            print('  -> REPORTED (nothing)\n')
+        else:
+            tf_rows, clock = read_rig_tf(args.bag, args.robot, window)
+            starts = recovery_starts(read_log(args.log)) if args.log else []
+            report_rig_timeliness(
+                args.robot, window,
+                rig_timeliness(tf_rows, clock, window['sim_lo'],
+                               window['sim_hi']),
+                tolerance_facts(params), starts, facts['truth_hz'], params)
 
     if args.bag and args.save_map:
         results['R7'] = report_map(args.robot,

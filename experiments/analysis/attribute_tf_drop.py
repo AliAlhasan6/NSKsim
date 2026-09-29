@@ -155,6 +155,52 @@ def costmap_facts(path: Path) -> dict:
     return out
 
 
+def tolerance_facts(path: Path) -> list:
+    """Every transform_tolerance the file declares, in file order.
+
+    [{'block', 'tol', 'line', 'frames'}, ...] -- the block that declares it,
+    the value, the line it is on, and the frames that block names, which is
+    what says whether the declaration is about a given link. Read, never
+    retyped: R10 takes the smallest of these as the deadline the consumers
+    themselves have set for the rig transform.
+
+    The line numbers are matched to the values by ORDER: yaml preserves
+    insertion order and a block-structured file is walked depth-first in file
+    order, so the Nth declaration found in the document is the Nth
+    `transform_tolerance:` line in the text. The count is asserted rather than
+    assumed, so a file this stops being true of fails loudly.
+    """
+    if not path.is_file():
+        raise SystemExit(f'FATAL: no nav2 params at {path}')
+    text = path.read_text()
+    doc = yaml.safe_load(text)
+    frame_keys = ('global_frame', 'robot_base_frame', 'local_frame',
+                  'odom_frame_id', 'base_frame_id', 'fixed_frame', 'map_frame')
+
+    def walk(node, where):
+        if isinstance(node, dict):
+            if 'transform_tolerance' in node:
+                yield {'block': '.'.join(w for w in where
+                                         if w != 'ros__parameters'),
+                       'tol': float(node['transform_tolerance']),
+                       'frames': {k: v for k, v in node.items()
+                                  if k in frame_keys}}
+            for key, value in node.items():
+                yield from walk(value, where + [key])
+
+    found = list(walk(doc, []))
+    lines = [i for i, ln in enumerate(text.splitlines(), start=1)
+             if ln.strip().startswith('transform_tolerance:')]
+    if len(lines) != len(found):
+        raise SystemExit(
+            f'FATAL: {path} has {len(lines)} transform_tolerance lines but '
+            f'{len(found)} declarations parse out of it; the line numbers '
+            'cannot be matched to the values by order')
+    for decl, line in zip(found, lines):
+        decl['line'] = line
+    return found
+
+
 def costmap_of(line: str) -> str | None:
     """'local' or 'global', from the logger the drop was written under --
     [robot_3.local_costmap.local_costmap]. Which costmap it was decides which

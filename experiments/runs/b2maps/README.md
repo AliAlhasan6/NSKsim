@@ -86,10 +86,20 @@ or incomplete bag as green.
    have missed it anyway, reaches the wire before the line is logged and reads
    "none late". This rule cannot see such a case, and neither could the old
    count — it is the reason criterion 2 is a floor and not a proof of
-   timeliness. A direct gate on `robot_K/odom → base_footprint` wire lag inside
-   the window would close it; that is not built, and until it is, a "none late"
-   drop means *no link missed the 0.5 s deadline*, not *every transform was
-   on time*.
+   timeliness. A "none late" drop means *no link missed the 0.5 s deadline*,
+   not *every transform was on time*.
+
+   **R10 measures the link directly** (`--rig-lag`), and is **report only** — it
+   gates nothing and is no part of the exit status, so its numbers can
+   accumulate before a threshold is fixed. Per run, inside the same window: the
+   wall-clock wire lag of every `robot_K/odom → base_footprint` transform, and
+   the sim-time staleness a consumer would have seen, against every
+   `transform_tolerance` the params declare. The two are in different units and
+   are not interchangeable — a tolerance bounds **sim** age, so staleness is the
+   column to read it against. k0 and k1 never exceed the smallest declared
+   tolerance (0.1 s, `behavior_server`); k2, k3, k4 and relay1 do, and only
+   relay1 exceeds 0.2 s. relay1's worst is 346.9 ms at sim 463, the same stall
+   its `collision_monitor` warning reports.
 
    **Every other transform warning inside the window fails the run**, above all
    one naming `robot_K/odom → robot_K/base_footprint` — the transform
@@ -411,9 +421,13 @@ python3 experiments/analysis/run_health.py \
     --log $LOGS/${RUN}_explore.log \
     --baseline-log $LOGS/b2maps_e0_explore.log \
     --bag $LOGS/$RUN --robot $K \
-    --truth-tf --tf-rates --min-sim 1200 \
+    --truth-tf --tf-rates --min-sim 1200 --rig-lag \
     --save-map experiments/maps/${RUN}_online_robot$K
 ```
+
+`--rig-lag` adds R10, which reports and gates nothing; it costs ~16 s per bag
+and its numbers are what a timeliness threshold will eventually be set from, so
+every run should carry them.
 
 `--min-sim 1200` is the same number step 1 gave `check_run_bag.py`, and for the
 same reason: it is the span the map is cut from, so it is the span R4 gates.

@@ -632,6 +632,121 @@ def test_an_unstamped_warning_is_reported_as_unplaceable():
     assert found['candidates'] == []
 
 
+# ── R10: is the rig transform itself on time? (report only) ──────────────────
+# Two quantities in two units, which is the whole trap: the wire lag is wall
+# seconds and the staleness a consumer sees is sim seconds, and at RTF 0.4 the
+# same delay is fewer sim milliseconds. b2maps_k4's worst transform is 151.9 ms
+# of wall lag and 139.6 ms of sim staleness.
+
+def _clock(n=400, step_recv=0.01, step_sim=0.01, t0=1790000000.0, s0=100.0):
+    """A /clock series: `step_recv` of wall per `step_sim` of sim, so an RTF of
+    step_sim/step_recv.
+    """
+    return [(t0 + i * step_recv, s0 + i * step_sim) for i in range(n)]
+
+
+def test_a_punctual_link_reads_one_lag_and_one_period_of_staleness():
+    """The floor, and why staleness never reads zero: a consumer asking just
+    before the next sample arrives sees the previous one, one period old.
+    """
+    clock = _clock()
+    # 20 Hz, each transform on the wire 10 ms after its own instant.
+    tf = [(100.0 + i * 0.05, 1790000000.0 + i * 0.05 + 0.010)
+          for i in range(20)]
+    got = rh.rig_timeliness(tf, clock, 100.0, 101.0)
+
+    lags = [lag for _s, _r, lag in got['lags']]
+    stale = [age for _n, age, _r in got['stale']]
+    assert lags == pytest.approx([0.010] * 20, abs=1e-6)
+    # 50 ms of period plus the 10 ms lag of the arriving sample.
+    assert stale == pytest.approx([0.060] * 19, abs=1e-6)
+
+
+def test_a_late_transform_shows_in_both_and_in_different_units():
+    """One sample 200 ms of WALL late, on a clock running at 0.5x. The wall lag
+    is 200 ms; the sim staleness is a period plus 100 ms, because only half as
+    much sim elapsed while it was missing.
+    """
+    clock = _clock(step_recv=0.02, step_sim=0.01)        # RTF 0.5
+    tf = [(100.0 + i * 0.05, 1790000000.0 + i * 0.10) for i in range(10)]
+    tf[5] = (tf[5][0], tf[5][1] + 0.200)                 # 200 ms wall late
+    got = rh.rig_timeliness(tf, clock, 100.0, 101.0)
+
+    lags = [lag for _s, _r, lag in got['lags']]
+    assert max(lags) == pytest.approx(0.200, abs=1e-6)
+    stale = [age for _n, age, _r in got['stale']]
+    assert max(stale) == pytest.approx(0.05 + 0.100, abs=1e-6)
+
+
+def test_only_transforms_inside_the_window_are_measured():
+    clock = _clock()
+    tf = [(100.0 + i * 0.05, 1790000000.0 + i * 0.05 + 0.010)
+          for i in range(20)]
+    got = rh.rig_timeliness(tf, clock, 100.5, 101.0)
+
+    assert [round(s, 3) for s, _r, _lag in got['lags']] == [
+        pytest.approx(100.5 + i * 0.05, abs=1e-6) for i in range(10)]
+
+
+def test_quantiles_of_nothing_are_none_rather_than_a_crash():
+    assert rh.quantiles([])['n'] == 0
+    assert rh.quantiles([])['max'] is None
+    assert rh.quantiles([0.1, 0.2, 0.3])['median'] == pytest.approx(0.2)
+
+
+def test_interpolation_beats_the_nearest_clock_sample():
+    """/clock is 100 Hz and the numbers of interest are tens of milliseconds,
+    so taking the nearest sample would quantise every figure to 10 ms.
+    """
+    xs, ys = [0.0, 1.0], [10.0, 20.0]
+    assert rh._interp(xs, ys, 0.25) == pytest.approx(12.5)
+    assert rh._interp(xs, ys, -1.0) is None          # outside, not clamped
+    assert rh._interp(xs, ys, 2.0) is None
+    # An exact hit at either end is in range, not outside it. Transform stamps
+    # land on 50 ms and /clock on 10 ms here, so exact hits are the common case
+    # and dropping the one at xs[0] silently lost a sample.
+    assert rh._interp(xs, ys, 0.0) == pytest.approx(10.0)
+    assert rh._interp(xs, ys, 1.0) == pytest.approx(20.0)
+
+
+# nav2_behaviors logs one INFO line when a behaviour starts (timed_behavior.hpp
+# :213) and none when it ends, so a recovery's start is on the record and its
+# end is not.
+BEHAVIOUR_START = ('[behavior_server-7] [INFO] [1789836015.000000000] '
+                   '[robot_0.behavior_server]: Running spin')
+BEHAVIOUR_LIFECYCLE = ('[behavior_server-7] [INFO] [1789836016.000000000] '
+                       '[robot_0.behavior_server]: Running Nav2 LifecycleNode '
+                       'rcl preshutdown (behavior_server)')
+
+
+def test_a_recovery_start_is_counted_and_the_lifecycle_line_is_not():
+    """Both lines begin with 'Running'. Counting the lifecycle one would report
+    a recovery at shutdown in every run.
+    """
+    got = rh.recovery_starts([BEHAVIOUR_START, BEHAVIOUR_LIFECYCLE,
+                              E0_LAUNCH_LINE])
+    assert got == [(pytest.approx(1789836015.0), 'spin')]
+
+
+def test_no_behaviour_in_the_log_says_so_rather_than_guessing():
+    """k0-k4 ran none at all, which is the answer to whether behavior_server --
+    the only consumer declaring 0.1 s -- was looking during their excursions.
+    """
+    assert rh.recovery_starts([E0_LAUNCH_LINE]) == []
+    assert rh._recovery_context(1789836020.0, []) == 'none ran in this log'
+
+
+def test_the_recovery_context_never_claims_a_behaviour_was_still_running():
+    """There is no end line to close a span with, so the report says how long
+    ago one began and no more.
+    """
+    starts = rh.recovery_starts([BEHAVIOUR_START])
+    said = rh._recovery_context(1789836017.5, starts)
+    assert 'spin started 2.5 s earlier' in said
+    assert 'no end line is logged' in said
+    assert 'none yet' in rh._recovery_context(1789836000.0, starts)
+
+
 # ── coverage: closest approach ───────────────────────────────────────────────
 
 def test_closest_approach_to_a_single_wall():
