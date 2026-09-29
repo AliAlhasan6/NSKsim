@@ -20,7 +20,7 @@ no longer be blamed on the odometry.
 
 ## Success criteria — fixed before k0 is started
 
-A run counts when all five hold. Nothing here is judged by eye; each is a
+A run counts when all six hold. Nothing here is judged by eye; each is a
 number a script prints.
 
 **A criterion that could not be evaluated is not a passed one.** `run_health.py`
@@ -89,17 +89,8 @@ or incomplete bag as green.
    timeliness. A "none late" drop means *no link missed the 0.5 s deadline*,
    not *every transform was on time*.
 
-   **R10 measures the link directly** (`--rig-lag`), and is **report only** — it
-   gates nothing and is no part of the exit status, so its numbers can
-   accumulate before a threshold is fixed. Per run, inside the same window: the
-   wall-clock wire lag of every `robot_K/odom → base_footprint` transform, and
-   the sim-time staleness a consumer would have seen, against every
-   `transform_tolerance` the params declare. The two are in different units and
-   are not interchangeable — a tolerance bounds **sim** age, so staleness is the
-   column to read it against. k0 and k1 never exceed the smallest declared
-   tolerance (0.1 s, `behavior_server`); k2, k3, k4 and relay1 do, and only
-   relay1 exceeds 0.2 s. relay1's worst is 346.9 ms at sim 463, the same stall
-   its `collision_monitor` warning reports.
+   **R10 closes it by measuring the link directly** (`--rig-lag`), and it is a
+   gate: see criterion 6.
 
    **Every other transform warning inside the window fails the run**, above all
    one naming `robot_K/odom → robot_K/base_footprint` — the transform
@@ -154,10 +145,47 @@ or incomplete bag as green.
 4. **R5 median wheel-vs-truth |dYaw| > 1°** — `/robot_K/odom` must still be
    independent wheel odometry, or arm D cannot be built from these bags.
 5. **The offline truth map has occupied cells on the outer boundary.**
+6. **R10: the rig transform is on time for the consumers that read it.** Inside
+   the same analysis window, the *consumer-seen staleness* of
+   `robot_K/odom → base_footprint` — at every arrival, sim now minus the newest
+   stamp already on the wire — must never exceed **the smallest
+   `transform_tolerance` declared by a consumer that is always asking**. That
+   value is read by `tolerance_facts()` from the run's own `nav2_robotK.yaml`
+   and never typed into the script; today it is `collision_monitor`'s **0.2 s**,
+   and the verdict prints the block and line it came from.
+
+   Staleness and not the wall-clock wire lag: every node runs `use_sim_time`, so
+   a tolerance bounds **sim** age. The two are not interchangeable and not even
+   ordered the same way — k4's worst transform is 151.9 ms of wall lag but only
+   139.6 ms of sim staleness, while k3's worst is 90.9 ms of lag and 149.4 ms of
+   staleness. Staleness floors at one publication period (50 ms at 20 Hz), so a
+   healthy link reads ~57 ms.
+
+   **`behavior_server` is excluded, though it declares the tightest tolerance of
+   all (0.1 s).** It only looks up this link while a behaviour is running, and
+   across k0–k4 it logged not one `Running <plugin>` line — in five full runs it
+   never asked for this transform, while k2, k3 and k4 each carry staleness
+   excursions over its 0.1 s. Gating on a deadline nothing was waiting on would
+   fail three runs for a transform no consumer was reading. The exclusion is by
+   name and is the only one: a block appearing in these files later is included
+   by default, which can only tighten the gate, whereas excluding one loosens it
+   and has to be argued for in the source.
+
+   **Reported, never gated**: every in-window excursion over `behavior_server`'s
+   0.1 s that is within the gate, each with how long before it — in sim seconds
+   — behavior_server was last seen starting a behaviour, or "none started";
+   everything outside the window, on the same grounds as criteria 2 and 3; and
+   the wall-lag distribution beside the staleness one. `b2maps_relay1` is why
+   the 0.1 s figure stays on the page: it ran 11 behaviours, and a `wait` had
+   started 1.3 s before its 346.9 ms excursion, so there the tightest declared
+   deadline really was in force.
+
+   No start-up exemption. k4's excursions are not confined to bring-up anyway —
+   sim 97.8–140.2, then 644.8 and 694.4, against a window opening at 95.8.
 
 R2 (one owner per frame pair), R3 (identity at spawn), R6 (`map → odom`
 identity) and C1–C4 are preconditions, not criteria: if any of them fails the
-run is not a run, and the four above cannot be read from it.
+run is not a run, and the criteria above cannot be read from it.
 
 ---
 
@@ -425,9 +453,8 @@ python3 experiments/analysis/run_health.py \
     --save-map experiments/maps/${RUN}_online_robot$K
 ```
 
-`--rig-lag` adds R10, which reports and gates nothing; it costs ~16 s per bag
-and its numbers are what a timeliness threshold will eventually be set from, so
-every run should carry them.
+`--rig-lag` adds R10 (criterion 6). It reads the whole bag rather than the
+window, since it reports what happened outside as well, and costs ~30 s.
 
 `--min-sim 1200` is the same number step 1 gave `check_run_bag.py`, and for the
 same reason: it is the span the map is cut from, so it is the span R4 gates.
@@ -445,6 +472,7 @@ reports its counts and exits NOT EVALUATED.
 | R2 | robot K ≈ 20 Hz, parked control ≈ 50 Hz | 20.001 / 50.001 Hz |
 | R4 | inside `[t_cmd, t_cmd + 1200 s]` sim: 0 transforms on no truth stamp, worst \|dxy\| ≤ 1e-6 m, \|dyaw\| ≤ 1e-6°, \|z\| = 0. Outside it: reported, never gated | k2, the awkward one: 24000 compared inside the window with 0 unmatched and worst dyaw 2.5e-14°; before `t_cmd`, 721 transforms of which 20 on no truth stamp, and a 200 ms pose hole at sim 61.850 — all of it outside the window, none of it gated |
 | R5 | median \|dYaw\| > 1° | 81.1° |
+| R10 | in-window consumer-seen staleness of `odom → base_footprint` ≤ the tightest always-asking `transform_tolerance` (0.2 s, `collision_monitor`) | k0–k4 pass: worst staleness 94–164 ms against the 0.2 s gate, and the 0.1 s excursions k2/k3/k4 carry are reported with "none started" beside them. relay1 FAILS: 4 samples over 0.2 s, worst 346.9 ms at sim 463, with a `wait` 1.3 s earlier |
 | R7 | writes the final online map | 11.95 × 8.00 m, 779 occupied |
 | COVERAGE | ≤ 8.00 m | rehearsal 5 read 5.621 m, which FAILED the 3.50 m gate it ran under and PASSES the 8.00 m one. The number is the rehearsal's; the verdict is not comparable across the change |
 

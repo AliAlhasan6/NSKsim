@@ -632,11 +632,12 @@ def test_an_unstamped_warning_is_reported_as_unplaceable():
     assert found['candidates'] == []
 
 
-# ── R10: is the rig transform itself on time? (report only) ──────────────────
-# Two quantities in two units, which is the whole trap: the wire lag is wall
-# seconds and the staleness a consumer sees is sim seconds, and at RTF 0.4 the
-# same delay is fewer sim milliseconds. b2maps_k4's worst transform is 151.9 ms
-# of wall lag and 139.6 ms of sim staleness.
+# ── R10: is the rig transform on time for the consumers that read it? ────────
+# Two quantities in two units, which is the trap: the wire lag is wall seconds
+# and the staleness a consumer sees is sim seconds, and at RTF 0.4 the same
+# delay is fewer sim milliseconds. b2maps_k4's worst transform is 151.9 ms of
+# wall lag and 139.6 ms of sim staleness. The gate reads staleness, because
+# that is what a transform_tolerance bounds.
 
 def _clock(n=400, step_recv=0.01, step_sim=0.01, t0=1790000000.0, s0=100.0):
     """A /clock series: `step_recv` of wall per `step_sim` of sim, so an RTF of
@@ -645,21 +646,72 @@ def _clock(n=400, step_recv=0.01, step_sim=0.01, t0=1790000000.0, s0=100.0):
     return [(t0 + i * step_recv, s0 + i * step_sim) for i in range(n)]
 
 
+T0 = 1790000000.0
+
+
+def _rig(target=None, at_sim=150.0, n=4000):
+    """A punctual 20 Hz link over sim 100.000-299.950, at RTF 1.
+
+    With one arrival delayed so that the staleness AT IT is exactly `target`:
+    at RTF 1 the staleness of an arrival is its own lag plus one publication
+    period, so the lag needed is target - 0.05.
+    """
+    clock = [(T0 + i * 0.01, 100.0 + i * 0.01) for i in range(20001)]
+    tf = []
+    for i in range(n):
+        sim = 100.0 + i * 0.05
+        late = target is not None and abs(sim - at_sim) < 1e-9
+        lag = (target - 0.05) if late else 0.010
+        tf.append((sim, T0 + (sim - 100.0) + lag))
+    return tf, clock
+
+
+# The window R10's gate applies inside: sim [120, 220], so 150 is inside it and
+# 250 is past it.
+RIG_WINDOW = rh.window_from(120.0, 100.0, T0 + 20.0, T0 + 120.0, 220.0,
+                            '/robot_0/cmd_vel')
+
+
+def _tols(collision=0.2, behaviour=0.1):
+    """The five declarations nav2_robotK.yaml carries, in the shape
+    tolerance_facts() returns them.
+    """
+    return [
+        {'block': 'controller_server.FollowPath', 'tol': 0.5, 'line': 132,
+         'frames': {}},
+        {'block': 'local_costmap.local_costmap', 'tol': 0.5, 'line': 163,
+         'frames': {'global_frame': 'robot_0/odom'}},
+        {'block': 'global_costmap.global_costmap', 'tol': 0.5, 'line': 236,
+         'frames': {'global_frame': 'robot_0/map'}},
+        {'block': 'behavior_server', 'tol': behaviour, 'line': 309,
+         'frames': {'local_frame': 'robot_0/odom'}},
+        {'block': 'collision_monitor', 'tol': collision, 'line': 358,
+         'frames': {'odom_frame_id': 'robot_0/odom'}},
+    ]
+
+
+def _r10(target, at_sim, tols=None, starts=(), window=RIG_WINDOW):
+    tf, clock = _rig(target, at_sim)
+    measured = rh.rig_timeliness(tf, clock, window['sim_lo'], window['sim_hi'])
+    return rh.report_rig_timeliness(
+        0, window, measured, tols or _tols(), list(starts), 20.0,
+        Path('nav2_robot0.yaml'), clock)
+
+
+# ── the measurement ──────────────────────────────────────────────────────────
+
 def test_a_punctual_link_reads_one_lag_and_one_period_of_staleness():
     """The floor, and why staleness never reads zero: a consumer asking just
     before the next sample arrives sees the previous one, one period old.
     """
-    clock = _clock()
-    # 20 Hz, each transform on the wire 10 ms after its own instant.
-    tf = [(100.0 + i * 0.05, 1790000000.0 + i * 0.05 + 0.010)
-          for i in range(20)]
+    tf, clock = _rig()
     got = rh.rig_timeliness(tf, clock, 100.0, 101.0)
 
-    lags = [lag for _s, _r, lag in got['lags']]
-    stale = [age for _n, age, _r in got['stale']]
-    assert lags == pytest.approx([0.010] * 20, abs=1e-6)
+    lags = [lag for _s, _r, lag in got['lags']['in']]
+    stale = [age for _n, age, _r in got['stale']['in']]
+    assert lags == pytest.approx([0.010] * 21, abs=1e-6)
     # 50 ms of period plus the 10 ms lag of the arriving sample.
-    assert stale == pytest.approx([0.060] * 19, abs=1e-6)
+    assert stale == pytest.approx([0.060] * 20, abs=1e-6)
 
 
 def test_a_late_transform_shows_in_both_and_in_different_units():
@@ -668,24 +720,27 @@ def test_a_late_transform_shows_in_both_and_in_different_units():
     much sim elapsed while it was missing.
     """
     clock = _clock(step_recv=0.02, step_sim=0.01)        # RTF 0.5
-    tf = [(100.0 + i * 0.05, 1790000000.0 + i * 0.10) for i in range(10)]
+    tf = [(100.0 + i * 0.05, T0 + i * 0.10) for i in range(10)]
     tf[5] = (tf[5][0], tf[5][1] + 0.200)                 # 200 ms wall late
     got = rh.rig_timeliness(tf, clock, 100.0, 101.0)
 
-    lags = [lag for _s, _r, lag in got['lags']]
-    assert max(lags) == pytest.approx(0.200, abs=1e-6)
-    stale = [age for _n, age, _r in got['stale']]
-    assert max(stale) == pytest.approx(0.05 + 0.100, abs=1e-6)
+    assert max(lag for _s, _r, lag in got['lags']['in']) == pytest.approx(
+        0.200, abs=1e-6)
+    assert max(age for _n, age, _r in got['stale']['in']) == pytest.approx(
+        0.05 + 0.100, abs=1e-6)
 
 
-def test_only_transforms_inside_the_window_are_measured():
-    clock = _clock()
-    tf = [(100.0 + i * 0.05, 1790000000.0 + i * 0.05 + 0.010)
-          for i in range(20)]
-    got = rh.rig_timeliness(tf, clock, 100.5, 101.0)
+def test_samples_are_split_by_the_window_and_not_dropped():
+    """R10 gates inside the window and reports outside it, so both halves are
+    measured -- the same division R4 makes.
+    """
+    tf, clock = _rig()
+    got = rh.rig_timeliness(tf, clock, 120.0, 220.0)
 
-    assert [round(s, 3) for s, _r, _lag in got['lags']] == [
-        pytest.approx(100.5 + i * 0.05, abs=1e-6) for i in range(10)]
+    assert all(120.0 <= s <= 220.0 for s, _r, _lag in got['lags']['in'])
+    assert got['lags']['out'], 'the pre- and post-window transforms are kept'
+    assert (len(got['lags']['in']) + len(got['lags']['out'])
+            == len(tf))
 
 
 def test_quantiles_of_nothing_are_none_rather_than_a_crash():
@@ -709,12 +764,124 @@ def test_interpolation_beats_the_nearest_clock_sample():
     assert rh._interp(xs, ys, 1.0) == pytest.approx(20.0)
 
 
+# ── the threshold: whose deadline ────────────────────────────────────────────
+
+def test_the_gate_takes_the_tightest_always_asking_deadline():
+    """0.2 s, collision_monitor's -- not behavior_server's 0.1 s, which is only
+    in force while a behaviour runs. Across b2maps k0-k4 behavior_server ran
+    none at all, so gating on its 0.1 s would fail three runs on a deadline
+    nothing was waiting on.
+    """
+    value, decl = rh.gate_tolerance(_tols())
+    assert value == pytest.approx(0.2)
+    assert decl['block'] == 'collision_monitor'
+    assert decl['line'] == 358
+
+    # The excluded one is still the floor everything is REPORTED against.
+    floor, floor_decl = rh.report_floor(_tols())
+    assert floor == pytest.approx(0.1)
+    assert floor_decl['block'] == 'behavior_server'
+
+
+def test_the_exclusion_is_by_name_and_everything_else_is_included():
+    """A block that shows up later is included by default, which can only
+    tighten the gate. Loosening it takes an argument in the source.
+    """
+    assert rh.ONLY_ASKS_WHILE_ACTIVE == ('behavior_server',)
+    tols = _tols() + [{'block': 'route_server', 'tol': 0.15, 'line': 400,
+                       'frames': {}}]
+    assert rh.gate_tolerance(tols)[0] == pytest.approx(0.15)
+    # And a sub-block of an excluded node is excluded with it.
+    tols = [{'block': 'behavior_server.spin', 'tol': 0.05, 'line': 310,
+             'frames': {}}] + _tols()
+    assert rh.gate_tolerance(tols)[1]['block'] == 'collision_monitor'
+
+
+def test_the_threshold_follows_the_params_file(tmp_path):
+    """Read, never typed: the same run against a file where collision_monitor
+    declares 0.3 gates at 0.3, and a 0.25 s excursion then passes.
+    """
+    from attribute_tf_drop import tolerance_facts
+
+    p = tmp_path / 'nav2_robotX.yaml'
+    p.write_text(
+        'behavior_server:\n'
+        '  ros__parameters:\n'
+        '    transform_tolerance: 0.1\n'
+        'collision_monitor:\n'
+        '  ros__parameters:\n'
+        '    transform_tolerance: 0.3\n')
+    tols = tolerance_facts(p)
+
+    value, decl = rh.gate_tolerance(tols)
+    assert value == pytest.approx(0.3)
+    assert decl['block'] == 'collision_monitor'
+    assert decl['line'] == 6
+    assert _r10(0.25, 150.0, tols=tols) is True
+
+
+def test_no_always_asking_consumer_is_not_evaluated_rather_than_passed():
+    """Nothing to judge against is not nothing wrong. It exits 3."""
+    only_excluded = [{'block': 'behavior_server', 'tol': 0.1, 'line': 309,
+                      'frames': {}}]
+    assert rh.gate_tolerance(only_excluded) == (None, None)
+    assert _r10(0.21, 150.0, tols=only_excluded) is None
+    assert rh.summarise({'R10': None}) == 3
+
+
+# ── the gate ─────────────────────────────────────────────────────────────────
+
+def test_staleness_over_the_threshold_inside_the_window_fails():
+    """0.21 s against collision_monitor's 0.2 s."""
+    tf, clock = _rig(0.21, 150.0)
+    measured = rh.rig_timeliness(tf, clock, RIG_WINDOW['sim_lo'],
+                                 RIG_WINDOW['sim_hi'])
+    worst = max(age for _n, age, _r in measured['stale']['in'])
+    assert worst == pytest.approx(0.21, abs=1e-6)     # the fixture is exact
+
+    assert _r10(0.21, 150.0) is False
+    assert rh.summarise({'R10': False}) == 1
+
+
+def test_staleness_under_the_threshold_inside_the_window_passes(capsys):
+    """0.19 s. Over behavior_server's excluded 0.1 s, so it is reported -- with
+    what behavior_server was last seen starting -- and not gated.
+    """
+    assert _r10(0.19, 150.0) is True
+    out = capsys.readouterr().out
+    assert 'reported, not gated' in out
+    assert re.search(r'stale\s+190\.0 ms', out)
+    assert 'none started in this log' in out
+
+
+def test_the_same_excursion_outside_the_window_passes_and_is_reported(capsys):
+    """0.25 s at sim 250, past the window's 220. No map is built from that
+    time, so it is printed and not gated -- and it must still be printed, or
+    the window becomes a place to hide a stall.
+    """
+    assert _r10(0.25, 250.0) is True
+    out = capsys.readouterr().out
+    assert re.search(r'outside the window: \d+ samples, max 250\.0 ms, 1 '
+                     r'over 0\.20 s', out)
+    assert 'never gated' in out
+
+
+def test_the_gate_names_the_block_and_line_its_number_came_from(capsys):
+    """A verdict against a number with no provenance is not checkable."""
+    _r10(0.19, 150.0)
+    out = capsys.readouterr().out
+    assert 'collision_monitor  (nav2_robot0.yaml:358)' in out
+    assert 'excluded: behavior_server declares 0.10 s' in out
+    assert 'only looks up this link' in out
+
+
+# ── the behaviour context beside an excursion ────────────────────────────────
 # nav2_behaviors logs one INFO line when a behaviour starts (timed_behavior.hpp
-# :213) and none when it ends, so a recovery's start is on the record and its
-# end is not.
-BEHAVIOUR_START = ('[behavior_server-7] [INFO] [1789836015.000000000] '
+# :213) and none when it ends, so a start is on the record and its end is not.
+
+BEHAVIOUR_START = ('[behavior_server-7] [INFO] [1790000030.000000000] '
                    '[robot_0.behavior_server]: Running spin')
-BEHAVIOUR_LIFECYCLE = ('[behavior_server-7] [INFO] [1789836016.000000000] '
+BEHAVIOUR_LIFECYCLE = ('[behavior_server-7] [INFO] [1790000031.000000000] '
                        '[robot_0.behavior_server]: Running Nav2 LifecycleNode '
                        'rcl preshutdown (behavior_server)')
 
@@ -725,26 +892,40 @@ def test_a_recovery_start_is_counted_and_the_lifecycle_line_is_not():
     """
     got = rh.recovery_starts([BEHAVIOUR_START, BEHAVIOUR_LIFECYCLE,
                               E0_LAUNCH_LINE])
-    assert got == [(pytest.approx(1789836015.0), 'spin')]
+    assert got == [(pytest.approx(1790000030.0), 'spin')]
 
 
 def test_no_behaviour_in_the_log_says_so_rather_than_guessing():
     """k0-k4 ran none at all, which is the answer to whether behavior_server --
-    the only consumer declaring 0.1 s -- was looking during their excursions.
+    the consumer whose 0.1 s their excursions exceed -- was ever looking.
     """
     assert rh.recovery_starts([E0_LAUNCH_LINE]) == []
-    assert rh._recovery_context(1789836020.0, []) == 'none ran in this log'
+    assert rh._recovery_context(T0 + 50.0, []) == 'none started in this log'
 
 
-def test_the_recovery_context_never_claims_a_behaviour_was_still_running():
-    """There is no end line to close a span with, so the report says how long
-    ago one began and no more.
+def test_the_behaviour_context_is_in_sim_seconds(capsys):
+    """Every deadline here is in sim time, so the gap since a behaviour
+    began is too. At RTF 1 they coincide; the point is the clock is consulted.
     """
-    starts = rh.recovery_starts([BEHAVIOUR_START])
-    said = rh._recovery_context(1789836017.5, starts)
-    assert 'spin started 2.5 s earlier' in said
+    _, clock = _rig()
+    starts = rh.recovery_starts([BEHAVIOUR_START])       # wall T0 + 30
+    said = rh._recovery_context(T0 + 32.5, starts, clock)
+
+    assert 'spin started 2.5 s of sim earlier' in said
     assert 'no end line is logged' in said
-    assert 'none yet' in rh._recovery_context(1789836000.0, starts)
+
+
+def test_a_behaviour_start_outside_the_clock_series_is_said_to_be_wall():
+    """Rather than silently reporting wall seconds as sim ones."""
+    said = rh._recovery_context(T0 + 32.5,
+                                rh.recovery_starts([BEHAVIOUR_START]), [])
+    assert 'of WALL earlier' in said
+    assert 'outside the clock series' in said
+
+
+def test_the_context_never_claims_a_behaviour_was_still_running():
+    starts = rh.recovery_starts([BEHAVIOUR_START])
+    assert 'none started yet' in rh._recovery_context(T0, starts)
 
 
 # ── coverage: closest approach ───────────────────────────────────────────────
