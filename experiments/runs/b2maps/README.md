@@ -643,6 +643,12 @@ per cell in world coordinates — necessary because slam_toolbox recomputes a
 0.243 cells apart, so comparing by array index would report a sub-cell shift as
 wholesale disagreement.
 
+The YAML thresholds these maps carry, like stock `map_saver` defaults, do not
+recover byte 205 as unknown, so readers go through
+`experiments/analysis/trinary_map.py`, which lets the reserved byte override. No
+writer changes; if the maps are ever released, the release step rewrites the
+thresholds.
+
 **Zeroing the gates is necessary but not sufficient: a scan that never arrives
 cannot be integrated.** slam_toolbox subscribes through a
 `tf2_ros::MessageFilter` that parks scans until `odom → base_footprint` is

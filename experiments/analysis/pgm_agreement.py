@@ -43,6 +43,12 @@ stated in the output because there is more than one defensible choice:
           as one sample of a distribution.
 
 Reads only the PGM and its .yaml sidecar. numpy and PyYAML, no ROS.
+
+The reader itself lives in trinary_map.py -- the P5 header walk, the sidecar
+read, the three reserved bytes and the convention-A resampler. This file compares
+by RESERVED BYTE and never consults the thresholds, which is correct but is
+correct for a reason stated over there: the thresholds these maps carry do not
+recover byte 205 as unknown.
 """
 
 from __future__ import annotations
@@ -53,88 +59,21 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import yaml
 
-# nav2 trinary PGM values, the convention save_map.py writes and
-# run_offline_maps.sh verifies against.
-OCC, FREE, UNKNOWN = 0, 254, 205
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-RES_TOL = 1e-9          # two maps of one world share a resolution exactly
-EPS = 1e-9              # float slack when flooring an exact cell boundary
-
-
-def read_pgm(path: Path) -> np.ndarray:
-    """Pixels of a binary P5 PGM as (h, w) uint8.
-
-    Same header walk as run_offline_maps.sh's verifier and pgm_extent.py:
-    three whitespace-separated fields after the magic, '#' comments allowed.
-    """
-    data = path.read_bytes()
-    if data[:2] != b'P5':
-        sys.exit(f'{path}: not a binary PGM')
-    i, fields = 2, []
-    while len(fields) < 3:
-        while i < len(data) and data[i:i + 1].isspace():
-            i += 1
-        if data[i:i + 1] == b'#':
-            while i < len(data) and data[i:i + 1] != b'\n':
-                i += 1
-            continue
-        j = i
-        while j < len(data) and not data[j:j + 1].isspace():
-            j += 1
-        fields.append(int(data[i:j]))
-        i = j
-    i += 1
-    w, h, _maxval = fields
-    px = data[i:i + w * h]
-    if len(px) != w * h:
-        sys.exit(f'{path}: header says {w}x{h} but only {len(px)} pixel bytes follow')
-    return np.frombuffer(px, dtype=np.uint8).reshape(h, w)
-
-
-def load(path: Path) -> dict:
-    meta_path = path.with_suffix('.yaml')
-    for p in (path, meta_path):
-        if not p.is_file():
-            sys.exit(f'not found: {p}')
-    meta = yaml.safe_load(meta_path.read_text())
-    px = read_pgm(path)
-    return {
-        'path': path,
-        'md5_px': hash(px.tobytes()),
-        'px': px,
-        'height': px.shape[0],
-        'width': px.shape[1],
-        'resolution': float(meta['resolution']),
-        'origin': [float(v) for v in meta['origin']],
-        'occupied': int(np.count_nonzero(px == OCC)),
-        'free': int(np.count_nonzero(px == FREE)),
-        'unknown': int(np.count_nonzero(px == UNKNOWN)),
-        'other': int(np.count_nonzero((px != OCC) & (px != FREE) & (px != UNKNOWN))),
-    }
-
-
-def sample(m: dict, res: float, x0: float, y0: float,
-           w: int, h: int) -> np.ndarray:
-    """`m`'s classes at the centres of a (h, w) lattice starting at (x0, y0).
-
-    Lattice cell (0, 0) has its centre at (x0 + res/2, y0 + res/2) and rows go
-    UPWARD in y, so the returned array is bottom-up rather than in PGM order.
-    Centres outside the map are unknown.
-    """
-    xs = x0 + (np.arange(w) + 0.5) * res
-    ys = y0 + (np.arange(h) + 0.5) * res
-    cols = np.floor((xs - m['origin'][0]) / res + EPS).astype(np.int64)
-    rows = np.floor((ys - m['origin'][1]) / res + EPS).astype(np.int64)
-
-    out = np.full((h, w), UNKNOWN, dtype=np.uint8)
-    keep_c = (cols >= 0) & (cols < m['width'])
-    keep_r = (rows >= 0) & (rows < m['height'])
-    if keep_c.any() and keep_r.any():
-        flipped = m['px'][::-1, :]        # bottom-up, so +y is +row
-        out[np.ix_(keep_r, keep_c)] = flipped[np.ix_(rows[keep_r], cols[keep_c])]
-    return out
+# The shared reader. Re-exported rather than re-implemented: robot_divergence.py
+# imports these names from here, and so does test_robot_divergence.
+from trinary_map import (  # noqa: E402,F401
+    EPS,
+    FREE,
+    OCC,
+    RES_TOL,
+    UNKNOWN,
+    load,
+    read_pgm,
+    sample,
+)
 
 
 def compare(ref: dict, other: dict) -> dict:

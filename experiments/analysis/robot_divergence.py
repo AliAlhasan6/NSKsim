@@ -105,17 +105,29 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'analysis'))
 sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'slam'))
 
-# The P5 header walk, the YAML sidecar read, and -- the important one -- the
-# convention-A resampler. sample() flips the rows once and fills UNKNOWN outside
-# the map, so handing it a grid already recoded to these three values makes it a
-# three-state resampler with no change to it at all.
-from pgm_agreement import (  # noqa: E402
+# The shared reader: the P5 header walk, the YAML sidecar read, the three-state
+# rule (thresholds split occupied from free, the reserved byte 205 overrides), and
+# -- the important one -- the convention-A resampler. sample() flips the rows once
+# and fills UNKNOWN outside the map, so handing it a grid already recoded by
+# classify() makes it a three-state resampler with no change to it at all.
+#
+# trinary_map.py's docstring is where the 205-reads-as-free arithmetic and the
+# three writer locations are stated; the call sites below say only why this
+# measurement cares.
+#
+# shade is imported but not called here: it is the single-byte form of the same
+# question classify() asks of an image, and test_robot_divergence pins the 205
+# case through this module. Hence F401.
+from trinary_map import (  # noqa: E402,F401
     FREE,
     OCC,
     RES_TOL,
     UNKNOWN,
+    check_thresholds,
+    classify,
     load,
     sample,
+    shade,
 )
 
 # load_map_to_odom is the tf2_echo parser, including its refusal when a log's
@@ -213,107 +225,14 @@ def die(msg: str) -> None:
 
 
 # ─────────────────────────────── classification ──────────────────────────────
-
-def shade(px: np.ndarray | int | float, negate: int) -> np.ndarray | float:
-    """map_server's occupancy probability for a pixel value.
-
-    Byte-identical to fit_world_transform.load_map:276 -- negate flips which end
-    of the range means occupied. Split out so the threshold guard below can ask
-    the same question of a single byte that classify() asks of a whole image.
-    """
-    return (px / 255.0) if negate else ((255.0 - px) / 255.0)
-
-
-def classify(px: np.ndarray, negate: int, occupied_thresh: float,
-             free_thresh: float) -> np.ndarray:
-    """Recode raw PGM pixels to OCC / FREE / UNKNOWN for one map.
-
-    The thresholds make the occupied/free split, as map_server's trinary mode
-    does; the RESERVED UNKNOWN BYTE (205) then overrides, and it has to, because
-    the thresholds cannot recover it.
-
-    THE TRAP, measured on these files and not theorised: experiments/slam/
-    save_map.py wrote all 20 of them, and it writes 254 for free, 0 for
-    occupied, and 205 for everything else -- then hardcodes
-    `occupied_thresh: 0.65, free_thresh: 0.25` into the YAML beside it
-    (save_map.py:72-90). Read back through those very thresholds, 205 gives a
-    shade of 50/255 = 0.196, which is BELOW free_thresh 0.25, so the thresholds
-    alone call every unknown cell FREE. The writer's round trip is not a
-    fixpoint. Applying them literally reported all 20 maps as fully known --
-    Jaccard became extent overlap, the 3526 unknown cells of
-    b2maps_k0_cut60_robot0 vanished, and the coverage half of this whole
-    measurement silently measured nothing. The band the thresholds DO map to
-    unknown is bytes 90..191, which no pixel of any of these maps occupies.
-
-    So the reserved byte wins, and check_thresholds() verifies per map that this
-    is the situation rather than assuming it. Note what 205 means here: save_map
-    writes it for a true unknown (-1) AND for the uncommitted 26..64 occupancy
-    band (run_health.py:1795 documents the same conflation), so "unknown" is
-    read as "this robot did not commit the cell to free or occupied" -- which is
-    the notion a coverage question wants anyway.
-
-    The occupied set is untouched by any of this: 205 was never above
-    occupied_thresh. test_robot_divergence pins it equal to
-    fit_world_transform.load_map's occupied set so the two cannot drift apart.
-
-    Returned in PGM row order, still row 0 = maximum y; sample() does the flip.
-    """
-    p_occ = shade(px, negate)
-    out = np.full(px.shape, UNKNOWN, dtype=np.uint8)
-    out[p_occ > occupied_thresh] = OCC
-    out[p_occ < free_thresh] = FREE
-    out[px == UNKNOWN] = UNKNOWN     # the reserved byte, last so it overrides
-    return out
-
-
-def check_thresholds(negate: int, occupied_thresh: float, free_thresh: float,
-                     other: int, where: str) -> dict:
-    """Verify a map's YAML actually describes its own PGM. Reports the quirk.
-
-    Three things, each able to fail:
-      * the thresholds must be an ordered pair in [0, 1];
-      * the reserved occupied byte must read as occupied and the reserved free
-        byte as free -- if either does not, the YAML does not describe this PGM
-        and nothing downstream means anything;
-      * every pixel must be one of the three reserved bytes. save_map.py writes
-        only those, and for any other byte the reserved-byte rule above says
-        nothing, so a fourth value is a refusal rather than a guess.
-
-    Whether the reserved unknown byte reads back as unknown is REPORTED, not
-    required: on these maps it does not (see classify), and that is the whole
-    reason classify overrides it.
-    """
-    if not 0.0 <= free_thresh <= occupied_thresh <= 1.0:
-        die(f'{where}: thresholds free={free_thresh} occupied={occupied_thresh} '
-            'are not an ordered pair in [0, 1]')
-
-    def band(byte: int) -> str:
-        s = float(shade(float(byte), negate))
-        if s > occupied_thresh:
-            return 'occupied'
-        if s < free_thresh:
-            return 'free'
-        return 'unknown'
-
-    for byte, want in ((OCC, 'occupied'), (FREE, 'free')):
-        if band(byte) != want:
-            die(f'{where}: the reserved {want} byte {byte} reads as '
-                f'{band(byte)!r} under this YAML (negate={negate}, '
-                f'occupied_thresh={occupied_thresh}, free_thresh={free_thresh}). '
-                'The YAML does not describe its own PGM.')
-    if other:
-        die(f'{where}: {other} pixels are none of the three reserved bytes '
-            f'({OCC}, {FREE}, {UNKNOWN}). save_map.py writes only those, so the '
-            'reserved-byte rule classify() relies on says nothing about these '
-            'and guessing is worse than stopping.')
-
-    return {'unknown_byte': UNKNOWN,
-            'unknown_byte_shade': float(shade(float(UNKNOWN), negate)),
-            'unknown_byte_band_under_thresholds': band(UNKNOWN),
-            'unknown_byte_recovered_by_thresholds': band(UNKNOWN) == 'unknown',
-            'threshold_unknown_band_bytes': [
-                b for b in range(256) if band(b) == 'unknown'][:1] + [
-                b for b in range(256) if band(b) == 'unknown'][-1:]}
+# shade(), classify() and check_thresholds() are imported from trinary_map.py,
+# which states the rule and the 205-reads-as-free arithmetic once for every reader
+# of these files. What matters HERE is what the rule buys this measurement:
+# applying the thresholds literally reported all 20 maps as fully known, so
+# Jaccard became extent overlap and the coverage half of this script silently
+# measured nothing. The 3526 unknown cells of b2maps_k0_cut60_robot0 are the ones
+# that vanished. check_thresholds() is called per map in register_map() so that
+# this is verified on every input rather than assumed once.
 
 
 # ──────────────────────────── registration ───────────────────────────────────

@@ -685,6 +685,9 @@ can be evicted"
   python3 - "$OUT.pgm" <<'PYEOF'
 import sys
 # nav2 trinary PGM: 0 = occupied, 205 = unknown, 254 = free.
+# experiments/analysis/trinary_map.py is the authority for that byte rule (and for
+# why the YAML thresholds must not be used instead); duplicated inline here on
+# purpose, because this gate runs in a ROS shell with no analysis dir on the path.
 path = sys.argv[1]
 data = open(path, 'rb').read()
 # Skip the P5 header: magic, dims, maxval -- three whitespace-separated fields

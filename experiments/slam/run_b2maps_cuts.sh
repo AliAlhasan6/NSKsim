@@ -398,7 +398,10 @@ one arrives"
 # "occupied free unknown" of a nav2 trinary PGM, or nothing. One counter for the
 # old map and the new one, so a --force comparison is not two implementations
 # disagreeing. Same convention as run_offline_maps.sh's own verifier: 0 is
-# occupied, 254 free, 205 unknown.
+# occupied, 254 free, 205 unknown. experiments/analysis/trinary_map.py is the
+# authority for that byte rule (and for why the YAML thresholds must not be used
+# instead); duplicated inline here on purpose, because this runs in a ROS shell
+# with no analysis dir on the path.
 pgm_counts() {
   python3 - "$1" <<'PYEOF'
 import sys

@@ -14,34 +14,24 @@ Usage:
     python3 pgm_extent.py experiments/maps/b16_slamin_robot1.pgm [more.pgm ...]
 Reads <stem>.yaml beside each PGM for resolution and origin.
 Expected: well under a second per map.
+
+Classification is by RESERVED BYTE (trinary_map.OCC / FREE / UNKNOWN), never by
+the YAML's thresholds -- which is correct, and correct for a reason worth knowing:
+the thresholds these maps carry do not recover byte 205 as unknown. See
+trinary_map.py, which is the authority for that rule and the owner of the P5
+header walk this file used to duplicate.
 """
 import os
 import sys
 
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-def read_pgm(path):
-    data = open(path, "rb").read()
-    if data[:2] != b"P5":
-        raise ValueError(f"{path}: not a binary PGM")
-    i, fields = 2, []
-    while len(fields) < 3:
-        while data[i:i + 1].isspace():
-            i += 1
-        if data[i:i + 1] == b"#":
-            while data[i:i + 1] != b"\n":
-                i += 1
-            continue
-        j = i
-        while not data[j:j + 1].isspace():
-            j += 1
-        fields.append(int(data[i:j]))
-        i = j
-    i += 1
-    w, h, _maxval = fields
-    px = np.frombuffer(data[i:i + w * h], dtype=np.uint8).reshape(h, w)
-    return px
+# read_pgm accepts a str here (test_run_health.py passes one) as well as a Path.
+# Only resolution and origin come out of the sidecar below, so this file needs
+# neither PyYAML nor the threshold fields.
+from trinary_map import FREE, OCC, UNKNOWN, read_pgm  # noqa: E402
 
 
 def read_yaml(path):
@@ -81,16 +71,16 @@ def main():
         px = read_pgm(pgm)
         res, origin = read_yaml(yaml)
         h, w = px.shape
-        occ = int((px == 0).sum())
-        free = int((px == 254).sum())
-        unk = int((px == 205).sum())
+        occ = int((px == OCC).sum())
+        free = int((px == FREE).sum())
+        unk = int((px == UNKNOWN).sum())
         print(f"{pgm}")
         print(f"  grid {w}x{h} @ {res} m = {w*res:.2f} x {h*res:.2f} m; "
               f"origin ({origin[0]:.3f}, {origin[1]:.3f})")
         print(f"  cells: {occ} occupied, {free} free, {unk} unknown")
-        for label, mask in (("known (occ+free)", px != 205),
-                            ("free only", px == 254),
-                            ("occupied only", px == 0)):
+        for label, mask in (("known (occ+free)", px != UNKNOWN),
+                            ("free only", px == FREE),
+                            ("occupied only", px == OCC)):
             b = box(mask, res, origin, h)
             if b is None:
                 print(f"  {label:<18} none")
