@@ -101,6 +101,30 @@ SPAWN_REV=08617b2
 # byte-identically; this is the B2 corpus's choice, not a change to that script.
 DET_MODE=true
 
+# TRAVEL_GATE=true strips robot K's scans that the robot did not move for, so a
+# parked robot stops outvoting the rest of its own map: a scan is admitted only
+# if the sensor pose moved >= 0.01 m or turned >= 0.5 deg since the last ADMITTED
+# scan (strip_bag_for_offline_slam.py --travel-gate). It exists because the
+# b2maps cut1200 robots sit still for 47-62% of their window and those parked
+# rays CLEAR wall cells that the moving rays committed -- measured in
+# experiments/logs/graph_walls/diagnose_karto.json, where removing them recommits
+# 84% and 69% of the off-wall cells on k1 and k3.
+#
+# EVERY GATED ARTEFACT GETS ITS OWN NAME. CUTRUN carries a _gated suffix, and
+# since the stripped bag, the params, both logs, the map->odom capture, the world
+# fit and the map stem are all derived from CUTRUN, nothing that exists now is
+# overwritten and the two variants can sit side by side.
+#
+# The counts that depend on the scan count follow the gated bag on their own:
+# scan_queue_size is read off it by bag_scan_facts.py --count
+# (run_offline_maps.sh:501-507), and the drop gate below places each drop against
+# --first-stamp of it, which the gate leaves alone because the segment's first
+# scan is always admitted. C4 is upstream of the strip and untouched.
+# Validated in the preflight, not here: die() is defined further down and this
+# script does not run under `set -e`, so a call to it from up here would print
+# "die: command not found" and carry on with a value nobody checked.
+TRAVEL_GATE="${TRAVEL_GATE:-false}"
+
 # Step 2's reference. 1200 s is the recording rule these runs were taken under,
 # and it is the cut whose --start every other cut has to agree with.
 REF_MIN_SIM=1200
@@ -444,6 +468,9 @@ echo "                 b2maps_k4_cut60 differed by 3.06 % of known cells."
 echo "  batch log      $BATCH_LOG"
 echo "  repo           $REPO_ROOT @ $(git rev-parse --short HEAD 2>/dev/null || echo '?')$(git diff --quiet 2>/dev/null || echo ' (dirty)')"
 
+[[ "$TRAVEL_GATE" == "true" || "$TRAVEL_GATE" == "false" ]] || \
+  die "TRAVEL_GATE must be exactly 'true' or 'false', got: '$TRAVEL_GATE'"
+
 for f in "$CHECK" "$STRIP" "$OFFLINE" "$FIT" "$SCAN_FACTS"; do
   [[ -f "$f" ]] || die "missing script: $f"
 done
@@ -499,6 +526,10 @@ for K in "${ROBOTS[@]}"; do
 
   for CUT in "${CUTS[@]}"; do
     CUTRUN="${RUN}_cut${CUT}"
+    # The gated variant is a different run with a different name, all the way
+    # down: $SLAMIN, the params, both logs, the map->odom file, the world fit and
+    # the map stem are all built from CUTRUN.
+    [[ "$TRAVEL_GATE" == "true" ]] && CUTRUN="${CUTRUN}_gated"
     MAP="$MAPDIR/${CUTRUN}_robot$K"
     SLAMIN="$LOGS/${CUTRUN}_slamin"
     SLAMLOG="$SLAMLOGS/offline_slam_${CUTRUN}_robot_$K.log"
@@ -655,8 +686,10 @@ for K in "${ROBOTS[@]}"; do
       rm -rf "$SLAMIN" || fail "could not remove $SLAMIN"
     fi
 
+    STRIP_GATE=()
+    [[ "$TRAVEL_GATE" == "true" ]] && STRIP_GATE=(--travel-gate "$K")
     run_step "$STRIP_LOG" python3 "$STRIP" "$BAG" "$SLAMIN" \
-        --start "$CUT_START" --duration "$CUT_DUR" \
+        --start "$CUT_START" --duration "$CUT_DUR" "${STRIP_GATE[@]}" \
       || fail "$CUTRUN: strip_bag_for_offline_slam.py failed ($STRIP_LOG)"
     [[ -f "$SLAMIN/metadata.yaml" ]] || fail "$CUTRUN: $SLAMIN is not a bag after the strip"
 
