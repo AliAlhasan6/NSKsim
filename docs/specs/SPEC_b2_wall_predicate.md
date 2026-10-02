@@ -489,3 +489,317 @@ the same effect `robot_divergence.py:174-206` documents for its swap gate:
 in an axis-aligned, nearly symmetric arena a wrong placement can leave long
 walls overlapping themselves, and an absolute threshold on the result silently
 assumes it away.
+
+### 12.1 The gated batch, reported only
+
+`compare_gated_maps.py` on the travel-gated batch: **C1 20/20, C2 5/5 at 100 %**,
+and the `--break ungated-prediction` run failed C2 on 5/5 cut1200 maps as
+pre-registered. `experiments/logs/b2maps_gated/comparison.json` carries it.
+
+Reported and **not to be chased**: k2's short cuts are the only maps where C2
+comes out under 100 %, by 3, 1 and 1 cells at cut60, cut120 and cut240. The short
+cuts are the ones C2 was written not to judge — the gated and ungated predictions
+differ there by a handful of cells, so a single cell is a whole percentage point —
+and three cells on one robot is not a finding.
+
+### 12.2 The half-cell fix, and what it did to the numbers in §12
+
+`slam_toolbox` publishes Karto's grid offset verbatim as the map origin — `toNavMap`
+assigns `map.info.origin.position = occ_grid->GetCoordinateConverter()->GetOffset()`
+(`include/slam_toolbox/visualization_utils.hpp:108-129`, the assignment at
+:123-124) — and Karto centres cell *i* on that offset: `GridToWorld` returns
+`m_Offset + rGrid/m_Scale` and `WorldToGrid` inverts it with `math::Round`
+(`karto_sdk/include/karto_sdk/Karto.h:4421-4436`, `:4444-4458`). Every
+ROS-convention reading, `origin + (i+0.5)*res`, therefore placed a cell 0.05 m too
+far in +x and +y. That is now one constant, `trinary_map.CELL_CENTRE_OFFSET = 0.0`,
+with three helpers (`cell_centre`, `cell_low_edge`, `cell_index`); every
+index-to-position site in the project routes through it and the one hand
+compensation — `compare_gated_maps`' `-rho/2` on each origin — is gone.
+
+**What did not move, and why.** `robot_divergence`'s whole output is byte-identical,
+as is `compare_gated_maps`' `comparison.json` apart from its new `provenance`
+field, and the fitter's on-wall scores are identical to three decimals on 5/5
+cut1200 maps in both conventions. The reason is arithmetic, and it is worth
+stating because it bounds what any of these checks can ever prove:
+`trinary_map.sample` asks for `x = x0 + (i + c)*res` and answers with
+`floor((x - origin)/res + 0.5 - c)`, so changing `c` moves the query lattice and
+the lookup together and cancels, and a shift applied to `x0` and `origin` alike
+cancels too. **Any measurement whose every lattice is named relative to another
+lattice is invariant to this convention.** That is why the hand compensation in
+`compare_gated_maps` was inert: removing it could not change `comparison.json`,
+and the pre-registered break that reinstates it on BOTH origins does nothing. A
+live break had to be added, `--break half-cell-source-only`, which shifts the
+source origin alone: it fails the resampler self-check on 20/20 and moves C1 from
+100 % to 90.5–95.2 %.
+
+**Part A's extraction barely moves, and the one place it does is named.** A uniform
+translation of every element leaves the Hough accumulator almost alone — each
+element's `d` shifts by `t · n(theta)`, which varies with theta, so the per-theta
+bin phase is not quite preserved. Measured over the 20 ungated maps: **total
+segment length within 1 % on 20/20** (worst 0.626 %, 14 of 20 under 0.002 %), and
+**segment count unchanged on 19/20**. The exception is `b2maps_k2_cut240_robot2`,
+11 → 10 segments and −0.5955 m, and it is one segment: a **0.6002 m, 7-element
+fragment on the fallback `extraction_line`**, whose elements were absorbed into the
+7.15 m walls beside it. That is the l_min-floor corner population A11 already
+flags, not a wall. Element count identical (1031), iterations 4567 → 4614. By the
+letter of the pre-registration — segment count within 1 % on 20/20 — this **FAILS
+on 1 of 20**, since one segment out of 11 is 9 %; the threshold has not been moved.
+
+The convention bites in exactly one place: where a **world coordinate** meets a
+**cell index**. Three such sites, and all three moved.
+
+* **the fitter.** `cell_points` lifts occupied cells to points, so the fitted
+  translation moves by exactly **+0.0500 in dx and +0.0500 in dy** on 5/5 cut1200
+  maps in both conventions, with the score, theta, the resolved convention and the
+  A–B margin all unchanged. The half cell, recovered and visible.
+* **A8**, which cannot adjudicate this convention on this world, and the
+  pre-registered prediction that its median would fall on 20/20 **FAILED: it falls
+  on 15/20 and rises on 5/20**, and the threshold has not been moved. The reason is
+  measured: this world's wall surfaces lie at x and y phases **0.0 and 0.05 modulo
+  rho** (inner faces at ±9.95/±4.1/±3.9/±1.0/±6.0, outer at ±10.05/±10.1), and a
+  half-cell translation maps the set {0.0, 0.05} onto itself. A8's
+  `share_all` is byte-identical on 20/20 in consequence. Over all 14 693 assigned
+  elements the mean distance to a wall improves slightly (0.0762 → 0.0714 m) while
+  the share sitting exactly on a surface drops (4.02 % → 1.40 %); the median hops
+  between discrete distance levels and goes both ways. A8 is a test of whether the
+  cell edges happen to coincide with the wall surfaces, not of where the cells are.
+* **B1**, which bites hardest, and which turns up the explanation §12 stopped
+  looking for.
+
+**B1 and the far edge of Karto's own grid.** Under the corrected binning B1 falls
+on 20/20 maps, by up to 43 pp, and 16/20 holding becomes 9/20. It is not the fix
+being wrong. `OccupancyGrid::ComputeDimensions` (`Karto.h:6090-6114`) sets
+`rOffset = boundingBox.GetMinimum()` and `rWidth = Round(size*scale)`; under the
+centre semantics `WorldToGrid` actually uses, a grid of W cells covers
+`[O - res/2, O + (W - 0.5)*res)`, while the scans span `[O, O + size]`. On
+`b2maps_k2_cut1200_robot2` that span is 200.117 cells against W = 200, so **the
+last 0.6 cell of Karto's own bounding box has no cell to put a return in** — the
+same class is internally inconsistent about this, since `CoordinateConverter::
+GetBoundingBox` (`:4536-4548`) treats the offset as the grid's minimum CORNER.
+Measured consequences:
+
+| | k0_cut240 | k4_cut120 | k1_cut1200 | k3_cut1200 |
+|---|---|---|---|---|
+| B1 as §12 recorded it | 80.9 % | 82.1 % | 77.2 % | 86.6 % |
+| B1, corrected binning | 76.1 % | 81.1 % | 47.8 % | 58.2 % |
+| returns rounding OFF the grid | 23.4 % | 18.3 % | 50.8 % | 40.7 % |
+| …of those, in the last row or column | 100.0 % | 100.0 % | 100.0 % | 100.0 % |
+| **B1 among returns that reached the grid** | **99.37 %** | **99.20 %** | **97.17 %** | **98.15 %** |
+| §12's off-wall returns that round off the grid | 97.3 % | 96.2 % | 94.0 % | 91.9 % |
+
+B1 restricted to returns that reached the grid is **97.17–100.00 % on 20/20 maps**,
+and the four B1 failures of §12 are not among them. 91.9–97.3 % of the very
+returns §12 called off-wall — **including both maps §12 recorded as unexplained** —
+are returns whose Karto cell index equals the grid width. A hit there is skipped
+by `TraceLine`; the passes along the same ray stop at W-1 and are kept; passes
+without hits is precisely Karto's FREE. `diagnose_karto`'s rebuild reproduced
+every map at 100.00 % while dropping exactly those endpoints, which is why nothing
+in the three diagnosis files could see it: all of them inherited the drop.
+
+It arrived as a by-product of the half-cell fix rather than from a pre-registered
+test, so §12.3 records what has been ruled on it and what has not.
+
+The 20 regenerated `<map>.json` files carry B1 under the corrected binning, each
+with a `provenance.cell_centre` block naming the convention. The previous run's
+values are the ones quoted in §12 above.
+
+### 12.3 Rulings on §12.2, by Ali
+
+**B1 is redefined, POST HOC, and the label travels with it.** A return that falls
+outside the map's grid cannot be checked against the map: there is no cell where it
+landed to be occupied or free. So
+
+> **B1 = the share of IN-GRID kept returns within one cell of an occupied cell.**
+
+The **threshold stays at 90 %**, unmoved. Every map also carries `B1_offgrid`, the
+share of kept returns that round off the grid, and
+`B1_on_occupied_share_all_returns`, the original all-returns figure — so nothing is
+hidden and the old number is recoverable from any JSON. `B1_redefined` in each
+`checks` block says POST HOC in those words, and `obs_summary_line` prints all
+three. The change is a change of DENOMINATOR made after seeing data, for the stated
+reason above, and it is not evidence for anything by itself.
+
+Two consequences inside the tool, both deliberate:
+
+* `n_returns_off_wall` and the `off_wall_sample` the A8–A11 pass diagnoses are now
+  **in-grid misses only**. The whole point of that diagnosis is to separate "the
+  map has no wall where a wall is" from "the return is misplaced", and an off-grid
+  return is neither. `n_returns_off_wall_all` keeps the old count.
+* `--break convention-b` still bites: a row flip moves the walls, not a return's
+  grid membership, so the denominator is untouched and only the hits fall. Pinned
+  by test.
+
+**Measured, on the 20 ungated maps regenerated under the new definition: in-grid B1
+HOLDS 20/20, worst 97.17 %.** The all-returns figure would hold on 9/20, and the
+worst off-grid share is 50.78 %. Every map's `checks` carries `B1_definition`,
+`B1_redefined` (the words POST HOC), `B1_on_occupied_share_all_returns`,
+`B1_offgrid`, and the three counts behind them; `obs_summary_line` prints all three
+shares. B2 and B3 are unaffected except by the half-cell fix itself: B2 still fails
+on 1 of 20, `b2maps_k2_cut1200_robot2` at 1.352 % against the 1.377 % §12 records,
+and B3 is +0 on 20/20.
+
+**A8 under K3: FAILED and uninformative.** The median falls on 15/20 and rises on
+5/20 against a pre-registered 20/20. This world's wall surfaces sit at phases 0.0
+and 0.05 modulo rho, so a half-cell shift maps the set onto itself and A8's
+`share_all` is byte-identical on 20/20. **That is a flaw in the test design, not a
+finding about the maps or the extractor.** A8 remains a valid check that elements
+land on walls at all; it is not a check of where a cell sits, and no future change
+of that kind should be judged by it. K3's count miss stands as recorded:
+`b2maps_k2_cut240_robot2`, 11 → 10 segments, one 0.6002 m l_min-floor fragment.
+
+**`frontier_explorer`'s `/map` reading stays as it is** — `origin + (i+0.5)*res` at
+`frontier_explorer.py:1450`, `:1524`, `:1528`, `:2456`, `:2459`. It is the robot's
+own control loop, so half a cell there is **behaviour, not measurement**, and the
+one definition in `trinary_map` does not reach into it by design.
+
+**§12's residual is reclassified.** The four B1 failures —
+`b2maps_k0_cut240_robot0`, `b2maps_k4_cut120_robot4`, `b2maps_k1_cut1200_robot1`,
+`b2maps_k3_cut1200_robot3` — are **no longer unexplained**. The candidate cause is
+**the grid extent**: Karto's width and height are `Round(size*scale)` with
+centre-semantics indexing, so the grid stops short of its own bounding box and hits
+on the max-x and max-y walls are discarded while the passes along the same rays are
+kept. 91.9–97.3 % of the returns §12 called off-wall are returns whose cell index
+equals the grid width, and in-grid B1 on those four maps is 99.37 / 99.20 / 97.17 /
+98.15 %. The two maps §12 recorded as accounted for by nothing — `k0_cut240` and
+`k4_cut120` — are included. §12's stopping rule ("no fifth candidate is pursued")
+is satisfied rather than broken: this candidate was not found by searching for one.
+
+The spin-smear line of §12 **stays, and stays marked UNTESTED**: possible smear of
+long-range returns during fast spins (pose/scan timing). It is not retracted and it
+is not tested.
+
+§12.4 is the pre-registered test of the grid-extent candidate.
+
+### 12.4 The grid-extent candidate, pre-registered and tested
+
+`experiments/analysis/diagnose_extent.py` → `experiments/logs/graph_walls/diagnose_extent.json`.
+Truth-derived, diagnosis only, reported and never gated, like A8–A11. 40 maps in
+214 s. X1 and X2 were printed before any number was read, and were judged on **all
+20 ungated and all 20 gated maps** — the strictest reading of "every map" — with the
+two subsets reported separately so neither could be chosen afterwards.
+
+**Both held.**
+
+**1. How the dimensions are set, and nothing pads them.**
+`OccupancyGrid::ComputeDimensions` (`Karto.h:6089-6113`) takes the union of the
+processed scans' bounding boxes (`:6097-6105`) and sets
+`rWidth = Round(size.GetWidth()*scale)` (`:6111`), `rHeight` likewise (`:6112`),
+`rOffset = boundingBox.GetMinimum()` (`:6113`), with `scale = 1/resolution`
+(`:6108`); `math::Round` is `v >= 0 ? floor(v+0.5) : ceil(v-0.5)` (`Math.h:87-90`).
+The static `CreateFromScans` (`:5947-5964`) passes those three straight to the
+constructor (`:5910-5930`) — **no border, no margin, no rounding up** — and
+`Grid::CreateGrid` (`:4586-4594`) takes no `borderSize`. The one thing that looks
+like padding is not addressable: `Grid::Resize` (`:4636-4664`) sets
+`m_WidthStep = AlignValue(width, 8)` (`:4640`, `Math.h:234-237`), an 8-aligned row
+**stride** for the data array, while `m_Width` stays `Round(size*scale)` and
+`IsValidGridIndex` tests `m_Width` (`:4671-4674`).
+
+So with `u = size/res` and `W = Round(u)`, and `WorldToGrid` rounding about the
+offset, a grid of `W` cells covers `[O − res/2, O + (W − 0.5)·res)` while the scans
+span `[O, O + size]`. The far-edge shortfall is `u − Round(u) + 0.5` cells, **which
+lies in [0, 1) for every u**: under its own indexing Karto's grid always stops short
+of its own bounding box.
+
+Measured, and it is not a corner case — **every one of the 40 maps has a shortfall**:
+
+| | min | median | max |
+|---|---|---|---|
+| shortfall in x, cells | 0.045 | 0.675 | 0.984 |
+| shortfall in y, cells | 0.006 | 0.703 | 0.973 |
+
+all in [0, 1) as derived, and 0.001–0.098 m. The recomputation reproduced each
+map's **saved origin, width and height exactly, 40/40** (`karto_extent` imported
+from `predict_gated_maps` unchanged; a map it could not reproduce would have been
+refused, not reported), so each shortfall is that map's own. Gating changes the
+bounding box on only two maps and only in y — `k2_cut60` 0.629 → 0.601 cells,
+`k4_cut1200` 0.6915 → 0.6894 — because the gate drops scans from poses the robot
+had already occupied, and a duplicate pose cannot extend a bounding box.
+
+**2. A9 recall splits by side, hard.** Max side = `wall_east.west` +
+`wall_north.south`; min side = `wall_west.east` + `wall_south.north`. On the ten
+maps where all four boundary faces were observed — which is exactly the ten cut1200
+maps, and that is X2's reach — the max-side mean recall is below the min-side mean
+on **10/10**:
+
+| map | max side | min side |
+|---|---|---|
+| k0_cut1200 | 62.33 % | 99.51 % |
+| k1_cut1200 | 73.14 % | 99.63 % |
+| k2_cut1200 | 70.52 % | 99.26 % |
+| k3_cut1200 | 81.51 % | 99.11 % |
+| k4_cut1200 | 97.85 % | 99.53 % |
+| k0_cut1200 gated | 77.52 % | 98.91 % |
+| k1_cut1200 gated | 97.03 % | 99.51 % |
+| k2_cut1200 gated | 81.11 % | 98.64 % |
+| k3_cut1200 gated | 97.97 % | 99.11 % |
+| k4_cut1200 gated | 98.34 % | 99.03 % |
+
+**3. The mechanism, three orders of magnitude apart.** Share of the returns that
+struck each boundary face which fell off the grid, over the maps where that face
+was seen at all:
+
+| inward face | maps | min | median | max |
+|---|---|---|---|---|
+| `wall_east.west` (max x) | 24 | 17.46 % | 77.54 % | 98.84 % |
+| `wall_north.south` (max y) | 22 | 55.46 % | 79.62 % | 97.73 % |
+| `wall_west.east` (min x) | 20 | 0.0095 % | 0.0330 % | 0.4179 % |
+| `wall_south.north` (min y) | 30 | 0.0000 % | 0.0261 % | 0.0623 % |
+
+**X1 — HELD.** On **40/40** maps, the share of off-grid returns lying within 2·rho
+of an SDF face is **exactly 1.000000** — not merely above 0.95, but every off-grid
+return on every map is on a real wall. On the 10 cut1200 maps, the share lying on
+the east or north boundary face is **99.71–99.99 %**, holding 10/10. Ungated 20/20,
+gated 20/20.
+
+**X2 — HELD.** Max-side mean recall below min-side mean on **10/10** (100 %) of the
+maps where all four boundary faces were observed, against the pre-registered 80 %.
+Ungated 5/5, gated 5/5. **Limit on its reach, stated rather than glossed:** only the
+cut1200 maps observed all four boundary walls, so X2 is a statement about five
+robots at one cut and its replication on their gated twins, not about 40 independent
+cases.
+
+**What this closes, and what it does not.** The hypothesis is confirmed as stated:
+Karto's grid stops short of its own extent on every map; the hits on the max-x and
+max-y walls are discarded there while the passes along the same rays are kept; and
+those walls are measurably missing from the map, by A9 recall and by B1 alike. §12's
+four B1 failures and its two "unexplained" maps are accounted for by this. It does
+**not** establish that nothing else contributes — the max-side recall is 62–98 %
+rather than 0 %, so the far-edge band removes part of each wall and not all of it —
+and the spin-smear candidate of §12 remains recorded and **UNTESTED**.
+
+One result bears directly on §12.5: the travel gate **raises** max-side recall on
+every cut1200 map — 62.33 → 77.52 %, 73.14 → 97.03 %, 70.52 → 81.11 %,
+81.51 → 97.97 %, 97.85 → 98.34 % — because dropping the parked duplicate scans
+removes passes from the far-edge cells without removing the hits that did land at
+W−1, which moves those cells back across the occupancy ratio.
+
+### 12.5 Task 2, re-registered under the new B1 before it runs
+
+Pre-registered now, after §12.3's redefinition and §12.4's result and before any
+gated Part B number exists. The earlier registration (B1 ≥ 90 % on k1 and k3
+cut1200, < 90 % on k0_cut240 and k4_cut120, and graph_walls within 0.5 pp of
+`predict_gated_maps`) was written against the all-returns denominator and is
+**superseded** — it is not carried forward and not re-tested.
+
+| # | Prediction |
+|---|---|
+| **T1** | In-grid B1 ≥ 90 % on 20/20 gated maps |
+| **T2** | On k1 and k3 cut1200, gated in-grid B1 ≥ ungated in-grid B1 (97.17 % and 98.15 %) |
+| **T3** | `predict_gated_maps`' B1 recomputed under the new definition agrees with `graph_walls`' within 0.5 pp on 20/20 |
+
+**T3 is doable, and what it does and does not test.** `predict_gated_maps` does not
+carry its own binning: it calls `graph_walls.on_occupied_share` directly
+(`predict_gated_maps.py:316`), so re-running it picks up the in-grid denominator
+with no code change and writes `b1_predicted` under the new definition. The two
+numbers are therefore never a test OF the binning — one function computes both.
+What T3 tests is the prediction: `predict_gated_maps` measures B1 on the grid it
+predicted at the origin it predicted, from the admitted scans' returns, while
+`graph_walls` measures it on the saved gated grid at the saved origin from the gated
+bag's returns. Agreement within 0.5 pp says those are the same map.
+
+T1 and T2 need Part B on a `_gated` stem, which `obs_for_map` still refuses: it
+derives the bag, the replay config and the relay log from (robot, cut) alone and
+would read the ungated ones. §12.4's tool resolved the first two with local helpers
+(`diagnose_extent.variant_bag`, `variant_r_max`, `variant_map_to_odom`) and needs no
+relay log; Part B needs all three, so that plumbing is Task 2's first step and is
+not done here.

@@ -61,14 +61,17 @@ lib/karto_sdk/include/karto_sdk/Karto.h.
                   centre sits at offset + i*res. This file indexes cells that way,
                   which is the rule the rebuild must match.
 
-THE HALF-CELL SHIFT, reported and NOT corrected here. toNavMap
-(include/slam_toolbox/visualization_utils.hpp:108-129) publishes
+THE HALF-CELL SHIFT, which this file reported and which is now FIXED upstream of
+it. toNavMap (include/slam_toolbox/visualization_utils.hpp:108-129) publishes
 map.info.origin = the Karto grid offset verbatim. ROS then reads cell i as
 spanning [origin + i*res, origin + (i+1)*res) with its centre at
-origin + (i+0.5)*res, while Karto placed that cell's centre at origin + i*res.
-Every ROS reading of a slam_toolbox map -- map_server, map_saver, graph_walls --
-therefore sits half a cell (0.05 m here) further +x and +y than Karto did. The
-GATE below is index-based, so the shift cannot flatter it. Nothing is corrected.
+origin + (i+0.5)*res, while Karto placed that cell's centre at origin + i*res --
+so every ROS reading of a slam_toolbox map sat half a cell (0.05 m here) further
++x and +y than Karto did. This file always indexed Karto's way, and that is now
+the project's one convention: trinary_map.CELL_CENTRE_OFFSET = 0.0, which
+world_to_grid and the cell-centre lookups below go through rather than restate.
+Nothing here MOVED -- the arithmetic was already right -- so diagnose_karto.json's
+numbers are unaffected, and the GATE below is index-based in any case.
 
 WHAT THIS TOUCHES. It writes exactly one file,
 experiments/logs/graph_walls/diagnose_karto.json. It opens no map JSON and moves
@@ -102,6 +105,12 @@ sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'analysis'))
 sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'slam'))
 
 import graph_walls as gw                                     # noqa: E402
+from trinary_map import (  # noqa: E402
+    CELL_CENTRE_OFFSET,
+    cell_centre,
+    cell_centre_provenance,
+    cell_index,
+)
 
 OUT_PATH = gw.OUT_DIR_DEFAULT / 'diagnose_karto.json'
 
@@ -228,10 +237,18 @@ def trace_rays(x0: np.ndarray, y0: np.ndarray, x1: np.ndarray, y1: np.ndarray
 # ───────────────────────────── Karto's geometry ──────────────────────────────
 
 def world_to_grid(wx: np.ndarray, wy: np.ndarray, origin, rho: float) -> tuple:
-    """Karto.h:4421-4436. Round, not floor; centres at origin + i*res."""
-    scale = 1.0 / rho
-    return (np.rint((wx - origin[0]) * scale).astype(np.int64),
-            np.rint((wy - origin[1]) * scale).astype(np.int64))
+    """Karto.h:4421-4436. Round, not floor; centres at origin + i*res.
+
+    trinary_map.cell_index is that same arithmetic with the convention named:
+    under CELL_CENTRE_OFFSET = 0.0 it is floor((w - origin)/rho + 0.5), which is
+    Round for every value this sees. Kept as a named function because the Karto
+    citation belongs on it, but it no longer carries its own copy of the offset.
+    """
+    assert CELL_CENTRE_OFFSET == 0.0, (
+        'world_to_grid is Karto\'s WorldToGrid, which rounds about '
+        'origin + i*res. A non-zero CELL_CENTRE_OFFSET would make cell_index '
+        'something else and this citation false.')
+    return (cell_index(wx, origin[0], rho), cell_index(wy, origin[1], rho))
 
 
 def update_cell(passes: np.ndarray, hits: np.ndarray,
@@ -329,8 +346,8 @@ def nearest_face_normals(shape, origin, rho: float) -> tuple:
     world = gw.sdf_wall_faces(gw.L_MIN)
     h, w = shape
     ys, xs = np.mgrid[0:h, 0:w]
-    cx = origin[0] + xs * rho
-    cy = origin[1] + ys * rho
+    cx = cell_centre(origin[0], xs, rho)
+    cy = cell_centre(origin[1], ys, rho)
     best = np.full(shape, np.inf)
     nx = np.zeros(shape)
     ny = np.zeros(shape)
@@ -843,14 +860,17 @@ def main() -> int:
                                     'visualization_utils.hpp:108-129 toNavMap '
                                     'copies the Karto grid offset verbatim',
             },
-            'half_cell_shift': 'Karto centres cell i on origin + i*res; ROS '
-                               'reads it as origin + (i+0.5)*res, and toNavMap '
-                               'publishes the offset unchanged. Every ROS '
-                               'reading of a slam_toolbox map is therefore half '
-                               'a cell (0.05 m here) further +x and +y than '
-                               'Karto placed it. REPORTED, not corrected; the '
-                               'gate is index-based and cannot be flattered by '
-                               'it',
+            'half_cell_shift': 'Karto centres cell i on origin + i*res; the '
+                               'ROS convention reads it as origin + '
+                               '(i+0.5)*res, and toNavMap publishes the offset '
+                               'unchanged, so a ROS reading of a slam_toolbox '
+                               'map sat half a cell (0.05 m here) further +x '
+                               'and +y than Karto placed it. NOW FIXED: '
+                               'trinary_map.CELL_CENTRE_OFFSET is 0.0 and this '
+                               'file routes through it. Nothing here moved -- '
+                               'it always indexed Karto\'s way -- and the gate '
+                               'is index-based in any case',
+            'cell_centre': cell_centre_provenance(),
             'values_used': {'min_pass_through': MIN_PASS_THROUGH,
                             'occupancy_threshold': OCCUPANCY_THRESHOLD,
                             'kt_tolerance': KT_TOLERANCE,

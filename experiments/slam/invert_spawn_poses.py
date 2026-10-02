@@ -285,6 +285,9 @@ def main() -> None:
     out = {
         'generated_utc': iso,
         'convention': args.convention,
+        # Every number here comes from fwt.cell_points, so it inherits that
+        # function's lattice.
+        'provenance': {'cell_centre': fwt.cell_centre_provenance()},
         'composition': 'world_T_odom = free_fit o map_T_odom',
         'weights': {f'robot_{i}': float(weights[i]) for i in range(NUM_ROBOTS)},
         'well_fit_floor': WELL_FIT_FLOOR,

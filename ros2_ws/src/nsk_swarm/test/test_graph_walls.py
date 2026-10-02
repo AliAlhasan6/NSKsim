@@ -1026,20 +1026,59 @@ def test_compose_base_scan_walks_the_two_hop_chain():
 def test_b1_counts_a_return_within_one_cell_of_occupied():
     """B1's measure, and its named break, on a grid small enough to count by hand.
 
+    The lattice is Karto's, trinary_map.CELL_CENTRE_OFFSET = 0.0: cell (r, c) is
+    centred on origin + (c, r)*rho, so cell (3, 2) sits at (0.20, 0.30) and NOT at
+    the (0.25, 0.35) a ROS reading would give it. The three returns are the cell's
+    own centre, one cell along, and two cells along -- which is what B1's one-cell
+    dilation has to separate.
+
     Convention B is the same PGM read without the row flip. The returns keep
     their place and the walls move, so a correct pose chain scores near nothing --
     which is the point: B1 is the check that would catch a placement error.
     """
     grid = blank(5, 5, FREE)
-    grid[3, 2] = OCC                       # occupied cell centred at (0.25, 0.35)
+    grid[3, 2] = OCC                       # occupied cell centred at (0.20, 0.30)
     rho, origin = 0.1, (0.0, 0.0)
-    returns = {'px': np.array([0.25, 0.25, 0.25, 9.0]),
-               'py': np.array([0.35, 0.45, 0.05, 9.0])}
+    returns = {'px': np.array([0.20, 0.30, 0.40, 9.0]),
+               'py': np.array([0.30, 0.30, 0.30, 9.0])}
     good = gw.on_occupied_share(returns, grid, rho, origin)
     assert good['n_on_occupied'] == 2, \
         'the cell itself and one cell away count; two cells away does not'
     assert good['n_outside_map'] == 1 and good['convention'] == 'A'
+
+    # The POST HOC denominator: in-grid returns only. Three of the four are on
+    # the grid, two of those are on a wall.
+    assert good['n_returns'] == 4 and good['n_in_grid'] == 3
+    assert good['share'] == pytest.approx(2 / 3)
+    assert good['share_all'] == pytest.approx(2 / 4), \
+        'the original all-returns figure is kept, so nothing is hidden'
+    assert good['share_offgrid'] == pytest.approx(1 / 4)
+    assert 'POST HOC' in good['definition']
     broken = gw.on_occupied_share(returns, grid, rho, origin,
                                   convention_b=True)
     assert broken['n_on_occupied'] < good['n_on_occupied'], \
         'convention B must move the wall away from the returns'
+    assert broken['n_in_grid'] == good['n_in_grid'], \
+        'the break moves walls, not grid membership, so it cannot pass by ' \
+        'shrinking the denominator'
+    assert broken['share'] < good['share']
+
+
+def test_the_off_wall_sample_excludes_returns_that_fell_off_the_grid():
+    """The B1 diagnosis population is in-grid misses, matching the denominator.
+
+    An off-grid return is not evidence that the map has no wall where a wall is:
+    there is no cell where it landed. Sampling it would put Karto's grid-extent
+    shortfall back into the one diagnosis meant to separate a missing wall from a
+    misplaced return.
+    """
+    grid = blank(5, 5, FREE)
+    grid[3, 2] = OCC
+    rho, origin = 0.1, (0.0, 0.0)
+    returns = {'px': np.array([0.20, 0.40, 9.0]),
+               'py': np.array([0.30, 0.30, 9.0])}
+    b1 = gw.on_occupied_share(returns, grid, rho, origin)
+    assert (b1['n_returns'], b1['n_in_grid'], b1['n_on_occupied']) == (3, 2, 1)
+    pts = gw.off_wall_sample(returns, b1['hit'], b1['inside'])
+    assert pts.shape == (1, 2), 'the one in-grid miss, not the off-grid return'
+    assert pts[0].tolist() == pytest.approx([0.40, 0.30])

@@ -84,6 +84,9 @@ sys.path.insert(0, str(REPO_ROOT / "experiments" / "slam"))
 sys.path.insert(0, str(REPO_ROOT / "experiments" / "analysis"))
 
 from bag_overlap import SPAWN_TOL_M, resolve_spawn_poses          # noqa: E402
+# /map comes from slam_toolbox, so its origin is a Karto grid offset and a cell's
+# centre is origin + i*res. One definition, in trinary_map.
+from trinary_map import cell_centre, cell_index, cell_low_edge     # noqa: E402
 from check_run_bag import (                                        # noqa: E402
     first_nonzero_cmd,
     read_clock_series,
@@ -124,8 +127,11 @@ def abort(msg):
 class Grid:
     """An OccupancyGrid's payload plus the frame it lives in.
 
-    Cell (r, c) covers x in [ox + c*res, ox + (c+1)*res) and likewise in y, so
-    row 0 is the MINIMUM-y row -- hence origin="lower" when this is drawn.
+    Cell (r, c) is CENTRED on (cell_centre(ox, c), cell_centre(oy, r)) and covers
+    half a cell either side, so row 0 is the MINIMUM-y row -- hence
+    origin="lower" when this is drawn. Where the edges fall is
+    trinary_map.CELL_CENTRE_OFFSET's business: /map carries a Karto grid offset,
+    so cell (r, c) starts half a cell BELOW ox + c*res, not at it.
     """
 
     def __init__(self, msg):
@@ -142,8 +148,10 @@ class Grid:
     @property
     def extent(self):
         """(xmin, xmax, ymin, ymax) in metres, for imshow."""
-        return (self.ox, self.ox + self.w * self.res,
-                self.oy, self.oy + self.h * self.res)
+        return (cell_low_edge(self.ox, 0, self.res),
+                cell_low_edge(self.ox, self.w, self.res),
+                cell_low_edge(self.oy, 0, self.res),
+                cell_low_edge(self.oy, self.h, self.res))
 
     def counts(self):
         free = int(np.count_nonzero(self.data == 0))
@@ -164,10 +172,10 @@ def resample_onto(src: Grid, canvas: Grid) -> np.ndarray:
     Canvas cells not covered by `src` come back unknown (-1), which is what
     they were: outside the map that existed at that moment.
     """
-    xs = canvas.ox + (np.arange(canvas.w) + 0.5) * canvas.res
-    ys = canvas.oy + (np.arange(canvas.h) + 0.5) * canvas.res
-    cc = np.floor((xs - src.ox) / src.res).astype(int)
-    rr = np.floor((ys - src.oy) / src.res).astype(int)
+    xs = cell_centre(canvas.ox, np.arange(canvas.w), canvas.res)
+    ys = cell_centre(canvas.oy, np.arange(canvas.h), canvas.res)
+    cc = cell_index(xs, src.ox, src.res)
+    rr = cell_index(ys, src.oy, src.res)
     okc = (cc >= 0) & (cc < src.w)
     okr = (rr >= 0) & (rr < src.h)
 
@@ -179,10 +187,12 @@ def resample_onto(src: Grid, canvas: Grid) -> np.ndarray:
 
 def outside_canvas_cells(src: Grid, canvas: Grid) -> int:
     """Known cells of `src` that the canvas does not cover -- lost by resampling."""
-    xs = src.ox + (np.arange(src.w) + 0.5) * src.res
-    ys = src.oy + (np.arange(src.h) + 0.5) * src.res
-    inx = (xs >= canvas.ox) & (xs < canvas.ox + canvas.w * canvas.res)
-    iny = (ys >= canvas.oy) & (ys < canvas.oy + canvas.h * canvas.res)
+    xs = cell_centre(src.ox, np.arange(src.w), src.res)
+    ys = cell_centre(src.oy, np.arange(src.h), src.res)
+    inx = ((xs >= cell_low_edge(canvas.ox, 0, canvas.res))
+           & (xs < cell_low_edge(canvas.ox, canvas.w, canvas.res)))
+    iny = ((ys >= cell_low_edge(canvas.oy, 0, canvas.res))
+           & (ys < cell_low_edge(canvas.oy, canvas.h, canvas.res)))
     inside = np.zeros((src.h, src.w), dtype=bool)
     inside[np.ix_(iny, inx)] = True
     return int(np.count_nonzero((src.data != -1) & ~inside))
@@ -308,8 +318,8 @@ def reach_masks(canvas: Grid, path_xy: np.ndarray, range_m: float, final_free):
     pad = int(math.ceil(range_m / canvas.res)) + 1
     seed = np.ones((canvas.h + 2 * pad, canvas.w + 2 * pad), dtype=bool)
 
-    cc = np.floor((path_xy[:, 0] - canvas.ox) / canvas.res).astype(int) + pad
-    rr = np.floor((path_xy[:, 1] - canvas.oy) / canvas.res).astype(int) + pad
+    cc = cell_index(path_xy[:, 0], canvas.ox, canvas.res) + pad
+    rr = cell_index(path_xy[:, 1], canvas.oy, canvas.res) + pad
     ok = (cc >= 0) & (cc < seed.shape[1]) & (rr >= 0) & (rr < seed.shape[0])
     if not ok.any():
         abort("every path point lies more than %.1f m outside the final map, so "
@@ -352,8 +362,8 @@ def render(ax, cells, canvas, path_xy, reach, title, range_m):
     img[cells >= OCC_MIN] = RGB_OCC
     ax.imshow(img, origin="lower", extent=canvas.extent, interpolation="nearest")
 
-    xs = canvas.ox + (np.arange(canvas.w) + 0.5) * canvas.res
-    ys = canvas.oy + (np.arange(canvas.h) + 0.5) * canvas.res
+    xs = cell_centre(canvas.ox, np.arange(canvas.w), canvas.res)
+    ys = cell_centre(canvas.oy, np.arange(canvas.h), canvas.res)
     ax.contour(xs, ys, reach.astype(float), levels=[0.5],
                colors="#d62728", linewidths=1.1)
 

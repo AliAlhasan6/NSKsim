@@ -36,9 +36,10 @@ WHAT IS MEASURED, per map:
 
 GEOMETRY. Cells are placed by KARTO's rule throughout -- centre at
 origin + i*res, edges at origin + (i +/- 0.5)*res (Karto.h:4421-4436) -- the same
-rule diagnose_karto's rebuild and its step 5 used. The ROS reading of these maps
-sits half a cell away from that; diagnose_karto reports it and nothing here or
-anywhere else has been corrected for it yet.
+rule diagnose_karto's rebuild and its step 5 used, and now the project's only rule:
+trinary_map.CELL_CENTRE_OFFSET = 0.0, which the placements below go through.
+Nothing here moved; what moved is everything that used to read these maps the ROS
+way, half a cell further +x and +y.
 
 TRUTH. The SDF faces are truth, used for q and for the cleared share. Diagnosis
 only: none of it goes near a map JSON.
@@ -68,6 +69,12 @@ sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'slam'))
 
 import diagnose_karto as dk                                  # noqa: E402
 import graph_walls as gw                                     # noqa: E402
+from trinary_map import (  # noqa: E402
+    cell_centre,
+    cell_centre_provenance,
+    cell_index,
+    cell_low_edge,
+)
 
 OUT_PATH = gw.OUT_DIR_DEFAULT / 'diagnose_phase.json'
 
@@ -97,10 +104,12 @@ def sub_cell_phase(value: float, rho: float) -> float:
 def distance_to_cell_edge(coord: float, origin_a: float, rho: float) -> float:
     """From a surface coordinate to the nearest Karto cell EDGE, in [0, rho/2].
 
-    Karto centres cell i on origin + i*rho (Karto.h:4421-4436), so the edges lie
-    halfway between, on the lattice origin + rho/2 + i*rho.
+    The edge lattice is trinary_map.cell_low_edge(origin_a, i, rho) for integer i
+    -- half a cell off the centres, which under CELL_CENTRE_OFFSET = 0.0 puts it
+    at origin - rho/2 + i*rho. Measured from cell 0's own lower edge; which
+    integer anchors the lattice cannot matter to a distance-to-nearest.
     """
-    d = (coord - (origin_a + rho / 2.0)) / rho
+    d = (coord - cell_low_edge(origin_a, 0, rho)) / rho
     return float(abs(d - round(d)) * rho)
 
 
@@ -158,11 +167,11 @@ def face_cleared_share(face: dict, occupied: np.ndarray, off_count: np.ndarray,
     reach = int(math.ceil(NEAR_CELLS))
     di, dj = np.mgrid[-reach:reach + 1, -reach:reach + 1]
     di, dj = di.ravel()[None, :], dj.ravel()[None, :]
-    ci = np.rint((sy - origin[1]) / rho).astype(np.int64)[:, None] + di
-    cj = np.rint((sx - origin[0]) / rho).astype(np.int64)[:, None] + dj
+    ci = cell_index(sy, origin[1], rho)[:, None] + di
+    cj = cell_index(sx, origin[0], rho)[:, None] + dj
     inside = (ci >= 0) & (ci < h) & (cj >= 0) & (cj < w)
-    near = inside & (np.hypot(origin[0] + cj * rho - sx[:, None],
-                              origin[1] + ci * rho - sy[:, None])
+    near = inside & (np.hypot(cell_centre(origin[0], cj, rho) - sx[:, None],
+                              cell_centre(origin[1], ci, rho) - sy[:, None])
                      <= NEAR_CELLS * rho)
     cis, cjs = np.clip(ci, 0, h - 1), np.clip(cj, 0, w - 1)
     has_occ = (near & occupied[cis, cjs]).any(axis=1)
@@ -182,8 +191,8 @@ def nearest_face_index(shape, origin, rho: float, faces: list) -> np.ndarray:
     """Per cell, which face of `faces` is nearest. Karto cell centres."""
     h, w = shape
     ys, xs = np.mgrid[0:h, 0:w]
-    cx = origin[0] + xs * rho
-    cy = origin[1] + ys * rho
+    cx = cell_centre(origin[0], xs, rho)
+    cy = cell_centre(origin[1], ys, rho)
     best = np.full(shape, np.inf)
     idx = np.full(shape, -1, dtype=np.int64)
     for i, f in enumerate(faces):
@@ -456,9 +465,11 @@ def main() -> int:
                            '(:6100-6106); width and height are Round(size*scale) '
                            '(:6111-6112). NOT snapped to a lattice',
             'cell_geometry': 'Karto: centre at origin + i*res, edges at '
-                             'origin + (i +/- 0.5)*res (Karto.h:4421-4436). The '
-                             'ROS reading sits half a cell away; see '
-                             'diagnose_karto.json. Nothing corrected here',
+                             'origin + (i +/- 0.5)*res (Karto.h:4421-4436), now '
+                             'trinary_map.CELL_CENTRE_OFFSET = 0.0 for the whole '
+                             'project. Nothing in this file moved; the ROS '
+                             'readings elsewhere did',
+            'cell_centre': cell_centre_provenance(),
             'spawn_rev': gw.SPAWN_REV,
         },
         'definitions': {

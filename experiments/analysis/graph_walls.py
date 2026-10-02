@@ -76,6 +76,22 @@ its own reported line is not a wall segment, so those fall back to the line the
 run was cut on, which satisfies all three by construction. `line_source` says
 which, per segment. See _segment().
 
+WHERE A CELL IS (and the half-cell this file used to lose)
+---------------------------------------------------------
+Every position here -- element, band cell, B1 lookup, unclassified bounding box --
+is placed by trinary_map.CELL_CENTRE_OFFSET, which is 0.0: slam_toolbox publishes
+Karto's grid offset verbatim as the map origin and Karto centres cell i on that
+offset, so a cell's centre is `origin + i*rho` and NOT the ROS `origin +
+(i+0.5)*rho`. This file read it the ROS way until that constant existed, which put
+every face 0.05 m too far in +x and +y; diagnose_karto.py and diagnose_phase.py
+had always indexed cells Karto's way, which is how the two came to disagree. The
+whole of the correction is now in that one constant and its three helpers, and the
+visible consequence is A8: the element-to-SDF-face median offset drops, because
+the elements move onto the surfaces instead of half a cell past them. Nothing
+about the EXTRACTION changes -- the Hough bins, the segment count and the lengths
+are all differences between element positions, which a uniform translation leaves
+alone.
+
 BANDS READ OUTSIDE THE MAP AS UNKNOWN
 -------------------------------------
 Def 3's band is clipped by nothing: a band cell that falls outside the grid
@@ -176,6 +192,11 @@ from trinary_map import (  # noqa: E402
     FREE,
     OCC,
     UNKNOWN,
+    cell_centre,
+    cell_centre_provenance,
+    cell_coord,
+    cell_index,
+    cell_low_edge,
     check_thresholds,
     classify,
     load,
@@ -250,7 +271,13 @@ BEARING_BINS = 72
 INCIDENCE_BINS = 9
 
 # Pre-registered in §6, reported and never gated.
-B1_MIN_SHARE = 0.90            # kept returns within one cell of occupied
+# B1's THRESHOLD is the pre-registered 0.90 and has not moved. Its DENOMINATOR was
+# redefined post hoc, after the half-cell fix, from all kept returns to the kept
+# returns whose cell index is on the grid: a return off the grid has no cell to
+# check against, so the old figure measured Karto's grid extent as much as the pose
+# chain. on_occupied_share() states the whole argument; SPEC_b2_wall_predicate
+# §12.2 records it as post hoc; share_all keeps the original number in every JSON.
+B1_MIN_SHARE = 0.90            # IN-GRID kept returns within one cell of occupied
 B2_MAX_SHARE = 0.01            # side contradictions, share of kept returns
 B3_SCAN_TOL = 1                # scans read vs the replay's integrated count
 
@@ -479,8 +506,11 @@ def face_elements(grid: np.ndarray, rho: float,
     for k, (drow, dcol, nx, ny, _name) in enumerate(DIRS):
         mask = occ & shifted_view(free, drow, dcol)
         r, c = np.nonzero(mask)
-        xs.append(origin[0] + (c + 0.5 + 0.5 * dcol) * rho)
-        ys.append(origin[1] + (r + 0.5 + 0.5 * drow) * rho)
+        # The face is the cell's own boundary: its centre, then half a cell
+        # towards the free neighbour. Where that centre is comes from
+        # trinary_map.CELL_CENTRE_OFFSET and from nowhere else.
+        xs.append(cell_centre(origin[0], c, rho) + 0.5 * dcol * rho)
+        ys.append(cell_centre(origin[1], r, rho) + 0.5 * drow * rho)
         nxs.append(np.full(r.size, nx))
         nys.append(np.full(r.size, ny))
         rows.append(r)
@@ -709,15 +739,15 @@ def band(grid: np.ndarray, rho: float, origin: tuple[float, float],
                for t in (t_lo, t_hi) for s in (-1.0, 1.0)]
     cxs = [p[0] for p in corners]
     cys = [p[1] for p in corners]
-    c0 = int(math.floor((min(cxs) - origin[0]) / rho)) - 1
-    c1 = int(math.ceil((max(cxs) - origin[0]) / rho)) + 1
-    r0 = int(math.floor((min(cys) - origin[1]) / rho)) - 1
-    r1 = int(math.ceil((max(cys) - origin[1]) / rho)) + 1
+    c0 = int(math.floor(cell_coord(min(cxs), origin[0], rho))) - 1
+    c1 = int(math.ceil(cell_coord(max(cxs), origin[0], rho))) + 1
+    r0 = int(math.floor(cell_coord(min(cys), origin[1], rho))) - 1
+    r1 = int(math.ceil(cell_coord(max(cys), origin[1], rho))) + 1
 
     rows = np.arange(r0, r1)
     cols = np.arange(c0, c1)
-    xs = origin[0] + (cols + 0.5) * rho
-    ys = origin[1] + (rows + 0.5) * rho
+    xs = cell_centre(origin[0], cols, rho)
+    ys = cell_centre(origin[1], rows, rho)
     gx, gy = np.meshgrid(xs, ys)
     proj = gx * nx + gy * ny - d
     tt = gx * ux + gy * uy
@@ -844,10 +874,11 @@ def components_8(mask: np.ndarray, rho: float,
                         queue.append((rr, cc))
         rs = [c[0] for c in cells]
         cs = [c[1] for c in cells]
-        x0 = origin[0] + min(cs) * rho
-        x1 = origin[0] + (max(cs) + 1) * rho
-        y0 = origin[1] + min(rs) * rho
-        y1 = origin[1] + (max(rs) + 1) * rho
+        # A bounding box of cells, so cell EDGES rather than centres.
+        x0 = cell_low_edge(origin[0], min(cs), rho)
+        x1 = cell_low_edge(origin[0], max(cs) + 1, rho)
+        y0 = cell_low_edge(origin[1], min(rs), rho)
+        y1 = cell_low_edge(origin[1], max(rs) + 1, rho)
         out.append({'n_cells': len(cells),
                     'bbox': [float(x0), float(y0), float(x1), float(y1)],
                     'extent': [float(x1 - x0), float(y1 - y0)]})
@@ -1220,6 +1251,7 @@ def graph_and_elements(stem: str, maps_dir: Path = MAPS_DIR_DEFAULT,
         'resolution': rho,
         'origin': [m['origin'][0], m['origin'][1]],
         'size_cells': [m['width'], m['height']],
+        'provenance': {'cell_centre': cell_centre_provenance()},
         'thresholds': {
             'rho': {'value': rho, 'unit': 'm',
                     'source': f'{m["yaml"].name}, read'},
@@ -1612,7 +1644,25 @@ def observations(returns: dict, attrib: dict, segments: list) -> list:
 def on_occupied_share(returns: dict, grid: np.ndarray, rho: float,
                       origin: tuple[float, float],
                       convention_b: bool = False) -> dict:
-    """B1: the share of kept returns landing within one cell of occupied.
+    """B1: the share of IN-GRID kept returns within one cell of an occupied cell.
+
+    B1 WAS REDEFINED POST HOC, after the half-cell fix, and the reason is stated
+    rather than buried: a return whose cell index falls outside the grid cannot be
+    checked against the map at all -- there is no cell there to be occupied or
+    free -- so counting it as a miss makes B1 a measure of Karto's grid extent
+    instead of a measure of the pose chain. The original definition divided by ALL
+    kept returns. Under the ROS binning that was nearly the same number (0.0-0.8 %
+    of returns landed outside); under the correct Karto binning it is not, because
+    Karto's width is Round(size*scale) and its grid is ~0.6 cell short of its own
+    bounding box, so up to 50.8 % of a run's returns round to an index the grid
+    does not have (SPEC_b2_wall_predicate §12.2).
+
+    Nothing is hidden by the change. All three numbers are returned and all three
+    are written to every map's `checks`:
+
+        share            the new B1: hits / in-grid. The 90 % threshold, unmoved.
+        share_all        the old B1: hits / all kept returns.
+        share_offgrid    the share of kept returns that round off the grid.
 
     The dilation is imported from robot_divergence rather than rewritten: a
     second implementation of "within one cell" would make this number
@@ -1621,35 +1671,54 @@ def on_occupied_share(returns: dict, grid: np.ndarray, rho: float,
     `convention_b` is B1's named break. Convention A is PGM row 0 = maximum y,
     which load_grid() applies and verifies; B is the same grid read without the
     row flip. Under B the returns keep their place and the walls move, so a
-    correct pose chain scores near nothing.
+    correct pose chain scores near nothing. The break still bites under the new
+    definition: a flip moves the walls, not the returns' grid membership, so the
+    denominator is unchanged and only the hits fall.
     """
     from robot_divergence import dilate              # noqa: PLC0415
 
     occ = (grid[::-1, :] if convention_b else grid) == OCC
     near = dilate(occ, 1)
     h, w = grid.shape
-    col = np.floor((returns['px'] - origin[0]) / rho + 1e-9).astype(np.int64)
-    row = np.floor((returns['py'] - origin[1]) / rho + 1e-9).astype(np.int64)
+    col = cell_index(returns['px'], origin[0], rho)
+    row = cell_index(returns['py'], origin[1], rho)
     inside = (row >= 0) & (row < h) & (col >= 0) & (col < w)
     hit = np.zeros(returns['px'].size, dtype=bool)
     hit[inside] = near[row[inside], col[inside]]
     n = int(hit.size)
-    return {'n_returns': n, 'n_on_occupied': int(np.count_nonzero(hit)),
-            'n_outside_map': int(np.count_nonzero(~inside)),
-            'share': (float(np.count_nonzero(hit)) / n) if n else float('nan'),
+    n_in = int(np.count_nonzero(inside))
+    n_hit = int(np.count_nonzero(hit))
+    return {'n_returns': n, 'n_on_occupied': n_hit,
+            'n_in_grid': n_in,
+            'n_outside_map': n - n_in,
+            # The new B1: in-grid only. See this function's docstring for why,
+            # and `definition` for the label that travels into the JSON.
+            'share': (float(n_hit) / n_in) if n_in else float('nan'),
+            'share_all': (float(n_hit) / n) if n else float('nan'),
+            'share_offgrid': (float(n - n_in) / n) if n else float('nan'),
+            'definition': 'in-grid: hits / returns whose cell index is on the '
+                          'grid. REDEFINED POST HOC after the half-cell fix; a '
+                          'return off the grid has no cell to check against. '
+                          'share_all is the original all-returns figure',
             'convention': 'B (BROKEN)' if convention_b else 'A',
-            'hit': hit}
+            'hit': hit, 'inside': inside}
 
 
-def off_wall_sample(returns: dict, hit: np.ndarray,
+def off_wall_sample(returns: dict, hit: np.ndarray, inside: np.ndarray,
                     limit: int = 4000) -> np.ndarray:
     """A small, deterministic sample of the returns B1 counted as off-wall.
 
     Kept so the validation pass can ask the one question B1 cannot: is a return
     that missed the MAP's walls near a real one? By stride, not by an RNG --
     nothing in this file may depend on a seed (A7).
+
+    IN-GRID misses only, matching B1's new denominator. An off-grid return is not
+    an off-wall return -- there is no cell where it landed to be free -- and
+    sampling it here would put the grid-extent population back into the one
+    diagnosis that is supposed to separate "the map has no wall" from "the return
+    is misplaced".
     """
-    idx = np.nonzero(~hit)[0]
+    idx = np.nonzero(~hit & inside)[0]
     if idx.size == 0:
         return np.zeros((0, 2))
     idx = idx[::max(1, idx.size // limit)][:limit]
@@ -1715,6 +1784,18 @@ def obs_for_map(graph: dict, stem: str, k: int, cut: int, grid: np.ndarray,
         'B1_on_occupied_share': b1['share'],
         'B1_limit': B1_MIN_SHARE,
         'B1_holds': bool(b1['share'] >= B1_MIN_SHARE),
+        'B1_definition': b1['definition'],
+        'B1_redefined': 'POST HOC. Denominator changed from all kept returns to '
+                        'in-grid kept returns after the half-cell fix showed that '
+                        "Karto's grid is ~0.6 cell short of its own bounding box "
+                        '(SPEC_b2_wall_predicate §12.2). The 0.90 threshold is '
+                        'unchanged. B1_on_occupied_share_all_returns is the '
+                        'original figure',
+        'B1_on_occupied_share_all_returns': b1['share_all'],
+        'B1_offgrid': b1['share_offgrid'],
+        'B1_n_returns': b1['n_returns'],
+        'B1_n_in_grid': b1['n_in_grid'],
+        'B1_n_on_occupied': b1['n_on_occupied'],
         'B2_side_contradiction_share': (float(n_contra) / returns['n_kept']
                                         if returns['n_kept'] else float('nan')),
         'B2_limit': B2_MAX_SHARE,
@@ -1756,10 +1837,13 @@ def obs_for_map(graph: dict, stem: str, k: int, cut: int, grid: np.ndarray,
         'n_returns_attributed': int(np.count_nonzero(attrib['seg'] >= 0)),
         'n_side_contradictions': n_contra,
         'n_returns_outside_map': b1['n_outside_map'],
-        'n_returns_off_wall': b1['n_returns'] - b1['n_on_occupied'],
+        # IN-GRID misses, matching B1's new denominator. The off-grid returns are
+        # counted on the line above and are a different finding.
+        'n_returns_off_wall': b1['n_in_grid'] - b1['n_on_occupied'],
+        'n_returns_off_wall_all': b1['n_returns'] - b1['n_on_occupied'],
         'broken_on_purpose': break_name,
     }
-    return off_wall_sample(returns, b1['hit'])
+    return off_wall_sample(returns, b1['hit'], b1['inside'])
 
 
 def obs_summary_line(graph: dict) -> str:
@@ -1773,6 +1857,8 @@ def obs_summary_line(graph: dict) -> str:
             f'({o["n_scans_dropped_no_pose"]:>2} dropped)  '
             f'kept {o["n_returns_kept"]:>8}  attributed {attributed:>6.1%}  '
             f'B1 {c["B1_on_occupied_share"]:>6.2%}  '
+            f'offgrid {c["B1_offgrid"]:>6.2%}  '
+            f'B1all {c["B1_on_occupied_share_all_returns"]:>6.2%}  '
             f'B2 {c["B2_side_contradiction_share"]:>6.3%}  '
             f'B3 {c["B3_difference"]:>+2d}  '
             f'segs seen {seen:>3}/{len(graph["segments"]):<3}')
@@ -2103,13 +2189,26 @@ def print_b_predictions(rows: dict, break_name: str | None) -> bool:
     n3 = sum(1 for _s, c in b1 if c['B3_holds'])
     n = len(b1)
     print('PREDICTIONS -- pre-registered in §6, reported, NOT gated')
-    print(f'  B1  kept returns within one cell of an occupied cell >= '
+    print(f'  B1  IN-GRID kept returns within one cell of an occupied cell >= '
           f'{100 * B1_MIN_SHARE:.0f}%: {"HELD" if n1 == n else "FAILED"} '
           f'({n1}/{n})   worst '
           f'{min(c["B1_on_occupied_share"] for _s, c in b1):.2%}')
+    print('      the DENOMINATOR was redefined POST HOC (a return off the grid '
+          'has no cell to check); the')
+    print('      0.90 threshold is unchanged, and both the off-grid share and '
+          'the original all-returns')
+    print('      figure are printed and written per map. '
+          'SPEC_b2_wall_predicate §12.2.')
+    print(f'      worst off-grid share '
+          f'{max(c["B1_offgrid"] for _s, c in b1):.2%}; all-returns B1 would '
+          f'hold on '
+          f'{sum(1 for _s, c in b1 if c["B1_on_occupied_share_all_returns"] >= B1_MIN_SHARE)}'
+          f'/{n}')
     for s, c in b1:
         if not c['B1_holds']:
-            print(f'        {s}: {c["B1_on_occupied_share"]:.2%}')
+            print(f'        {s}: in-grid {c["B1_on_occupied_share"]:.2%}, '
+                  f'off-grid {c["B1_offgrid"]:.2%}, all-returns '
+                  f'{c["B1_on_occupied_share_all_returns"]:.2%}')
     print(f'  B2  side contradictions <= {100 * B2_MAX_SHARE:.0f}% of kept '
           f'returns: {"HELD" if n2 == n else "FAILED"} ({n2}/{n})   worst '
           f'{max(c["B2_side_contradiction_share"] for _s, c in b1):.3%}')
@@ -2299,6 +2398,7 @@ def print_validation(rows: dict, world: dict, samples: dict,
     print()
     return {
         'spawn_rev': spawn_rev,
+        'provenance': {'cell_centre': cell_centre_provenance()},
         'truth_note': 'A8-A11 validate the extractor only. §6: no later tool '
                       'may read these. They are deliberately not written into '
                       'any <map>.json.',

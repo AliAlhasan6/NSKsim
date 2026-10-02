@@ -65,6 +65,10 @@ sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'slam'))
 
 import diagnose_karto as dk                                  # noqa: E402
 import graph_walls as gw                                     # noqa: E402
+from trinary_map import (  # noqa: E402
+    cell_centre,
+    cell_centre_provenance,
+)
 
 OUT_PATH = gw.OUT_DIR_DEFAULT / 'diagnose_edge.json'
 KARTO_JSON = gw.OUT_DIR_DEFAULT / 'diagnose_karto.json'
@@ -207,8 +211,9 @@ def ray_distances(stem: str, k: int, cut: int, rb: dict,
         flat = cy * w + cx
         keep = off_set[flat]
         if keep.any():
-            d = np.hypot(origin[0] + cx[keep] * rho - sox[ray[keep]],
-                         origin[1] + cy[keep] * rho - soy[ray[keep]])
+            d = np.hypot(
+                cell_centre(origin[0], cx[keep], rho) - sox[ray[keep]],
+                cell_centre(origin[1], cy[keep], rho) - soy[ray[keep]])
             pass_d.append(d)
         ve = valid_end[si, bi]
         end_ok = ve & (gx1 >= 0) & (gx1 < w) & (gy1 >= 0) & (gy1 < h)
@@ -217,8 +222,10 @@ def ray_distances(stem: str, k: int, cut: int, rb: dict,
             k2 = off_set[eflat]
             if k2.any():
                 hit_d.append(np.hypot(
-                    origin[0] + gx1[end_ok][k2] * rho - sox[end_ok][k2],
-                    origin[1] + gy1[end_ok][k2] * rho - soy[end_ok][k2]))
+                    cell_centre(origin[0], gx1[end_ok][k2], rho)
+                    - sox[end_ok][k2],
+                    cell_centre(origin[1], gy1[end_ok][k2], rho)
+                    - soy[end_ok][k2]))
 
     def summary(parts):
         if not parts:
@@ -279,8 +286,8 @@ def near_model_cells(rb: dict, off_flat: np.ndarray, spawn, model: str) -> dict:
     h, w = rb['shape']
     rho, origin = rb['rho'], rb['origin']
     cy, cx = np.divmod(off_flat, w)
-    pts = np.column_stack([origin[0] + cx * rho + spawn[0],
-                           origin[1] + cy * rho + spawn[1]])
+    pts = np.column_stack([cell_centre(origin[0], cx, rho) + spawn[0],
+                           cell_centre(origin[1], cy, rho) + spawn[1]])
     d = dist_to_nearest_wall(pts, rects)
     return {'mask': d <= 2.0 * rho, 'n': int(np.count_nonzero(d <= 2.0 * rho))}
 
@@ -472,6 +479,7 @@ def main() -> int:
                                'band, so the band alone does not separate them',
             'baseline': 'diagnose_karto.rebuild, imported and unmodified; every '
                         'map checked against the committed diagnose_karto.json',
+            'cell_centre': cell_centre_provenance(),
         },
         'predictions': {name: text for name, text in PREDICTIONS},
         'gated': False,

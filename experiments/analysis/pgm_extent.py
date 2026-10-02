@@ -31,7 +31,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # read_pgm accepts a str here (test_run_health.py passes one) as well as a Path.
 # Only resolution and origin come out of the sidecar below, so this file needs
 # neither PyYAML nor the threshold fields.
-from trinary_map import FREE, OCC, UNKNOWN, read_pgm  # noqa: E402
+from trinary_map import (  # noqa: E402
+    FREE,
+    OCC,
+    UNKNOWN,
+    cell_low_edge,
+    read_pgm,
+)
 
 
 def read_yaml(path):
@@ -49,16 +55,22 @@ def read_yaml(path):
 
 
 def box(mask, res, origin, h):
+    """Bounding box of `mask` in cells and in metres. Cell EDGES, not centres.
+
+    The edges come from trinary_map.cell_low_edge, so this box and run_health's
+    map_stats() -- which they are tested against each other for -- sit on the same
+    lattice as everything else that reads a slam_toolbox origin.
+    """
     rows = np.where(mask.any(axis=1))[0]
     cols = np.where(mask.any(axis=0))[0]
     if len(rows) == 0:
         return None
     r0, r1, c0, c1 = rows[0], rows[-1], cols[0], cols[-1]
     wc, hc = c1 - c0 + 1, r1 - r0 + 1
-    x0 = origin[0] + c0 * res
-    x1 = origin[0] + (c1 + 1) * res
-    y0 = origin[1] + (h - 1 - r1) * res
-    y1 = origin[1] + (h - r0) * res
+    x0 = cell_low_edge(origin[0], c0, res)
+    x1 = cell_low_edge(origin[0], c1 + 1, res)
+    y0 = cell_low_edge(origin[1], h - 1 - r1, res)
+    y1 = cell_low_edge(origin[1], h - r0, res)
     return wc, hc, wc * res, hc * res, x0, x1, y0, y1
 
 

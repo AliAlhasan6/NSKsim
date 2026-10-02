@@ -1789,9 +1789,12 @@ def test_image_row_zero_is_the_top_of_the_map_not_the_origin_row():
 def test_the_known_extent_is_the_box_of_known_cells_in_metres():
     """A 6x5 grid at 0.5 m whose known cells are columns 1..3, rows 2..3.
 
-    Hand arithmetic, edges not centres:
-      x [-1.0 + 1*0.5, -1.0 + 4*0.5] = [-0.5, +1.0]   3 cols -> 1.5 m
-      y [ 2.0 + 2*0.5,  2.0 + 4*0.5] = [+3.0, +4.0]   2 rows -> 1.0 m
+    Hand arithmetic, edges not centres. The origin of a slam_toolbox map is where
+    cell 0's CENTRE sits (trinary_map.CELL_CENTRE_OFFSET = 0.0), so cell i's lower
+    edge is origin + (i - 0.5)*res -- half a cell below where a ROS reading would
+    put it. The widths are unaffected; the absolute coordinates move by -0.25 m:
+      x [-1.0 + 0.5*0.5, -1.0 + 3.5*0.5] = [-0.75, +0.75]   3 cols -> 1.5 m
+      y [ 2.0 + 1.5*0.5,  2.0 + 3.5*0.5] = [+2.75, +3.75]   2 rows -> 1.0 m
     """
     w, h, res, ox, oy = 6, 5, 0.5, -1.0, 2.0
     g = np.full((h, w), -1, dtype=np.int16)
@@ -1802,8 +1805,8 @@ def test_the_known_extent_is_the_box_of_known_cells_in_metres():
     assert (box['cols'], box['rows']) == (3, 2)
     assert box['width_m'] == pytest.approx(1.5)
     assert box['height_m'] == pytest.approx(1.0)
-    assert (box['x0'], box['x1']) == pytest.approx((-0.5, 1.0))
-    assert (box['y0'], box['y1']) == pytest.approx((3.0, 4.0))
+    assert (box['x0'], box['x1']) == pytest.approx((-0.75, 0.75))
+    assert (box['y0'], box['y1']) == pytest.approx((2.75, 3.75))
 
 
 def test_unknown_padding_is_excluded_from_the_extent():

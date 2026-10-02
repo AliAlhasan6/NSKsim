@@ -51,6 +51,12 @@ read as a WALL. No writer here emits negate: 1, and check_thresholds() dies on
 such a YAML rather than classify under it, because a YAML whose reserved occupied
 byte does not read as occupied is describing some other image.
 
+WHERE A CELL SITS is the other rule this module owns, and for the same reason:
+it was being restated, and differently, in half a dozen places. See
+CELL_CENTRE_OFFSET below. Every index-to-position conversion in this project goes
+through cell_centre() / cell_index() / cell_low_edge(), so the convention lives in
+one place and cannot be applied twice.
+
 numpy and PyYAML only. No PIL, no scipy, no ROS -- so this imports cleanly in
 CI's ros:jazzy container, where a module-level scipy import is a COLLECTION error
 that takes the whole nsk_swarm suite down (fit_world_transform.py:53).
@@ -70,6 +76,113 @@ OCC, FREE, UNKNOWN = 0, 254, 205
 
 RES_TOL = 1e-9          # two maps of one world share a resolution exactly
 EPS = 1e-9              # float slack when flooring an exact cell boundary
+
+# ─────────────────────── where a cell sits, stated once ──────────────────────
+#
+# CELL_CENTRE_OFFSET is where cell i's CENTRE lies inside the cell, in cells,
+# measured from `origin + i*res`. For the maps this project reads it is 0.0, NOT
+# the ROS convention's 0.5, and the reason is two lines of slam_toolbox:
+#
+#   * toNavMap copies Karto's grid offset VERBATIM into the published origin:
+#     `map.info.origin.position.x = offset.GetX()` where `offset` is
+#     `occ_grid->GetCoordinateConverter()->GetOffset()`
+#     (~/src/slam_toolbox_2.8.5/ros-jazzy-slam-toolbox-2.8.5/include/
+#     slam_toolbox/visualization_utils.hpp:108-129, the assignment at :123-124).
+#     Every PGM this project reads was saved off that topic -- save_map.py:91,
+#     run_health.py:1878 -- so every one of them carries a Karto offset as its
+#     `origin:`.
+#   * Karto places cell i AT that offset, not half a cell past it. GridToWorld
+#     returns `m_Offset + rGrid/m_Scale` = `origin + i*res`, and WorldToGrid
+#     inverts it with math::Round, not a floor
+#     (karto_sdk/include/karto_sdk/Karto.h:4421-4436 WorldToGrid,
+#     :4444-4458 GridToWorld). So cell i covers
+#     [origin + (i-0.5)*res, origin + (i+0.5)*res) and its centre is exactly
+#     origin + i*res.
+#
+# The ROS reading -- centre at origin + (i+0.5)*res, cell i spanning
+# [origin + i*res, origin + (i+1)*res) -- therefore puts every cell of every
+# slam_toolbox map half a cell (0.05 m at this project's 0.1 m resolution) too
+# far in +x AND +y. diagnose_karto.py and diagnose_phase.py indexed cells
+# Karto's way from the start and said so in their docstrings; graph_walls,
+# fit_world_transform, pgm_extent, run_health and sample() read them the ROS way,
+# and compare_gated_maps patched the difference back out by hand with a -rho/2
+# shift on each origin. Those are now one number.
+#
+# A map whose origin did NOT come from Karto wants 0.5 here. Nothing in this
+# project writes one, so there is no second value and no per-map switch: a flag
+# nobody can set correctly is worse than a constant that is documented.
+CELL_CENTRE_OFFSET = 0.0
+
+
+def cell_centre(origin: float, i, res: float):
+    """World coordinate of cell `i`'s centre along one axis. Scalar or array.
+
+    The inverse of cell_index(). Pass np.arange(n) for a whole lattice.
+    """
+    return origin + (i + CELL_CENTRE_OFFSET) * res
+
+
+def cell_low_edge(origin: float, i, res: float):
+    """World coordinate of cell `i`'s LOWER edge along one axis.
+
+    Half a cell below its centre, so cell `i` spans
+    [cell_low_edge(i), cell_low_edge(i + 1)). Extents and bounding boxes want
+    this; a point lookup wants cell_index().
+    """
+    return origin + (i + CELL_CENTRE_OFFSET - 0.5) * res
+
+
+def cell_coord(coord, origin: float, res: float):
+    """`coord` in cells from `origin`, scaled so that floor() gives the index.
+
+    Separate from cell_index() because a bracket wants to floor one end and ceil
+    the other, and both have to be measured on the same axis as the index.
+    """
+    return (coord - origin) / res + (0.5 - CELL_CENTRE_OFFSET)
+
+
+def cell_index(coord, origin: float, res: float) -> np.ndarray:
+    """Which cell `coord` falls in along one axis. The inverse of cell_centre().
+
+    EPS absorbs the case of a coordinate landing exactly on a cell edge, which
+    two lattices a whole number of cells apart produce every time.
+
+    Under CELL_CENTRE_OFFSET = 0.0 this is floor((coord - origin)/res + 0.5),
+    which is Karto's own WorldToGrid: math::Round is
+    `v >= 0 ? floor(v + 0.5) : ceil(v - 0.5)` (karto_sdk Math.h:87-90), i.e. round
+    half AWAY FROM ZERO. np.rint, which diagnose_karto.world_to_grid used to call,
+    rounds half to EVEN and is therefore the less faithful copy -- it differs on an
+    exact .5 tie. Measured: 0 disagreements over 7.2M return and sensor coordinates
+    on four b2maps grids, so the exact 20/20 rebuild that validated diagnose_karto
+    is unaffected. For coord left of the grid the two sign branches of Round differ
+    (-1 against -2 at v = -1.5) and both are discarded by the `>= 0` bounds test.
+    """
+    return np.floor(cell_coord(coord, origin, res) + EPS).astype(np.int64)
+
+
+def cell_centre_provenance() -> dict:
+    """The cell-centre convention, for the `provenance` field of an output JSON.
+
+    Every tool here writes this into whatever it writes, so a reading of any
+    output says which lattice it was measured on without anybody having to
+    remember which revision moved it.
+    """
+    return {
+        'cell_centre_offset_cells': CELL_CENTRE_OFFSET,
+        'cell_centre': f'origin + (i + {CELL_CENTRE_OFFSET})*res',
+        'cell_span': f'[origin + (i {CELL_CENTRE_OFFSET - 0.5:+})*res, '
+                     f'origin + (i {CELL_CENTRE_OFFSET + 0.5:+})*res)',
+        'convention': "Karto's, as slam_toolbox publishes it -- NOT the ROS "
+                      'origin + (i+0.5)*res. A ROS reading of these maps sits '
+                      'half a cell further +x and +y than Karto placed them',
+        'why': 'toNavMap copies the Karto grid offset verbatim into the '
+               'published map origin (include/slam_toolbox/'
+               'visualization_utils.hpp:108-129, assignment at :123-124), and '
+               'Karto centres cell i on that offset: GridToWorld returns '
+               'offset + i/scale and WorldToGrid inverts it with Round '
+               '(karto_sdk/include/karto_sdk/Karto.h:4421-4436, :4444-4458)',
+        'defined_in': 'experiments/analysis/trinary_map.py CELL_CENTRE_OFFSET',
+    }
 
 
 def die(msg: str) -> None:
@@ -232,20 +345,28 @@ def check_thresholds(negate: int, occupied_thresh: float, free_thresh: float,
 
 def sample(m: dict, res: float, x0: float, y0: float,
            w: int, h: int) -> np.ndarray:
-    """`m`'s classes at the centres of a (h, w) lattice starting at (x0, y0).
+    """`m`'s classes at the centres of a (h, w) lattice anchored at (x0, y0).
 
-    Lattice cell (0, 0) has its centre at (x0 + res/2, y0 + res/2) and rows go
-    UPWARD in y, so the returned array is bottom-up rather than in PGM order.
-    Centres outside the map are unknown.
+    (x0, y0) is read the same way a map's `origin` is: it is the position of
+    lattice cell (0, 0), so that cell's centre is at
+    (cell_centre(x0, 0, res), cell_centre(y0, 0, res)) -- which is (x0, y0)
+    itself under CELL_CENTRE_OFFSET = 0.0. Rows go UPWARD in y, so the returned
+    array is bottom-up rather than in PGM order. Centres outside the map are
+    unknown.
+
+    Both ends go through the one convention, so a lattice anchored on a map's own
+    origin is the identity resample and two lattices a whole number of cells
+    apart agree cell for cell. Callers must NOT pre-shift an origin to make that
+    true; compare_gated_maps.py used to, and that correction is now the default.
 
     Handed a grid already recoded by classify(), this is a three-state resampler
     with no change to it at all: the row flip and the outside-the-map fill are
     the whole of convention A.
     """
-    xs = x0 + (np.arange(w) + 0.5) * res
-    ys = y0 + (np.arange(h) + 0.5) * res
-    cols = np.floor((xs - m['origin'][0]) / res + EPS).astype(np.int64)
-    rows = np.floor((ys - m['origin'][1]) / res + EPS).astype(np.int64)
+    xs = cell_centre(x0, np.arange(w), res)
+    ys = cell_centre(y0, np.arange(h), res)
+    cols = cell_index(xs, m['origin'][0], res)
+    rows = cell_index(ys, m['origin'][1], res)
 
     out = np.full((h, w), UNKNOWN, dtype=np.uint8)
     keep_c = (cols >= 0) & (cols < m['width'])

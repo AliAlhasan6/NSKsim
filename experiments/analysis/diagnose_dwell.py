@@ -58,6 +58,7 @@ sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'slam'))
 
 import graph_walls as gw                                    # noqa: E402
 from check_run_bag import CMD_EPS_ANGULAR, CMD_EPS_LINEAR    # noqa: E402
+from trinary_map import cell_centre_provenance, cell_index   # noqa: E402
 
 OUT_PATH = gw.OUT_DIR_DEFAULT / 'diagnose_dwell.json'
 
@@ -142,10 +143,14 @@ def stationary_scans(sx: np.ndarray, sy: np.ndarray, syaw: np.ndarray,
 
 
 def cells_of(returns: dict, rho: float, origin, shape) -> tuple:
-    """(row, col, inside) of every return, the way on_occupied_share bins them."""
+    """(row, col, inside) of every return, the way on_occupied_share bins them.
+
+    Through trinary_map.cell_index, which is what on_occupied_share now uses, so
+    "the way B1 bins them" stays a fact rather than two copies of one formula.
+    """
     h, w = shape
-    col = np.floor((returns['px'] - origin[0]) / rho + 1e-9).astype(np.int64)
-    row = np.floor((returns['py'] - origin[1]) / rho + 1e-9).astype(np.int64)
+    col = cell_index(returns['px'], origin[0], rho)
+    row = cell_index(returns['py'], origin[1], rho)
     return row, col, (row >= 0) & (row < h) & (col >= 0) & (col < w)
 
 
@@ -406,6 +411,7 @@ def main() -> int:
                             'first_kept_scan': 'counted as moving'},
         'truth_used': False,
         'gated': False,
+        'provenance': {'cell_centre': cell_centre_provenance()},
         'touches': 'writes this file only; opens no map JSON and moves no '
                    'threshold',
         'poses': 'graph_walls.interpolate_poses on the same /tf samples Part B '

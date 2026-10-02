@@ -305,6 +305,91 @@ def test_check_thresholds_dies_on_thresholds_outside_0_1():
     assert exc.value.code == 2
 
 
+# ────────────────────────── where a cell sits ────────────────────────────────
+# CELL_CENTRE_OFFSET is the second rule this module owns. It is 0.0 because
+# slam_toolbox publishes Karto's grid offset verbatim as the map origin and Karto
+# centres cell i on that offset -- so cell i's centre is origin + i*res. Six files
+# used to restate this, two of them differently.
+
+
+def test_the_cell_centre_offset_is_kartos_and_the_citations_are_in_the_module():
+    """The value, and that the reason for it travels with it.
+
+    A bare 0.0 is indistinguishable from a bug, so the two source citations are
+    required to be present: a later reader who finds the constant has to be able
+    to check it against slam_toolbox without being told where to look.
+    """
+    assert tm.CELL_CENTRE_OFFSET == 0.0
+    src = open(SCRIPT).read()
+    assert 'visualization_utils.hpp:108-129' in src
+    assert 'Karto.h:4421-4436' in src
+
+
+def test_cell_index_inverts_cell_centre_for_every_cell():
+    """The round trip, on a non-round origin so no coincidence can carry it."""
+    origin, res = -3.2749999, 0.1
+    i = np.arange(-50, 50)
+    assert np.array_equal(tm.cell_index(tm.cell_centre(origin, i, res),
+                                        origin, res), i)
+
+
+def test_a_cell_spans_half_a_cell_either_side_of_its_centre():
+    """cell_low_edge is the centre minus half a cell, and the span is contiguous.
+
+    Which is the whole difference from the ROS reading: under CELL_CENTRE_OFFSET
+    0.0 cell i STARTS half a cell below origin + i*res rather than at it.
+    """
+    origin, res = 0.0, 0.1
+    assert tm.cell_low_edge(origin, 3, res) == pytest.approx(0.25)
+    assert tm.cell_low_edge(origin, 4, res) == pytest.approx(0.35)
+    assert tm.cell_centre(origin, 3, res) == pytest.approx(0.30)
+    # Just inside each edge indexes to the cell; just outside, to its neighbours.
+    assert tm.cell_index(0.2501, origin, res) == 3
+    assert tm.cell_index(0.3499, origin, res) == 3
+    assert tm.cell_index(0.2499, origin, res) == 2
+    assert tm.cell_index(0.3501, origin, res) == 4
+
+
+def test_sample_is_invariant_to_the_offset_and_a_common_shift():
+    """Why no sample()-based measurement moved when the convention was fixed.
+
+    sample() asks for cell_centre(x0, i, res) and answers with
+    cell_index(x, origin, res). Both carry the offset, so changing it moves the
+    query and the lookup together and cancels; and shifting x0 and origin by the
+    same amount cancels too -- which is why compare_gated_maps' hand -rho/2 on
+    BOTH origins was inert, and why removing it changed nothing.
+
+    The offset matters only where a WORLD coordinate meets a cell index, which is
+    cell_index() called on something that is not a lattice point of this grid.
+    """
+    px = (np.arange(12, dtype=np.uint8) * 20).reshape(3, 4)
+    m = {'px': px, 'width': 4, 'height': 3, 'origin': [0.37, -1.23]}
+    res = 0.1
+    want = tm.sample(m, res, 0.37, -1.23, 4, 3)
+
+    saved = tm.CELL_CENTRE_OFFSET
+    try:
+        for off in (0.0, 0.5, 0.25):
+            tm.CELL_CENTRE_OFFSET = off
+            m_off = dict(m)
+            assert np.array_equal(tm.sample(m_off, res, 0.37, -1.23, 4, 3), want)
+            shifted = dict(m, origin=[0.37 - res / 2.0, -1.23 - res / 2.0])
+            assert np.array_equal(
+                tm.sample(shifted, res, 0.37 - res / 2.0, -1.23 - res / 2.0,
+                          4, 3), want)
+    finally:
+        tm.CELL_CENTRE_OFFSET = saved
+
+
+def test_the_provenance_dict_carries_the_value_and_both_citations():
+    """Every output JSON embeds this, so it has to say enough to be read alone."""
+    p = tm.cell_centre_provenance()
+    assert p['cell_centre_offset_cells'] == tm.CELL_CENTRE_OFFSET
+    assert 'visualization_utils.hpp:108-129' in p['why']
+    assert 'Karto.h:4421-4436' in p['why']
+    assert 'trinary_map.py' in p['defined_in']
+
+
 # ─────────────────────────────────── sample ──────────────────────────────────
 
 def test_sample_places_a_map_where_the_origin_says():

@@ -123,6 +123,7 @@ from trinary_map import (  # noqa: E402,F401
     OCC,
     RES_TOL,
     UNKNOWN,
+    cell_centre_provenance,
     check_thresholds,
     classify,
     load,
@@ -345,8 +346,18 @@ def common_grid(maps: list[dict]) -> dict:
     """One lattice covering every registered map, anchored on the world origin.
 
     Anchored on floor(min / res) * res rather than on a map, so which maps are in
-    the set fixes only the EXTENT: a cell boundary falls exactly on x = 0 and
-    y = 0 whatever the set, and adding a map never moves an existing sample.
+    the set fixes only the EXTENT: the lattice through x = 0 and y = 0 is the same
+    whatever the set, and adding a map never moves an existing sample.
+
+    `x0`/`y0` name the position of common cell 0 the same way a map's `origin`
+    names the position of its cell 0, so under
+    trinary_map.CELL_CENTRE_OFFSET = 0.0 a cell CENTRE sits on x = 0 and y = 0 --
+    it used to be a cell boundary. That is a relabelling and not a move: every
+    grid this produces is bit-identical either way, because sample() shifts its
+    query lattice and its lookup by the same half cell and the two cancel (see
+    trinary_map.sample and compare_gated_maps.resample_onto). The offset only
+    changes where a WORLD coordinate meets a cell index, and nothing in this file
+    does that -- which is why no number here moved when the convention was fixed.
     """
     res = maps[0]['resolution']
     for m in maps:
@@ -1050,6 +1061,7 @@ def main() -> int:
                   for i, j in pairs()},
         'predictions': predictions,
         'cuts_s': list(CUTS),
+        'provenance': {'cell_centre': cell_centre_provenance()},
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     json_path = OUT_DIR / f'robot_divergence_{RUN_PREFIX}_{stamp}.json'

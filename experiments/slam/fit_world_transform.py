@@ -95,6 +95,17 @@ from bag_overlap import (  # noqa: E402
     world_walls,
 )
 
+# Where a cell sits, from the one definition. This file keeps its own
+# occupied-only PIL reader rather than calling trinary_map.classify -- that
+# independence is deliberate and test_robot_divergence pins the two occupied sets
+# equal -- but the LATTICE is not a second opinion anybody wants: cell_points used
+# to place cells at origin + (i+0.5)*res while diagnose_karto placed them at
+# origin + i*res, and only one of those can be where Karto put them.
+from trinary_map import (  # noqa: E402
+    cell_centre,
+    cell_centre_provenance,
+)
+
 MAPS_DIR = REPO_ROOT / 'experiments' / 'maps'
 LOGS_DIR = REPO_ROOT / 'experiments' / 'logs'   # inputs: map_to_odom_{RUN}_robot_N.txt
 OUT_DIR = LOGS_DIR                              # outputs: the JSON and the PNGs
@@ -300,13 +311,18 @@ def cell_points(m: dict, convention: str) -> np.ndarray:
 
     x is the same either way; the conventions differ only in whether row 0 is
     the top of the image (A, map_server's bottom-left origin) or the bottom (B).
+
+    Cell centres come from trinary_map.cell_centre, i.e. origin + i*res, because
+    these maps carry a Karto grid offset as their origin. Reading them the ROS way
+    put every occupied cell 0.05 m too far in +x and +y, which is a translation of
+    the whole point cloud and therefore lands straight in the fitted dx/dy.
     """
     res, (ox, oy) = m['resolution'], m['origin'][:2]
-    x = ox + (m['cols'] + 0.5) * res
+    x = cell_centre(ox, m['cols'], res)
     if convention == 'A':
-        y = oy + (m['height'] - 1 - m['rows'] + 0.5) * res
+        y = cell_centre(oy, m['height'] - 1 - m['rows'], res)
     elif convention == 'B':
-        y = oy + (m['rows'] + 0.5) * res
+        y = cell_centre(oy, m['rows'], res)
     else:
         die(f'unknown convention {convention!r}')
     return np.column_stack([x, y])
@@ -1145,6 +1161,7 @@ def main() -> None:
                                         'conventions fitted, per map',
                            'seeded_peaks': 'analytic placements are added to '
                                            'the peak list before NMS'},
+        'provenance': {'cell_centre': cell_centre_provenance()},
         'self_check': check,
         'verdict': verdict,
         'robots': {f'robot_{n}': results[n] for n in robots},

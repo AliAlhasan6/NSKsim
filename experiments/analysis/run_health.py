@@ -107,6 +107,11 @@ from check_run_bag import (  # noqa: E402
     read_prologue_series,
     sim_window,
 )
+# map_stats' known extent is cell EDGES, and where those are is one definition,
+# not this file's own. See trinary_map.CELL_CENTRE_OFFSET: /map carries a Karto
+# grid offset as its origin, so cell i spans [origin + (i-0.5)*res,
+# origin + (i+0.5)*res), and this used to read it as [origin + i*res, ...).
+from trinary_map import cell_low_edge  # noqa: E402
 
 BURGER_SDF = Path('/opt/ros/jazzy/share/turtlebot3_gazebo/models/'
                   'turtlebot3_burger/model.sdf')
@@ -1817,9 +1822,10 @@ def map_stats(data, w: int, h: int, res: float, ox: float, oy: float) -> dict:
     inside the unknown total.
 
     Computed on the grid rather than the image, so the extent does not depend
-    on the flip above. Cell (r, c) spans x in [ox + c*res, ox + (c+1)*res] and
-    y in [oy + r*res, oy + (r+1)*res] -- edges, not centres, which is
-    pgm_extent.box()'s convention.
+    on the flip above. Cell (r, c) spans x in
+    [cell_low_edge(ox, c), cell_low_edge(ox, c+1)) and y likewise -- edges, not
+    centres, which is pgm_extent.box()'s convention, and the edges are where
+    trinary_map.CELL_CENTRE_OFFSET says they are rather than half a cell past it.
     """
     g = np.asarray(data, dtype=np.int16).reshape(h, w)
     occ_mask = g >= OCC_TH_PCT
@@ -1838,8 +1844,10 @@ def map_stats(data, w: int, h: int, res: float, ox: float, oy: float) -> dict:
             'cols': int(c1 - c0 + 1), 'rows': int(r1 - r0 + 1),
             'width_m': float((c1 - c0 + 1) * res),
             'height_m': float((r1 - r0 + 1) * res),
-            'x0': float(ox + c0 * res), 'x1': float(ox + (c1 + 1) * res),
-            'y0': float(oy + r0 * res), 'y1': float(oy + (r1 + 1) * res),
+            'x0': float(cell_low_edge(ox, c0, res)),
+            'x1': float(cell_low_edge(ox, c1 + 1, res)),
+            'y0': float(cell_low_edge(oy, r0, res)),
+            'y1': float(cell_low_edge(oy, r1 + 1, res)),
         }
     return out
 

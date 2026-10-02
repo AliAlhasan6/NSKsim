@@ -75,6 +75,11 @@ sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'slam'))
 
 import diagnose_karto as dk                                  # noqa: E402
 import graph_walls as gw                                     # noqa: E402
+# Nothing here places a cell: karto_extent computes the Karto OFFSET (a bounding
+# box minimum, so a position in its own right) and build() indexes through
+# dk.world_to_grid. The provenance field is still written, because a reader of a
+# predicted grid needs to know which lattice its `origin:` names.
+from trinary_map import cell_centre_provenance                # noqa: E402
 
 OUT_DIR = gw.LOGS_DIR / 'b2maps_gated' / 'predicted'
 # The gate-OFF prediction, which C2 and its break both need: C2 asks about the
@@ -400,6 +405,7 @@ def main() -> int:
                 'five_cells_vs_C2': FIVE_VS_C2,
                 'maps_exact': exact,
                 'maps': len(rows),
+                'provenance': {'cell_centre': cell_centre_provenance()},
                 'per_map': {s: r['check'] for s, r in rows.items()}},
                 indent=2) + '\n')
         return 0 if exact == len(rows) else 2
@@ -410,6 +416,7 @@ def main() -> int:
                              'against': 'the last admitted scan',
                              'first_scan': 'always admitted'},
                     'gate_applied': not args.ungated,
+                    'provenance': {'cell_centre': cell_centre_provenance()},
                     'per_map': rows}, indent=2) + '\n')
     print(f'wrote {len(rows)} predicted grids and _summary.json to '
           f'{out_dir.relative_to(REPO_ROOT)}')
