@@ -89,6 +89,18 @@ OUT_DIR = gw.LOGS_DIR / 'b2maps_gated' / 'predicted'
 # than on that equality.
 OUT_DIR_UNGATED = gw.LOGS_DIR / 'b2maps_gated' / 'predicted_ungated'
 
+# --extent-fix writes HERE, never over the predictions above. A prediction built
+# with a patched Karto is a different prediction and must not be able to overwrite
+# the one C1 and C2 were judged against.
+OUT_DIR_EXTENT = gw.LOGS_DIR / 'b2maps_extent' / 'predicted'
+OUT_DIR_EXTENT_UNGATED = gw.LOGS_DIR / 'b2maps_extent' / 'predicted_ungated'
+
+# The proposed patch, in one place: docs/patches/karto_extent.patch adds +1 to each
+# of ComputeDimensions' two dimensions (Karto.h:6111-6112) and touches nothing else.
+# NOT APPLIED to ~/src/slam_toolbox_2.8.5, which stays pristine for citations.
+EXTENT_FIX_CELLS = 1
+EXTENT_FIX_PATCH = 'docs/patches/karto_extent.patch'
+
 GATE_M = 0.01            # diagnose_dwell's thresholds, against the last ADMITTED
 GATE_DEG = 0.5
 STAB_DROP = (2, 3, 4)    # slam_toolbox_common.cpp:795-797, on the gated sequence
@@ -227,8 +239,24 @@ def write_pgm(path: Path, grid: np.ndarray, rho: float, origin) -> None:
         'occupied_thresh: 0.65\nfree_thresh: 0.25\n')
 
 
+def out_dir_for(ungated: bool, extent_fix: bool) -> Path:
+    """Which directory a prediction belongs in. Four, and they never collide."""
+    if extent_fix:
+        return OUT_DIR_EXTENT_UNGATED if ungated else OUT_DIR_EXTENT
+    return OUT_DIR_UNGATED if ungated else OUT_DIR
+
+
 def one_map(stem: str, k: int, cut: int, check: bool,
-            ungated: bool = False) -> dict:
+            ungated: bool = False, extent_fix: bool = False) -> dict:
+    """One predicted map. `extent_fix` predicts what the PATCHED Karto would build.
+
+    The patch is docs/patches/karto_extent.patch: ComputeDimensions' two dimensions
+    each gain 1 cell so that the far end of its own bounding box has a cell to
+    index. Nothing else changes -- the OFFSET is untouched, so every cell that
+    existed before is the same cell at the same place and the grid only grows by
+    its far row and far column. Default OFF: with the flag absent this function is
+    the one that produced experiments/logs/b2maps_gated/predicted/, byte for byte.
+    """
     import fit_world_transform as fwt                        # noqa: PLC0415
     import robot_divergence as rd                            # noqa: PLC0415
 
@@ -304,6 +332,10 @@ def one_map(stem: str, k: int, cut: int, check: bool,
         reach = reaching(admitted)
     (ox, oy), w, h = karto_extent(sx, sy, ranges, beam, syaw, reach, geom, rho,
                                   range_threshold)
+    w_old, h_old = w, h
+    if extent_fix:
+        w += EXTENT_FIX_CELLS
+        h += EXTENT_FIX_CELLS
     p, hh = build(sx, sy, syaw, ranges, beam, reach, geom, rho, (ox, oy), w, h,
                   range_threshold)
     pred = dk.karto_to_trinary(dk.update_cell(p, hh))
@@ -327,12 +359,24 @@ def one_map(stem: str, k: int, cut: int, check: bool,
                       'free': int(np.count_nonzero(pred == gw.FREE)),
                       'unknown': int(np.count_nonzero(pred == gw.UNKNOWN))},
         'b1_predicted': b1['share'],
+        'b1_predicted_all_returns': b1['share_all'],
+        'b1_offgrid': b1['share_offgrid'],
+        'b1_n_returns': b1['n_returns'],
+        'b1_n_in_grid': b1['n_in_grid'],
         'n_returns_admitted': int(np.count_nonzero(keep_ret)),
     })
+    if extent_fix:
+        out['extent_fix'] = {
+            'patch': EXTENT_FIX_PATCH,
+            'cells_added_per_axis': EXTENT_FIX_CELLS,
+            'width_unpatched': w_old, 'height_unpatched': h_old,
+            'width': w, 'height': h,
+            'offset_unchanged': True,
+        }
     for key in ('occupied', 'free', 'unknown'):
         out['predicted'][f'delta_{key}'] = (out['predicted'][key]
                                             - out['saved'][key])
-    out_dir = OUT_DIR_UNGATED if ungated else OUT_DIR
+    out_dir = out_dir_for(ungated, extent_fix)
     out_dir.mkdir(parents=True, exist_ok=True)
     write_pgm(out_dir / stem, pred, rho, (ox, oy))
     return out
@@ -349,7 +393,21 @@ def main() -> int:
     ap.add_argument('--check', action='store_true',
                     help='run the two self-checks with the gate OFF and write '
                          'nothing')
+    ap.add_argument('--extent-fix', action='store_true', dest='extent_fix',
+                    help='predict what a Karto patched by '
+                         f'{EXTENT_FIX_PATCH} would build: '
+                         f'+{EXTENT_FIX_CELLS} cell on each of '
+                         "ComputeDimensions' two dimensions, offset untouched. "
+                         'Writes to b2maps_extent/predicted/ so it can never '
+                         'overwrite the predictions C1 and C2 were judged '
+                         'against. DEFAULT OFF, and with it off this file is '
+                         'byte-identical to the one that wrote '
+                         'b2maps_gated/predicted/')
     args = ap.parse_args()
+    if args.extent_fix and args.check:
+        gw.die('--extent-fix and --check are incompatible: --check asks the '
+               'UNPATCHED extent to reproduce the saved maps, which were built '
+               'by the unpatched Karto. Run them separately.')
     stems = args.maps or gw.corpus_stems()
 
     print('predicting the travel-gated maps' if not args.check
@@ -358,6 +416,35 @@ def main() -> int:
           'scan; the first is always admitted')
     print('  extent: Karto.h:6090-6114 over the admitted scans; '
           'a gated map has its own lattice')
+    if args.extent_fix:
+        print()
+        print('  --extent-fix: PREDICTING A PATCHED KARTO. '
+              f'{EXTENT_FIX_PATCH} adds +{EXTENT_FIX_CELLS} cell to each of')
+        print('  ComputeDimensions\' two dimensions (Karto.h:6111-6112) and '
+              'changes nothing else; the')
+        print('  offset is untouched, so no existing cell moves and the grid '
+              'grows only by its far')
+        print('  row and far column. The patch is NOT APPLIED to '
+              '~/src/slam_toolbox_2.8.5, which stays')
+        print('  pristine so every line number cited in docs/specs/ keeps '
+              'resolving.')
+        print(f'  Writing to {out_dir_for(args.ungated, True).relative_to(REPO_ROOT)}')
+        print()
+        print('  PRE-REGISTERED, stated before any number below is read:')
+        print('    E1  off-grid kept returns = 0 on 20/20')
+        print('    E2  every cell with an index inside the OLD width and height '
+              'is identical to the')
+        print('        gated prediction -- not to the slam_toolbox map. The fix '
+              'may only ADD the far')
+        print('        row and column, 20/20')
+        print('    E3  on the five cut1200 maps, max-side A9 recall is within '
+              '2 pp of min-side, 5/5')
+        print('    Also reported without a threshold: in-grid B1 and '
+              'all-returns B1, which should')
+        print('    now be equal because E1 says the off-grid population is '
+              'empty.')
+        print('    E1 and the B1 pair are judged here; E2 and E3 by '
+              'diagnose_extent_fix.py.')
     print()
     rows = {}
     if args.check:
@@ -368,7 +455,7 @@ def main() -> int:
               f'{"occ":>7}{"free":>8}{"unk":>7}{"B1":>8}')
     for stem in stems:
         k, cut = gw._k_and_cut(stem, 'the prediction needs the bag')
-        r = one_map(stem, k, cut, args.check, args.ungated)
+        r = one_map(stem, k, cut, args.check, args.ungated, args.extent_fix)
         rows[stem] = r
         if args.check:
             c = r['check']
@@ -409,15 +496,53 @@ def main() -> int:
                 'per_map': {s: r['check'] for s, r in rows.items()}},
                 indent=2) + '\n')
         return 0 if exact == len(rows) else 2
-    out_dir = OUT_DIR_UNGATED if args.ungated else OUT_DIR
+    out_dir = out_dir_for(args.ungated, args.extent_fix)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / '_summary.json').write_text(
-        json.dumps({'gate': {'m': GATE_M, 'deg': GATE_DEG,
-                             'against': 'the last admitted scan',
-                             'first_scan': 'always admitted'},
-                    'gate_applied': not args.ungated,
-                    'provenance': {'cell_centre': cell_centre_provenance()},
-                    'per_map': rows}, indent=2) + '\n')
+    summary = {'gate': {'m': GATE_M, 'deg': GATE_DEG,
+                        'against': 'the last admitted scan',
+                        'first_scan': 'always admitted'},
+               'gate_applied': not args.ungated,
+               'provenance': {'cell_centre': cell_centre_provenance()}}
+    if args.extent_fix:
+        off = [s for s, r in rows.items() if r['b1_offgrid'] != 0.0]
+        summary['extent_fix'] = {
+            'patch': EXTENT_FIX_PATCH,
+            'cells_added_per_axis': EXTENT_FIX_CELLS,
+            'applied_to_the_source_tree': False,
+            'what_changed': "ComputeDimensions' rWidth and rHeight only "
+                            '(Karto.h:6111-6112); rOffset is untouched, so no '
+                            'existing cell moves',
+            'E1': {'prediction': 'off-grid kept returns = 0 on 20/20',
+                   'registered': 'by Ali, before any number here was read',
+                   'maps': len(rows),
+                   'maps_with_no_offgrid_returns': len(rows) - len(off),
+                   'failing': {s: rows[s]['b1_offgrid'] for s in off},
+                   'holds': not off},
+            'b1_equal_as_E1_implies': {
+                s: {'in_grid': r['b1_predicted'],
+                    'all_returns': r['b1_predicted_all_returns'],
+                    'equal': r['b1_predicted'] == r['b1_predicted_all_returns']}
+                for s, r in rows.items()},
+            'E2_E3': 'judged by experiments/analysis/diagnose_extent_fix.py',
+        }
+    summary['per_map'] = rows
+    (out_dir / '_summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+    if args.extent_fix:
+        off = [s for s, r in rows.items() if r['b1_offgrid'] != 0.0]
+        eq = sum(1 for r in rows.values()
+                 if r['b1_predicted'] == r['b1_predicted_all_returns'])
+        print()
+        print(f'  E1  off-grid kept returns = 0: '
+              f'{"HELD" if not off else "FAILED"} '
+              f'({len(rows) - len(off)}/{len(rows)})')
+        for s in off:
+            print(f'        {s}: {rows[s]["b1_offgrid"]:.4%} off-grid')
+        print(f'  in-grid B1 == all-returns B1 on {eq}/{len(rows)} maps, which is '
+              'what E1 implies')
+        print(f'      worst in-grid B1 '
+              f'{min(r["b1_predicted"] for r in rows.values()):.2%}')
+        print('  E2 and E3 are judged by diagnose_extent_fix.py, which reads '
+              'these grids.')
     print(f'wrote {len(rows)} predicted grids and _summary.json to '
           f'{out_dir.relative_to(REPO_ROOT)}')
     return 0

@@ -1,0 +1,61 @@
+Make Karto's occupancy grid big enough for its own bounding box.
+
+ComputeDimensions (lib/karto_sdk/include/karto_sdk/Karto.h:6090-6114) sets the
+grid to Round(size * scale) cells and the offset to the bounding box MINIMUM,
+while WorldToGrid (:4421-4436) indexes with math::Round ABOUT that offset. So for
+a point at world x, with u = (x - O)/res, the index is Round(u); u runs over
+[0, U] where U = size/res; the largest index produced is Round(U); and the valid
+indices are [0, W) with W = Round(U). The last index is therefore one past the
+end, and every endpoint in the final half cell of the bounding box is skipped by
+TraceLine (:4874-4926, "cells outside the grid are skipped, never clamped") while
+the passes along the same ray stop at W-1 and are kept. Passes without hits is
+Karto's FREE (UpdateCell, :6244-6256), so the walls that define a map's max-x and
+max-y edges can come out free.
+
++1 is sufficient: it makes the valid range [0, Round(U)], which contains every
+index any bounding-box point can produce.
++1 is not more than needed: index Round(U) IS attained, by the extreme point that
+set the bounding box, so the added row and column are not dead. +2 would add a
+row and column no endpoint and no traced pass could ever reach, and they would
+stay Unknown for the life of the grid.
+
+Nothing else needs to change. The offset is untouched, so no existing cell moves:
+cell i still has its centre at O + i*res and every index that was valid before is
+still the same cell. A map built with this patch therefore differs from one built
+without it only by the far row and the far column.
+
+What this does NOT fix, stated so it is not mistaken for a complete claim: a
+reading at or above rangeThreshold is rescaled to exactly rangeThreshold along its
+own beam (AddScan, :6173-6179) and that synthesised endpoint is NOT a bounding-box
+point -- the box is built from the sensor pose and the FILTERED readings only
+(:5696-5700 over m_PointReadings, filtered at :5662 by
+InRange(r, minRange, rangeThreshold)), while AddScan traces
+GetPointReadings(false) = the unfiltered ones (:5613-5623). No change to
+ComputeDimensions can bound those. They carry isEndPointValid = false (:6167) and
+so can only ever mark free space, never a hit, which is why losing their tails
+costs free-space marking and never a wall.
+
+Against: ros-jazzy-slam-toolbox 2.8.5, orig tarball SHA256
+80af3955a610a81c320b4a75bff6b5e5ca99a6118455b7ca5ee1530e25608583.
+Apply with -p1 from the package root (the directory holding package.xml).
+
+NOT APPLIED to ~/src/slam_toolbox_2.8.5, which stays pristine so that every line
+number cited in docs/specs/ keeps resolving. See the Option A plan in
+SPEC_b2_wall_predicate §12.7: the overlay patches a COPY.
+
+--- a/lib/karto_sdk/include/karto_sdk/Karto.h
++++ b/lib/karto_sdk/include/karto_sdk/Karto.h
+@@ -6108,8 +6108,11 @@
+     kt_double scale = 1.0 / resolution;
+     Size2<kt_double> size = boundingBox.GetSize();
+ 
+-    rWidth = static_cast<kt_int32s>(math::Round(size.GetWidth() * scale));
+-    rHeight = static_cast<kt_int32s>(math::Round(size.GetHeight() * scale));
++    // +1: WorldToGrid rounds about rOffset, so a point at the far end of the
++    // bounding box indexes to Round(size*scale), which is one past the end of a
++    // Round(size*scale)-cell grid. See docs/patches/karto_extent.patch.
++    rWidth = static_cast<kt_int32s>(math::Round(size.GetWidth() * scale)) + 1;
++    rHeight = static_cast<kt_int32s>(math::Round(size.GetHeight() * scale)) + 1;
+     rOffset = boundingBox.GetMinimum();
+   }
+ 

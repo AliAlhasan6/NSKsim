@@ -803,3 +803,173 @@ would read the ungated ones. §12.4's tool resolved the first two with local hel
 (`diagnose_extent.variant_bag`, `variant_r_max`, `variant_map_to_odom`) and needs no
 relay log; Part B needs all three, so that plumbing is Task 2's first step and is
 not done here.
+
+### 12.6 The extent fix, predicted. Nothing patched, nothing built
+
+**1. The patch, specified and not applied.** `docs/patches/karto_extent.patch`, which
+adds `+ 1` to each of `ComputeDimensions`' two dimensions (`Karto.h:6111-6112`) and
+changes nothing else. Verified to apply with `patch -p1` at zero fuzz against a
+scratch COPY; `~/src/slam_toolbox_2.8.5` is untouched and still reads
+`Round(size.GetWidth() * scale)` at `:6111`, so every line number cited anywhere in
+`docs/` still resolves.
+
+Why +1 is **sufficient**: with `O` the offset, `u = (x − O)/res` and
+`U = size/res`, `WorldToGrid` gives index `Round(u)`; `u` runs over `[0, U]`; so the
+largest index any bounding-box point can produce is `Round(U)`. Valid indices are
+`[0, W)`, and `W = Round(U) + 1` makes `Round(U)` the last valid one.
+
+Why it is **not more than needed**: index `Round(U)` IS attained — by the extreme
+point that set the bounding box — so the added row and column are not dead. `+2`
+would add a row and column that no endpoint and no traced pass could reach, and they
+would stay Unknown for the life of the grid. The offset is untouched, so no existing
+cell moves: cell `i` keeps its centre at `O + i·res`.
+
+**What the patch does NOT fix, stated so the claim is not over-read.** A reading at
+or above `rangeThreshold` is rescaled to exactly `rangeThreshold` along its own beam
+(`AddScan`, `:6173-6179`) and that synthesised endpoint is **not a bounding-box
+point**: the box is built from the sensor pose and the FILTERED readings only
+(`:5696-5700` over `m_PointReadings`, filtered at `:5662` by
+`InRange(r, minRange, rangeThreshold)`), while `AddScan` traces
+`GetPointReadings(false)` = the unfiltered ones (`:5613-5623`). No change to
+`ComputeDimensions` can bound those. They carry `isEndPointValid = false` (`:6167`),
+so losing their tails costs free-space marking and never a wall — which is why E1,
+about *kept* returns, can hold while this remains true.
+
+**2. The prediction.** `predict_gated_maps.py --extent-fix`, default off. With the
+flag absent all 40 PGM/YAML files in `b2maps_gated/predicted/` are reproduced
+**byte-identically** (`cmp` on all 40). Its `_summary.json` gains three reported
+fields — `b1_predicted_all_returns`, `b1_offgrid` and two counts — which follow from
+§12.3's B1 and are not a prediction change. With the flag on it writes to
+`experiments/logs/b2maps_extent/predicted/`, which cannot collide with the
+predictions C1 and C2 were judged against; `--extent-fix` and `--check` are refused
+together, since `--check` asks the UNPATCHED extent to reproduce maps the unpatched
+Karto built.
+
+**3. All three pre-registered predictions HELD.** Printed before the numbers, in both
+tools.
+
+| | verdict | |
+|---|---|---|
+| **E1** off-grid kept returns = 0 | **HELD 20/20** | every map exactly 0.000 % |
+| **E2** overlap identical to the gated prediction | **HELD 20/20** | 0 differing cells, origin bit-identical, exactly +1 per axis |
+| **E3** max-side A9 recall within 2 pp of min-side, cut1200 | **HELD 5/5** | worst gap 1.06 pp |
+
+Reported without a threshold, as asked: in-grid B1 and all-returns B1 are **equal on
+20/20**, which is what E1 implies, and the worst of them is **99.98 %** against the
+97.17 % the unpatched maps give.
+
+**The added row and column are not empty, which E2 alone would not have shown.** On
+each of the five cut1200 maps **all 402** added cells come out OCCUPIED — the
+boundary walls, appearing in full, with not one free or unknown cell among them. The
+short cuts behave as they should: a robot that never reached a boundary wall adds
+mostly unknown.
+
+| | occupied | free | unknown |
+|---|---|---|---|
+| cut60, 5 maps | 98 | 291 | 828 |
+| cut120 | 410 | 224 | 918 |
+| cut240 | 1327 | 117 | 392 |
+| cut1200 | **2010** | **0** | **0** |
+
+And E3 against §12.4's measurement of the same quantity on the unpatched maps:
+
+| map | max side, unpatched | max side, patched | min side, patched |
+|---|---|---|---|
+| k0_cut1200 | 62.33 % | 99.48 % | 98.42 % |
+| k1_cut1200 | 73.14 % | 98.99 % | 98.61 % |
+| k2_cut1200 | 70.52 % | 99.03 % | 98.64 % |
+| k3_cut1200 | 81.51 % | 98.96 % | 98.61 % |
+| k4_cut1200 | 97.85 % | 98.34 % | 99.03 % |
+
+The gap between the sides closes from 1.7–37.2 pp to 0.35–1.06 pp. **This is a
+prediction, not a measurement of slam_toolbox**: no slam_toolbox was compiled or
+run. `experiments/logs/graph_walls/diagnose_extent_fix.json` carries E2, E3 and the
+B1 pair; `b2maps_extent/predicted/_summary.json` carries E1.
+
+### 12.7 Option A: a patched slam_toolbox in an overlay. Plan only, nothing built
+
+**The source tree stays pristine.** `~/src/slam_toolbox_2.8.5` is the citation
+authority for every `Karto.h:` line number in this document, so the overlay patches
+a COPY and never that tree:
+
+```
+~/src/slam_toolbox_ws/                     # outside the repo; nothing here is committed
+  src/slam_toolbox/                        # cp -a of ros-jazzy-slam-toolbox-2.8.5
+  build/ install/ log/                     # colcon output
+```
+
+```
+mkdir -p ~/src/slam_toolbox_ws/src
+cp -a ~/src/slam_toolbox_2.8.5/ros-jazzy-slam-toolbox-2.8.5 \
+      ~/src/slam_toolbox_ws/src/slam_toolbox
+cd ~/src/slam_toolbox_ws/src/slam_toolbox
+patch -p1 --dry-run < ~/Desktop/NSKsim/docs/patches/karto_extent.patch   # expect no fuzz
+patch -p1          < ~/Desktop/NSKsim/docs/patches/karto_extent.patch
+cd ~/src/slam_toolbox_ws && colcon build --packages-select slam_toolbox \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release
+```
+
+The patch lives in the repo at **`docs/patches/karto_extent.patch`**, so the build is
+reproducible from a clean checkout plus the orig tarball, and the diff is reviewable
+without a build. It carries its own rationale, the SHA256 of the tarball it is
+against, and the note that it is not applied upstream of itself.
+
+**Dependencies: nothing to install.** `rosdep install --from-paths
+~/src/slam_toolbox_2.8.5/ros-jazzy-slam-toolbox-2.8.5 --ignore-src --rosdistro jazzy
+--simulate -y` prints **nothing and exits 0** — every dependency is already
+satisfied. Forcing the full list with `--reinstall --simulate` resolves 11 apt keys,
+all system libraries (`libeigen3-dev`, `libboost-all-dev`, `libsuitesparse-dev`,
+`liblapack-dev`, `libceres-dev`, `libtbb-dev`, `libqt5core5t64`,
+`libqt5widgets5t64`, `libqt5gui5t64`, `libqt5opengl5t64`, `qtbase5-dev`), and
+`dpkg -s` confirms **all seven -dev packages are present**. The ROS dependencies are
+satisfied by the installed `ros-jazzy-slam-toolbox 2.8.5-1noble` chain.
+
+**Build time on this machine: 8–15 minutes, expect ~10.** 4 cores (`nproc`), 23 GB
+RAM, 25 GB free on `/`. 20 translation units outside the tests, of which
+`lib/karto_sdk/src/Mapper.cpp` and `Karto.cpp` are the heavy ones, plus a Qt rviz
+plugin (`SlamToolboxPlugin`) and 6 node executables with 6 libraries — a dozen
+targets over 4 jobs. `ccache` is on PATH; priming it costs nothing the first time but
+makes a second build after a one-line `Karto.h` edit much cheaper. Note the patch
+touches a HEADER, so every target that includes `Karto.h` recompiles on each change;
+budget a near-full rebuild per iteration.
+
+**How `run_offline_maps.sh` would select it, default unset and byte-identical.** The
+script already resolves slam_toolbox through the environment and nothing else —
+`ros2 pkg prefix slam_toolbox` at `:413-414` and `ros2 launch "$LAUNCH"` at `:562`,
+with `LAUNCH` fixed at `:30` — so the overlay needs no change to how the node is
+started, only an opt-in prepend to `AMENT_PREFIX_PATH`. The hook, to go beside the
+existing preflight at `:410-414`:
+
+```sh
+# Opt-in overlay for a patched slam_toolbox. UNSET BY DEFAULT: with it unset this
+# block does nothing and the run is byte-identical to every run before it. Set it
+# only for an offline replay; the online simulation never reads it, because
+# swarm_sim.launch.py does not look at it and nothing here exports it.
+if [[ -n "${SLAM_TOOLBOX_OVERLAY:-}" ]]; then
+  [[ -f "$SLAM_TOOLBOX_OVERLAY/setup.bash" ]] || \
+    die "SLAM_TOOLBOX_OVERLAY=$SLAM_TOOLBOX_OVERLAY has no setup.bash"
+  source "$SLAM_TOOLBOX_OVERLAY/setup.bash"
+fi
+# Provenance, printed WHETHER OR NOT the overlay is set, so every run log records
+# which slam_toolbox built the map rather than leaving it to be inferred.
+echo "slam_toolbox prefix: $(ros2 pkg prefix slam_toolbox)"
+```
+
+Used as `SLAM_TOOLBOX_OVERLAY=~/src/slam_toolbox_ws/install bash
+experiments/slam/run_offline_maps.sh ...`. Three properties, each deliberate:
+
+* **default unset is byte-identical.** The block is skipped entirely; the only added
+  output is the prefix line, which is new information in the log and not a change to
+  the run.
+* **the online simulation never sees it.** The variable is read only here, never
+  exported by this script, and `swarm_sim.launch.py` does not mention it — so a
+  patched Karto cannot leak into a live 5-robot run, where it would change the maps
+  the explorer plans against.
+* **every run says which binary built its map.** Without the prefix line, two map
+  sets built weeks apart would be indistinguishable in the logs, which is exactly the
+  confusion the `--spawn-rev` gate exists to prevent for the spawn table.
+
+Before any patched map is compared with an unpatched one: the overlay must first
+reproduce an UNPATCHED map, by building the copy **without** the patch and checking a
+replay against an existing map — otherwise a difference cannot be attributed to the
+patch rather than to the overlay's compiler flags.
