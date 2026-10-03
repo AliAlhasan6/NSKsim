@@ -1738,13 +1738,15 @@ def obs_for_map(graph: dict, stem: str, k: int, cut: int, grid: np.ndarray,
     validation pass compares against the world. Nothing truth-derived comes back
     into the graph.
     """
-    if '_gated' in stem:
+    variants = stem_variants(stem)
+    if variants:
         die(f'{stem}: Part B builds its per-cut inputs -- the replay bag, the '
             'replay config, the relay log -- from (robot, cut) alone, so on a '
-            '_gated map it would read the UNGATED ones. Threading the variant '
-            'through those three builders is a separate change; until it is '
-            'made, run Part B on the ungated maps and compare the gated ones '
-            'with compare_gated_maps.py, which needs only trinary_map.')
+            f'{"_".join(("",) + variants)} map it would read the PLAIN ones. '
+            'Threading the variant through those three builders is a separate '
+            'change; until it is made, run Part B on the plain maps and compare '
+            'the variants with compare_gated_maps.py and '
+            'compare_overlay_maps.py, which need only trinary_map.')
     rho = graph['resolution']
     eps = params.eps(rho)
     r_max, r_max_src = read_replay_r_max(k, cut)
@@ -2155,19 +2157,72 @@ def corpus_stems() -> list[str]:
             for k in range(NUM_ROBOTS) for c in CUTS]
 
 
+# The optional variant tokens a corpus stem may carry, in the order they appear in
+# the name: b2maps_k{K}_cut{C}[_gated][_ovl|_extfix]_robot{K}.
+#
+#   gated    the travel-gated replay -- a property of the recorded INPUT, so the
+#            stripped bag carries the same token
+#   ovl      built through SLAM_TOOLBOX_OVERLAY with the patch NOT applied. This
+#            exists so the overlay can be shown equivalent to the installed deb
+#            before anything is attributed to a patch
+#   extfix   built through the overlay with docs/patches/karto_extent.patch applied
+#
+# `ovl` and `extfix` are a property of the BINARY, not of the input: both replay
+# the same bag as the plain or _gated run they are named after. That distinction is
+# why run_variant_of() and bag_variant_of() are two functions and not one.
+# Mutually exclusive by construction below: a build is patched or it is not.
+GATE_VARIANT = 'gated'
+BINARY_VARIANTS = ('ovl', 'extfix')
+_STEM_RE = (rf'{RUN_PREFIX}_k(\d+)_cut(\d+)'
+            rf'(?:_{GATE_VARIANT})?(?:_(?:{"|".join(BINARY_VARIANTS)}))?'
+            rf'_robot(\d+)$')
+
+
+def stem_variants(stem: str) -> tuple[str, ...]:
+    """The variant tokens a stem carries, in name order. () for a plain stem.
+
+    Read from the name between the cut and the robot, so it cannot disagree with
+    what _k_and_cut accepts.
+    """
+    m = re.match(_STEM_RE, stem)
+    if not m:
+        return ()
+    middle = stem[m.end(2):m.start(3) - len('_robot')]
+    return tuple(t for t in middle.split('_') if t)
+
+
+def run_variant_of(stem: str) -> str:
+    """The suffix this stem's RUN artefacts carry: the replay config, the
+    map->odom log, the per-robot slam log. Every variant token is in the run name.
+    """
+    v = stem_variants(stem)
+    return ''.join(f'_{t}' for t in v)
+
+
+def bag_variant_of(stem: str) -> str:
+    """The suffix this stem's stripped BAG carries. The gate only.
+
+    An overlay build replays the same bag as the run it is named after -- the
+    overlay changes the binary, not the recording -- so `_ovl` and `_extfix` must
+    NOT appear in a bag path. Getting this wrong would look for a bag that was
+    never made, which is the failure this function exists to make impossible.
+    """
+    return f'_{GATE_VARIANT}' if GATE_VARIANT in stem_variants(stem) else ''
+
+
 def _k_and_cut(stem: str, why: str) -> tuple[int, int]:
     """(robot, cut) from a corpus map name, or a refusal naming what needs it.
 
-    `_gated` is optional, so a travel-gated map parses to the same (K, cut) as the
-    ungated one it is paired with -- which is the point: the comparison between
-    them is between two maps of ONE cut.
+    Every variant token is optional, so a travel-gated map, an overlay-built map
+    and the plain one all parse to the same (K, cut) -- which is the point: the
+    comparisons between them are between maps of ONE cut.
 
     It gives the same (K, cut) and nothing more, so a caller that then builds a
     per-cut INPUT path from (K, cut) -- the bag, the replay config, the relay log
-    -- would reach for the ungated artefact. obs_for_map refuses a gated stem for
+    -- would reach for the plain artefact. obs_for_map refuses any variant stem for
     exactly that reason rather than reading the wrong bag quietly.
     """
-    m = re.match(rf'{RUN_PREFIX}_k(\d+)_cut(\d+)(?:_gated)?_robot(\d+)$', stem)
+    m = re.match(_STEM_RE, stem)
     if not m:
         die(f'{stem}: {why}, and both are found from the b2maps naming.')
     if m.group(1) != m.group(3):

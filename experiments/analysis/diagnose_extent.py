@@ -129,8 +129,14 @@ X2_MIN_SHARE = 0.80
 # Part B is a separate change and is not made here.
 
 def variant_of(stem: str) -> str:
-    """'' for an ungated stem, '_gated' for a gated one."""
-    return '_gated' if '_gated' in stem else ''
+    """The suffix this stem's RUN artefacts carry. graph_walls owns the rule.
+
+    Kept as a name because this file's callers read it, but it is no longer its own
+    parser: graph_walls.run_variant_of is the one definition, and it distinguishes
+    the RUN variant from the BAG variant -- an overlay build replays the same bag as
+    the run it is named after.
+    """
+    return gw.run_variant_of(stem)
 
 
 def variant_run(k: int, cut: int, variant: str) -> str:
@@ -138,6 +144,18 @@ def variant_run(k: int, cut: int, variant: str) -> str:
 
 
 def variant_bag(k: int, cut: int, variant: str) -> Path:
+    """The stripped bag. `variant` here is the BAG variant, the gate only.
+
+    Passing a run variant that carries _ovl or _extfix would look for a bag nobody
+    recorded, so this refuses any binary variant by name rather than failing on a
+    missing path.
+    """
+    for binv in gw.BINARY_VARIANTS:
+        if f'_{binv}' in variant:
+            gw.die(f'variant_bag got {variant!r}, which names a BINARY variant. '
+                   f'An _{binv} run replays the same bag as the run it is named '
+                   'after -- pass graph_walls.bag_variant_of(stem), not '
+                   'run_variant_of(stem).')
     path = gw.BAGS_DIR / f'{variant_run(k, cut, variant)}_slamin'
     if not path.is_dir():
         gw.die(f'replay bag not found: {path}')
@@ -186,11 +204,12 @@ def shortfall(stem: str) -> dict:
     height exactly, so it is the one thing here that does not need re-arguing.
     """
     k, cut = gw._k_and_cut(stem, 'the extent needs the robot and the cut')
-    variant = variant_of(stem)
+    variant = variant_of(stem)                  # the RUN variant: config, map->odom
+    bag_variant = gw.bag_variant_of(stem)       # the BAG variant: the gate only
     m = gw.load_grid(stem)
     rho = m['rho']
     r_max, r_max_src = variant_r_max(k, cut, variant)
-    data = gw.read_bag(variant_bag(k, cut, variant), k)
+    data = gw.read_bag(variant_bag(k, cut, bag_variant), k)
     geom = data['geom']
     base_scan, _hops = gw.compose_base_scan(data['static'], k)
     mto, mto_path = variant_map_to_odom(k, cut, variant)
@@ -220,7 +239,7 @@ def shortfall(stem: str) -> dict:
         'map': stem, 'robot': k, 'cut_s': cut,
         'variant': 'gated' if variant else 'ungated',
         'resolution': rho,
-        'bag': str(variant_bag(k, cut, variant).relative_to(REPO_ROOT)),
+        'bag': str(variant_bag(k, cut, bag_variant).relative_to(REPO_ROOT)),
         'r_max': {'value': r_max, 'source': r_max_src},
         'map_to_odom_log': str(Path(mto_path).relative_to(REPO_ROOT)),
         'n_scans_read': int(data['stamps'].size),

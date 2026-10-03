@@ -973,3 +973,164 @@ Before any patched map is compared with an unpatched one: the overlay must first
 reproduce an UNPATCHED map, by building the copy **without** the patch and checking a
 replay against an existing map — otherwise a difference cannot be attributed to the
 patch rather than to the overlay's compiler flags.
+
+### 12.8 Stage A: the overlay hook, the stem grammar, the build settings, the tool
+
+Ali chose to patch slam_toolbox. Stage A is code only; nothing is built and no
+replay is run.
+
+**The hook.** `run_offline_maps.sh` gains an opt-in `SLAM_TOOLBOX_OVERLAY`, sourced
+inside the script beside the existing preflight and nowhere else. Unset by default,
+and with it unset the block does not execute — pinned by test, not asserted:
+`test_compare_overlay_maps.py` lifts the block out of the real script by text and
+runs it under bash with the variable unset (prints nothing, sources nothing), set to
+a path with no `setup.bash` (refuses, naming it), and set to a valid overlay
+(sources it and says so). Sourcing inside the script rather than in the caller's
+shell buys two things: the run records in its own log which binary it used, and a
+shell that sourced an overlay once cannot leak it into a later default run. The
+online simulation never sees it — read only here, never exported, absent from
+`swarm_sim.launch.py`.
+
+**`nounset` is off for the source and only for the source, and that cost a stage C
+attempt.** colcon's generated setup scripts are not `set -u` safe:
+`install/setup.bash:11` is `if [ -n "$COLCON_TRACE" ]` with no default, and an
+unbound expansion under this script's `set -uo pipefail` is fatal — bash exits 1 at
+the source line. Stage C stopped there on 2026-10-03 with
+`COLCON_TRACE: unbound variable` for k0, k2 and the R0 break alike, before any
+params, log or map was written and with nothing left running. The fix saves
+`$(set +o)`, which prints every set-option as the command that restores it, clears
+`nounset` for the one `source`, and `eval`s the saved state back: exactly restored
+rather than set to `-u`, so the block behaves the same if it is ever lifted into a
+shell that had `nounset` off — which is how the tests run it.
+
+The lesson is about the fixture, not the shell. The original "valid overlay" test
+wrote a `setup.bash` that only exported a variable, so it passed while the hook
+could not source any overlay colcon had ever generated. It now reads `COLCON_TRACE`
+the way colcon's does, and it fails against the pre-fix hook with that same message;
+two further tests probe the shell the block leaves behind, one that `nounset` is back
+on after sourcing and one that it is *not* turned on if the caller had it off. Run
+against the real overlay at `~/src/slam_toolbox_ws/install`: sourced, `nounset`
+restored, `ros2 pkg prefix slam_toolbox` moves to the overlay, and `nsk_swarm`'s
+`free_space_relay` stays reachable.
+
+**The provenance line, unconditional, once per map.** Printed whether or not an
+overlay is set:
+
+```
+  slam_toolbox library: /opt/ros/jazzy/lib/libtoolbox_common.so sha256=991de233df7137bc \
+libkartoSlamToolbox.so sha256=343a02caafcd3942
+```
+
+**Which library, and this is not the obvious one.** `ComputeDimensions` and
+`CreateFromScans` are defined inline in `Karto.h`, so the patch does **not** land in
+karto_sdk's own library: the call site is `slam_mapper.cpp:67-69`, which
+`CMakeLists.txt:151` compiles into `toolbox_common`. `nm` finds no
+`ComputeDimensions` symbol exported from either library — it is inlined — so the
+sha256 of the file is the only handle on which build is loaded, which is why the
+line carries one.
+
+**Stems.** `b2maps_k{K}_cut{C}[_gated][_ovl|_extfix]_robot{K}`.
+
+| token | meaning | names a property of |
+|---|---|---|
+| `gated` | the travel-gated replay | the recorded INPUT — the stripped bag carries it too |
+| `ovl` | built through the overlay, patch NOT applied | the BINARY |
+| `extfix` | built through the overlay with `karto_extent.patch` applied | the BINARY |
+
+`_ovl` exists so the overlay can be shown equivalent to the installed deb before
+anything is attributed to a patch. `_ovl` and `_extfix` are mutually exclusive by
+construction — a build is patched or it is not.
+
+The distinction that matters, and the one a parser can get wrong: a binary variant
+names the BINARY, so an `_ovl` run **replays the same bag** as the run it is named
+after. `graph_walls` therefore owns two functions, not one — `run_variant_of` (the
+replay config, the map->odom log, the per-robot slam log: every token) and
+`bag_variant_of` (the stripped bag: the gate only). `diagnose_extent.variant_bag`
+refuses a binary token by name rather than dying on a path, because "bag not found"
+would send a reader looking for a recording nobody ever made.
+
+**Neither batch script needed a change.** `run_offline_maps.sh` takes `BAG` and
+`RUN` independently, so `RUN=b2maps_k0_cut60_gated_ovl` with
+`BAG=...b2maps_k0_cut60_gated_slamin` produces the right stem and reads the right
+bag with no new plumbing; every artefact in that script derives from `RUN` (`:535`,
+`:536`, `:537`, `:704`). `run_b2maps_cuts.sh` builds `SLAMIN` from `CUTRUN`, so
+threading a binary variant through it would have needed a second variable; the
+stages drive `run_offline_maps.sh` directly instead.
+
+**Byte-identity after widening the parser.** All 20 `<map>.json` reproduced
+byte-identically (`cmp`, 20/20), and `comparison.json` byte-identically apart from
+the `provenance` key added in §12.2. 851 tests pass in 18.2 s.
+
+#### The build settings, from `debian/rules`
+
+Read out of `ros-jazzy-slam-toolbox_2.8.5-1noble.debian.tar.xz`, `debian/rules`:
+
+| line | what it does |
+|---|---|
+| `:14` | `export LDFLAGS=` — dpkg's LDFLAGS are **emptied** |
+| `:17` | `export DEB_CXXFLAGS_MAINT_APPEND=-DNDEBUG` |
+| `:19-21` | `-DBUILD_TESTING=OFF` **only** when `nocheck` is in `DEB_BUILD_OPTIONS` |
+| `:26` | `dh $@ -v --buildsystem=cmake --builddirectory=.obj-$(DEB_HOST_GNU_TYPE)` |
+| `:33-37` | `dh_auto_configure -- -DCMAKE_INSTALL_PREFIX=/opt/ros/jazzy -DAMENT_PREFIX_PATH=/opt/ros/jazzy -DCMAKE_PREFIX_PATH=/opt/ros/jazzy $(BUILD_TESTING_ARG)` |
+
+**`debian/rules` never sets `CMAKE_BUILD_TYPE`, and it would not matter if it did:
+the package overrides it.** `CMakeLists.txt:4` is a bare
+`set(CMAKE_BUILD_TYPE Release)` — a normal variable, no `CACHE`, no `FORCE`, placed
+after `project()` — which shadows the cache entry for that directory and every
+subdirectory; `lib/karto_sdk/CMakeLists.txt:7` does the same, and `:8` appends
+`-ftemplate-backtrace-limit=0`. So **the deb was built Release, and so will the
+overlay be, whatever is passed on the command line.** The §12.7 plan's
+`-DCMAKE_BUILD_TYPE=Release` was right by accident; it is the package that decides.
+Release appends `CMAKE_CXX_FLAGS_RELEASE` (`-O3 -DNDEBUG`) after `CMAKE_CXX_FLAGS`,
+so `-O3` wins over dpkg's `-O2` and `-DNDEBUG` arrives twice.
+
+`dpkg-buildflags` on this machine:
+
+```
+CXXFLAGS  -g -O2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+          -ffile-prefix-map=<cwd>=. -flto=auto -ffat-lto-objects
+          -fstack-protector-strong -fstack-clash-protection -Wformat
+          -Werror=format-security -fcf-protection
+CPPFLAGS  -Wdate-time -D_FORTIFY_SOURCE=3
+LDFLAGS   -Wl,-Bsymbolic-functions -flto=auto -ffat-lto-objects -Wl,-z,relro
+```
+
+Three things worth stating rather than discovering later. **LTO is in CXXFLAGS but
+not at link time**, because `debian/rules:14` empties LDFLAGS — `-ffat-lto-objects`
+means the objects carry real machine code beside the IR, so linking without `-flto`
+works and uses the machine code. **`-ffile-prefix-map` embeds the build directory**,
+so a bit-identical binary is not achievable and was never the goal: R1 is about the
+MAP being byte-identical, which is a far weaker and testable claim. **`debhelper` is
+not installed here**, so what its cmake buildsystem would have passed could not be
+read off this machine — it does not matter, since the package overrides the build
+type and the flags below are given explicitly.
+
+#### The comparison tool
+
+`experiments/analysis/compare_overlay_maps.py`, reading maps through `trinary_map`
+only (`compare_gated_maps.read_grid`), no bag and no truth. R1 compares PGM
+**bytes** plus the YAML geometry; R2 compares by **slice** and never by resample,
+because a resample would absorb exactly the slip it exists to catch; R3 compares the
+added row and column against the prediction on observed cells, `>= 99.5 %`.
+
+R2's reference is chosen and recorded, not assumed: the overlay's own `_ovl` build
+when it exists — the closest control, differing by the patch and nothing else — and
+the deb's map otherwise, labelled *only as good as R1*.
+
+**Three breaks, each shown failing by test** (`test_compare_overlay_maps.py`, 32
+tests). Two findings came out of writing them, and both changed the tool:
+
+* `interior-row` first inset BOTH sides of R3's comparison, which read the same pair
+  of lines from each grid and agreed trivially. It now insets the **prediction
+  only**, so the map's added cells are asked to agree with lines the patch did not
+  add.
+* `other-robot` is **not registered against R3**, and that is a fact about R3: it
+  reads only the added row and column, and two robots' grids differ in SIZE, so R3
+  refuses the pair on its size check and is **skipped**. A skip is not a failure, so
+  the break could not demonstrate anything there. The break report now refuses to
+  count a vacuous pass: a check that judged no map is reported INCONCLUSIVE, and
+  `--no-json` returns the same exit code as a writing run.
+
+E3 is not in this tool. It needs world truth, and §6 keeps truth in the validation
+path: `diagnose_extent.py` computes max-side and min-side recall for any stem it is
+given, including an `_extfix` one, once that replay's config and map->odom log exist.

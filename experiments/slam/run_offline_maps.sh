@@ -410,8 +410,64 @@ fi
 command -v ros2 >/dev/null 2>&1 || \
   die "ros2 is not on PATH. Run: source /opt/ros/jazzy/setup.bash"
 
+# An opt-in overlay for a patched slam_toolbox, sourced HERE and nowhere else.
+#
+# UNSET BY DEFAULT, and with it unset this block does nothing: the only thing it
+# adds to a default run is the provenance line below, which is new information in
+# the log and not a change to the run. Sourced inside the script rather than left
+# to the caller's shell for two reasons -- the run then records in its own log
+# which binary it used, and a shell that sourced an overlay once cannot leak it
+# into a later default run.
+#
+# THE ONLINE SIMULATION NEVER SEES IT. This variable is read only here, is never
+# exported by this script, and swarm_sim.launch.py does not mention it. A patched
+# Karto in a live 5-robot run would change the maps the explorer plans against,
+# which is a behaviour change and not a measurement.
+if [[ -n "${SLAM_TOOLBOX_OVERLAY:-}" ]]; then
+  [[ -f "$SLAM_TOOLBOX_OVERLAY/setup.bash" ]] || \
+    die "SLAM_TOOLBOX_OVERLAY=$SLAM_TOOLBOX_OVERLAY has no setup.bash. Point it \
+at an overlay's install/ directory, or unset it."
+  # colcon's generated setup scripts are NOT nounset-safe. install/setup.bash
+  # line 11 is `if [ -n "$COLCON_TRACE" ]` with no default, and under this
+  # script's set -u an unbound expansion is fatal: bash exits 1 at the source
+  # line with 'COLCON_TRACE: unbound variable'. That is where stage C stopped on
+  # 2026-10-03, for both robots and the break alike, before anything was written.
+  #
+  # So nounset is off for the source and ONLY for the source. `set +o` prints
+  # every set-option as the command that restores it, so eval'ing it back puts
+  # the shell in exactly the state it was in -- which does NOT assume set -u was
+  # on, and also undoes anything the sourced script changed.
+  _OVL_SET_OPTS="$(set +o)"
+  set +u
+  # shellcheck source=/dev/null
+  source "$SLAM_TOOLBOX_OVERLAY/setup.bash"
+  eval "$_OVL_SET_OPTS"
+  unset _OVL_SET_OPTS
+  echo "SLAM_TOOLBOX_OVERLAY=$SLAM_TOOLBOX_OVERLAY sourced"
+fi
+
 ros2 pkg prefix slam_toolbox >/dev/null 2>&1 || \
   die "slam_toolbox is not installed or not sourced."
+
+# UNCONDITIONAL provenance: which library built this map. Printed whether or not
+# an overlay is set, because the point is that no map set is ever ambiguous about
+# the binary behind it -- the same reason --spawn-rev is recorded for the spawn
+# table.
+#
+# WHICH library. ComputeDimensions and CreateFromScans are defined inline in
+# Karto.h, so docs/patches/karto_extent.patch does NOT land in karto_sdk's own
+# library: the call site is slam_mapper.cpp:67-69, which CMakeLists.txt:151
+# compiles into toolbox_common. libkartoSlamToolbox.so is named beside it because
+# it is the rest of karto_sdk, and neither is exported (nm finds no
+# ComputeDimensions symbol in either -- it is inlined), so the sha256 of the file
+# is the only handle on which build is loaded.
+SLAM_PREFIX="$(ros2 pkg prefix slam_toolbox)"
+SLAM_LIB="$SLAM_PREFIX/lib/libtoolbox_common.so"
+SLAM_LIB_KARTO="$SLAM_PREFIX/lib/libkartoSlamToolbox.so"
+_sha() { [[ -f "$1" ]] && sha256sum "$1" | cut -c1-16 || echo MISSING; }
+SLAM_PROV="$SLAM_LIB sha256=$(_sha "$SLAM_LIB") \
+libkartoSlamToolbox.so sha256=$(_sha "$SLAM_LIB_KARTO")"
+echo "slam_toolbox library: $SLAM_PROV"
 
 # The handoff's lesson: check for strays BEFORE launching, not after wondering
 # why the map looks wrong. A leftover slam_toolbox from a previous attempt will
@@ -493,6 +549,11 @@ for N in "${ROBOTS[@]}"; do
   PARAMS="$LOGDIR/offline_mapping_${RUN}_robot_$N.yaml"
   LOG="$LOGDIR/offline_slam_${RUN}_robot_$N.log"
   OUT="$MAPDIR/${RUN}_robot$N"
+
+  # Per map, unconditionally: the library that is about to build THIS map. The
+  # preflight prints it once for the run; this prints it beside each map, so a
+  # single map's provenance never has to be read out of a header far above it.
+  echo "  slam_toolbox library: $SLAM_PROV"
 
   # This robot's queue depth. Derived here, not once at the top, because the
   # scan counts differ between robots in the same bag and a queue one scan short
