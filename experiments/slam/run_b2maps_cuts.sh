@@ -72,6 +72,37 @@
 # run_b2maps_cuts.sh &` makes the INT trap below silently nonexistent -- bash
 # sets SIGINT to SIG_IGN in any command started with '&' when job control is
 # off, and an ignored-on-entry signal cannot be re-enabled from inside.
+#
+# --extfix: THE SAME CUTS THROUGH THE PATCHED BINARY (stage E). Default off, and
+# with it off not one line below behaves differently -- shown, not asserted: the
+# same (robot, cut) through both versions of this script prints identical output.
+#
+# It changes exactly three things. The run is named ${CUTRUN}_extfix, so every
+# artefact sits beside the gated one instead of overwriting it. The stripped bag
+# is the GATED one, reused as it is -- a binary variant names the BINARY, so an
+# _extfix run replays the bag of the run it is named after (graph_walls'
+# run_variant_of vs bag_variant_of), and re-stripping would be 20 rebuilds of
+# files that already exist. And SLAM_TOOLBOX_OVERLAY is passed through to
+# run_offline_maps.sh, which sources it around the one `source` with nounset off.
+#
+# Steps 1, 2 and the strip are therefore skipped: all three exist to PRODUCE that
+# bag, and it is already on disk and already accepted. The bag's presence is
+# required instead. Steps 4 and 5 are unchanged, so an _extfix map carries the
+# same drop gate, stray check and world fit as its gated original.
+#
+# THE OVERLAY ARRIVES IN THE ENVIRONMENT, NEVER IN ARGV, and that is not style.
+# run_offline_maps.sh:475 greps every process' full command line for
+# 'slam_toolbox' and dies if it matches, which is right -- it cannot tell a
+# leftover node from a command line that names one. This script re-execs itself
+# through `tee` and that parent lives for the whole batch, so an --overlay PATH
+# flag would put ~/src/slam_toolbox_ws_extfix/install into a resident argv and
+# kill every replay at the preflight. SLAM_TOOLBOX_OVERLAY is read from the
+# environment, and the only place its value appears on a command line is the
+# `env` of each replay, which execs immediately and leaves no process behind.
+#
+# --dry-run: list the planned runs -- bag, RUN, overlay, and whether each exists
+# -- and replay nothing. The full preflight still runs, so the overlay check and
+# the missing-bag check are exercised before three hours are committed.
 
 set -uo pipefail
 
@@ -100,6 +131,19 @@ SPAWN_REV=08617b2
 # show. run_offline_maps.sh's own default stays OFF, so old bags reproduce
 # byte-identically; this is the B2 corpus's choice, not a change to that script.
 DET_MODE=true
+
+# The sha256 prefix of the ONE patched libtoolbox_common.so this corpus may be
+# built with -- the stage D build, recorded in SPEC_b2_wall_predicate §12.8. It is
+# pinned for the same reason SPAWN_REV and DET_MODE are: a corpus is comparable
+# only if every map in it came out of one binary, and "an overlay is set" is not
+# that claim. ComputeDimensions is inlined, so no symbol can be looked for and
+# the file hash is the only handle (run_offline_maps.sh:443-463).
+#
+# If the patched binary is legitimately rebuilt, this number changes, and so does
+# the corpus: update it here AND in §12.8, and re-make the maps rather than mixing
+# them. The two values it must never be are 991de233df7137bc (the installed deb)
+# and 5718fbe8c08b0e73 (the UNPATCHED overlay of stage B/C).
+EXTFIX_LIB_SHA=f7171cb029990f75
 
 # TRAVEL_GATE=true strips robot K's scans that the robot did not move for, so a
 # parked robot stops outvoting the rest of its own map: a scan is admitted only
@@ -148,7 +192,8 @@ LEFTOVER_RE='[f]ree_space_relay|[s]lam_toolbox'
 
 usage() {
   cat <<'EOF'
-usage: bash experiments/slam/run_b2maps_cuts.sh --robots K[,K...] --cuts S[,S...] [--force]
+usage: bash experiments/slam/run_b2maps_cuts.sh --robots K[,K...] --cuts S[,S...]
+                                               [--force] [--extfix] [--dry-run]
 
   --robots  explorer ids, 0..4, comma-separated. One raw bag per id:
             experiments/logs/b2maps/b2maps_k<K>
@@ -156,6 +201,12 @@ usage: bash experiments/slam/run_b2maps_cuts.sh --robots K[,K...] --cuts S[,S...
             60, 120, 240 and 1200)
   --force   re-map cuts whose map already exists, preserving the old map and
             fit under experiments/maps/superseded/
+  --extfix  name every run ${CUTRUN}_extfix and replay the EXISTING stripped bag
+            through the patched slam_toolbox. Requires SLAM_TOOLBOX_OVERLAY in
+            the ENVIRONMENT (never as a flag -- see the header), pointing at an
+            overlay whose libtoolbox_common.so matches EXTFIX_LIB_SHA. Steps 1,
+            2 and the strip are skipped; the bag must already be there.
+  --dry-run list the planned runs and replay nothing. The preflight still runs.
 
 Both lists are required; there is no default.
 EOF
@@ -168,6 +219,8 @@ die() { echo -e "\nFATAL: $*\n" >&2; exit 1; }
 ROBOTS_CSV=""
 CUTS_CSV=""
 FORCE=0
+EXTFIX=0
+DRY_RUN=0
 
 # Kept before the loop consumes them: the tee re-run below re-invokes this
 # script with its own arguments, and by then "$@" has been shifted away.
@@ -180,6 +233,11 @@ while (( $# )); do
     --cuts)     CUTS_CSV="${2:-}";   shift 2 || die "--cuts needs a value" ;;
     --cuts=*)   CUTS_CSV="${1#*=}"; shift ;;
     --force)    FORCE=1; shift ;;
+    # No --overlay flag, deliberately: its value would sit in this script's own
+    # argv for the whole batch and trip run_offline_maps.sh:475. The header says
+    # why at length.
+    --extfix)   EXTFIX=1; shift ;;
+    --dry-run)  DRY_RUN=1; shift ;;
     -h|--help)  usage; exit 0 ;;
     *)          usage >&2; die "unknown argument: $1" ;;
   esac
@@ -504,6 +562,64 @@ for K in "${ROBOTS[@]}"; do
 done
 echo "  bags           $(printf 'b2maps_k%s ' "${ROBOTS[@]}")-- all present"
 
+# ── the binary this batch is allowed to use ─────────────────────────────────
+# OVL_ENV is empty unless --extfix, and an empty array expands to nothing in the
+# env below, so the replay command is unchanged when the flag is off.
+OVL_ENV=()
+if (( EXTFIX )); then
+  [[ -n "${SLAM_TOOLBOX_OVERLAY:-}" ]] || \
+    die "--extfix needs SLAM_TOOLBOX_OVERLAY set in the environment, pointing at
+the PATCHED overlay's install/ directory. It is not a flag: its value would then
+sit in this script's argv for the whole batch and trip run_offline_maps.sh:475."
+  [[ -f "$SLAM_TOOLBOX_OVERLAY/setup.bash" ]] || \
+    die "SLAM_TOOLBOX_OVERLAY=$SLAM_TOOLBOX_OVERLAY has no setup.bash"
+  # Isolated install (colcon's default, which stage B and D used) or merged.
+  OVL_LIB=""
+  for _c in "$SLAM_TOOLBOX_OVERLAY/slam_toolbox/lib/libtoolbox_common.so" \
+            "$SLAM_TOOLBOX_OVERLAY/lib/libtoolbox_common.so"; do
+    [[ -f "$_c" ]] && { OVL_LIB="$_c"; break; }
+  done
+  [[ -n "$OVL_LIB" ]] || \
+    die "no libtoolbox_common.so under $SLAM_TOOLBOX_OVERLAY (looked in
+slam_toolbox/lib/ and lib/). That overlay has not been built."
+  OVL_SHA="$(sha256sum "$OVL_LIB" | cut -c1-16)" || die "sha256sum failed on $OVL_LIB"
+  if [[ "$OVL_SHA" != "$EXTFIX_LIB_SHA" ]]; then
+    case "$OVL_SHA" in
+      991de233df7137bc) _which="the installed deb -- no overlay is in play" ;;
+      5718fbe8c08b0e73) _which="the UNPATCHED overlay of stage B/C" ;;
+      *)                _which="a build this script has never seen" ;;
+    esac
+    die "$OVL_LIB
+is sha256=$OVL_SHA ($_which), but --extfix builds the corpus with
+EXTFIX_LIB_SHA=$EXTFIX_LIB_SHA and nothing else. Point SLAM_TOOLBOX_OVERLAY at the
+patched build, or -- if it was legitimately rebuilt -- update EXTFIX_LIB_SHA here
+and in SPEC_b2_wall_predicate §12.8 and re-make the maps rather than mixing them."
+  fi
+  OVL_ENV=(SLAM_TOOLBOX_OVERLAY="$SLAM_TOOLBOX_OVERLAY")
+  echo "  extfix         $SLAM_TOOLBOX_OVERLAY"
+  echo "                 $OVL_LIB"
+  echo "                 sha256=$OVL_SHA == EXTFIX_LIB_SHA, so this is the patched build"
+  echo "                 runs are named ..._extfix and REUSE the stripped bags already on disk"
+  # Printed HERE and not in the common preflight: which bags get reused is the
+  # one thing --extfix cannot recover from, and TRAVEL_GATE decides it. The
+  # ungated ${CUTRUN}_slamin bags also exist on disk, so a batch started with the
+  # gate off would quietly build an ungated _extfix corpus. --dry-run lists the
+  # exact bag per row, which is the place to catch it.
+  echo "                 TRAVEL_GATE=$TRAVEL_GATE, so the bags are \
+b2maps_k<K>_cut<C>$( [[ "$TRAVEL_GATE" == true ]] && echo '_gated' )_slamin"
+elif [[ -n "${SLAM_TOOLBOX_OVERLAY:-}" ]]; then
+  # Not --extfix, but an overlay is exported: run_offline_maps.sh would inherit
+  # it and build maps named as if the deb had built them. Refused rather than
+  # ignored, because the resulting corpus would be unlabelled, not wrong-looking.
+  die "SLAM_TOOLBOX_OVERLAY=$SLAM_TOOLBOX_OVERLAY is set but --extfix is not.
+run_offline_maps.sh inherits the environment, so these maps would be built by the
+overlay and named as though the installed binary had built them. Unset it, or
+pass --extfix."
+fi
+if (( DRY_RUN )); then
+  echo "  dry run        nothing is replayed; the planned runs are listed below"
+fi
+
 LEFT="$(pgrep -af "$LEFTOVER_RE" || true)"
 if [[ -n "$LEFT" ]]; then
   echo "$LEFT"
@@ -512,6 +628,18 @@ contaminate /map, and this script must not kill processes it did not start."
 fi
 
 BATCH_START=$SECONDS
+
+# ── the dry run's table ─────────────────────────────────────────────────────
+# One line per planned run, naming the three things a wrong batch gets wrong: the
+# bag it would read, the run it would write, and the binary it would use.
+DRY_FMT='  %-8s %6s  %-40s %-8s %-38s %-7s %s\n'
+DRY_N=0
+DRY_MISSING=0
+if (( DRY_RUN )); then
+  echo
+  printf "$DRY_FMT" robot cut 'bag (under experiments/logs/b2maps/)' bag RUN map binary
+  printf "$DRY_FMT" ----- --- ----------------------------------- --- --- --- ------
+fi
 
 # ── robot x cut ──────────────────────────────────────────────────────────────
 
@@ -530,14 +658,33 @@ for K in "${ROBOTS[@]}"; do
     # down: $SLAMIN, the params, both logs, the map->odom file, the world fit and
     # the map stem are all built from CUTRUN.
     [[ "$TRAVEL_GATE" == "true" ]] && CUTRUN="${CUTRUN}_gated"
+    # The bag's stem and the run's stem part company here, and only here. A
+    # binary variant names the BINARY, so an _extfix run replays the bag of the
+    # run it is named after: BAGRUN keeps the gated name for $SLAMIN while CUTRUN
+    # carries _extfix for everything this batch writes. With --extfix off the two
+    # are the same string and every path below is what it always was.
+    BAGRUN="$CUTRUN"
+    (( EXTFIX )) && CUTRUN="${CUTRUN}_extfix"
     MAP="$MAPDIR/${CUTRUN}_robot$K"
-    SLAMIN="$LOGS/${CUTRUN}_slamin"
+    SLAMIN="$LOGS/${BAGRUN}_slamin"
     SLAMLOG="$SLAMLOGS/offline_slam_${CUTRUN}_robot_$K.log"
     CHECK_LOG="$LOGS/${CUTRUN}_check.log"
     STRIP_LOG="$LOGS/${CUTRUN}_strip.log"
     OFFLINE_LOG="$LOGS/${CUTRUN}_offline.log"
     FIT_LOG="$LOGS/${CUTRUN}_fit.log"
     CUT_START_SECONDS=$SECONDS
+
+    # Listed and skipped: no check, no strip, no replay, nothing written.
+    if (( DRY_RUN )); then
+      printf "$DRY_FMT" "robot_$K" "${CUT}s" "${SLAMIN#"$LOGS/"}" \
+        "$( [[ -f "$SLAMIN/metadata.yaml" ]] && echo present || echo MISSING )" \
+        "${CUTRUN}_robot$K" \
+        "$( [[ -f "$MAP.pgm" ]] && echo exists || echo new )" \
+        "${OVL_SHA:-installed deb}"
+      DRY_N=$(( DRY_N + 1 ))
+      [[ -f "$SLAMIN/metadata.yaml" ]] || DRY_MISSING=$(( DRY_MISSING + 1 ))
+      continue
+    fi
 
     R_RUN="$RUN"; R_CUT="$CUT"; row_reset
 
@@ -588,60 +735,76 @@ for K in "${ROBOTS[@]}"; do
       echo "  map exists and --force is set: it will be superseded"
     fi
 
-    # ── step 1: C1-C4 at this cut, against the RAW bag ──
-    echo
-    echo "  [1/5] check_run_bag.py --min-sim $CUT"
-    run_step "$CHECK_LOG" python3 "$CHECK" --bag "$BAG" --robot "$K" \
-        --spawn-rev "$SPAWN_REV" --min-sim "$CUT"
-    CHECK_RC=$?
+    # Steps 1 and 2 judge the RAW bag and the cut, and their only consumers are
+    # the strip's --start/--duration. --extfix replays a segment that is already
+    # on disk and already accepted, so all three are skipped together and the
+    # bag's presence is required in their place.
+    if (( EXTFIX )); then
+      echo
+      echo "  [1/5] skipped (--extfix): check_run_bag.py judges the RAW bag, and"
+      echo "        this run replays the stripped segment the gated batch accepted"
+      echo "  [2/5] skipped (--extfix): the --min-sim $REF_MIN_SIM corroboration is"
+      echo "        of that same --start, which nothing here recomputes"
+      [[ -d "$SLAMIN" && -f "$SLAMIN/metadata.yaml" ]] || \
+        fail "$CUTRUN: $SLAMIN is not a rosbag2 directory, and --extfix never
+strips one. Build this cut with the gated batch first, or check TRAVEL_GATE."
+      echo "        bag: $SLAMIN ($(du -sh "$SLAMIN" | cut -f1)), reused unchanged"
+    else
+      # ── step 1: C1-C4 at this cut, against the RAW bag ──
+      echo
+      echo "  [1/5] check_run_bag.py --min-sim $CUT"
+      run_step "$CHECK_LOG" python3 "$CHECK" --bag "$BAG" --robot "$K" \
+          --spawn-rev "$SPAWN_REV" --min-sim "$CUT"
+      CHECK_RC=$?
 
-    VERDICTS=""
-    for c in C1 C2 C3 C4; do
-      v="$(grep -a -E "^  $c  " "$CHECK_LOG" | tail -1 | sed -E "s/^  $c  //")"
-      VERDICTS+="$c=${v:-<missing>} "
-      [[ "$v" == "PASS" ]] || fail "$CUTRUN: $c is ${v:-<missing>}, not PASS ($CHECK_LOG)"
-    done
-    (( CHECK_RC == 0 )) || fail "$CUTRUN: check_run_bag.py exited $CHECK_RC ($CHECK_LOG)"
-    echo "    $VERDICTS"
+      VERDICTS=""
+      for c in C1 C2 C3 C4; do
+        v="$(grep -a -E "^  $c  " "$CHECK_LOG" | tail -1 | sed -E "s/^  $c  //")"
+        VERDICTS+="$c=${v:-<missing>} "
+        [[ "$v" == "PASS" ]] || fail "$CUTRUN: $c is ${v:-<missing>}, not PASS ($CHECK_LOG)"
+      done
+      (( CHECK_RC == 0 )) || fail "$CUTRUN: check_run_bag.py exited $CHECK_RC ($CHECK_LOG)"
+      echo "    $VERDICTS"
 
-    # The cut's own numbers, taken from what it printed -- never recomputed.
-    SEG="$(grep -a -m1 -E '^    --start ' "$CHECK_LOG")"
-    [[ -n "$SEG" ]] || fail "$CUTRUN: C4 passed but printed no --start/--duration line"
-    CUT_START="$(sed -E 's/.*--start +([0-9.]+).*/\1/' <<< "$SEG")"
-    CUT_DUR="$(sed -E 's/.*--duration +([0-9.]+).*/\1/' <<< "$SEG")"
-    [[ "$CUT_START" =~ ^[0-9]+\.[0-9]+$ && "$CUT_DUR" =~ ^[0-9]+\.[0-9]+$ ]] || \
-      fail "$CUTRUN: could not read --start/--duration out of '$SEG'"
-    echo "    --start $CUT_START --duration $CUT_DUR"
+      # The cut's own numbers, taken from what it printed -- never recomputed.
+      SEG="$(grep -a -m1 -E '^    --start ' "$CHECK_LOG")"
+      [[ -n "$SEG" ]] || fail "$CUTRUN: C4 passed but printed no --start/--duration line"
+      CUT_START="$(sed -E 's/.*--start +([0-9.]+).*/\1/' <<< "$SEG")"
+      CUT_DUR="$(sed -E 's/.*--duration +([0-9.]+).*/\1/' <<< "$SEG")"
+      [[ "$CUT_START" =~ ^[0-9]+\.[0-9]+$ && "$CUT_DUR" =~ ^[0-9]+\.[0-9]+$ ]] || \
+        fail "$CUTRUN: could not read --start/--duration out of '$SEG'"
+      echo "    --start $CUT_START --duration $CUT_DUR"
 
-    # ── step 2: the same run's --start at --min-sim 1200 ──
-    echo
-    echo "  [2/5] consistency: --start must equal this run's offset at --min-sim $REF_MIN_SIM"
-    if [[ -z "$REF_START" ]]; then
-      if (( CUT == REF_MIN_SIM )); then
-        # The cut IS the reference; re-running the same command to compare a
-        # number with itself would prove nothing.
-        REF_START="$CUT_START"
-        REF_SRC="the same invocation ($CHECK_LOG)"
-      else
-        REF_CHECK_LOG="$LOGS/${RUN}_check_ref${REF_MIN_SIM}.log"
-        # Its C4 verdict is NOT gated on. b2maps_relay1 holds 520 s and fails
-        # at 1200 while still supplying 60/120/240 -- what is wanted here is the
-        # offset of the first nonzero command, which C4 prints either way.
-        run_step "$REF_CHECK_LOG" python3 "$CHECK" --bag "$BAG" --robot "$K" \
-            --spawn-rev "$SPAWN_REV" --min-sim "$REF_MIN_SIM"
-        REF_LINE="$(grep -a -m1 -E '^  first nonzero command at .* \(strip convention' \
-                      "$REF_CHECK_LOG")"
-        [[ -n "$REF_LINE" ]] || \
-          fail "$RUN: --min-sim $REF_MIN_SIM printed no strip-convention offset, so the cut's --start cannot be corroborated ($REF_CHECK_LOG)"
-        REF_START="$(sed -E 's/.*command at +([0-9.]+) s.*/\1/' <<< "$REF_LINE")"
-        REF_SRC="$REF_CHECK_LOG"
-        REF_C4="$(grep -a -E '^  C4  ' "$REF_CHECK_LOG" | tail -1 | sed -E 's/^  C4  //')"
-        echo "    at --min-sim $REF_MIN_SIM: offset $REF_START, C4 ${REF_C4:-<missing>} (reported, not gated)"
+      # ── step 2: the same run's --start at --min-sim 1200 ──
+      echo
+      echo "  [2/5] consistency: --start must equal this run's offset at --min-sim $REF_MIN_SIM"
+      if [[ -z "$REF_START" ]]; then
+        if (( CUT == REF_MIN_SIM )); then
+          # The cut IS the reference; re-running the same command to compare a
+          # number with itself would prove nothing.
+          REF_START="$CUT_START"
+          REF_SRC="the same invocation ($CHECK_LOG)"
+        else
+          REF_CHECK_LOG="$LOGS/${RUN}_check_ref${REF_MIN_SIM}.log"
+          # Its C4 verdict is NOT gated on. b2maps_relay1 holds 520 s and fails
+          # at 1200 while still supplying 60/120/240 -- what is wanted here is the
+          # offset of the first nonzero command, which C4 prints either way.
+          run_step "$REF_CHECK_LOG" python3 "$CHECK" --bag "$BAG" --robot "$K" \
+              --spawn-rev "$SPAWN_REV" --min-sim "$REF_MIN_SIM"
+          REF_LINE="$(grep -a -m1 -E '^  first nonzero command at .* \(strip convention' \
+                        "$REF_CHECK_LOG")"
+          [[ -n "$REF_LINE" ]] || \
+            fail "$RUN: --min-sim $REF_MIN_SIM printed no strip-convention offset, so the cut's --start cannot be corroborated ($REF_CHECK_LOG)"
+          REF_START="$(sed -E 's/.*command at +([0-9.]+) s.*/\1/' <<< "$REF_LINE")"
+          REF_SRC="$REF_CHECK_LOG"
+          REF_C4="$(grep -a -E '^  C4  ' "$REF_CHECK_LOG" | tail -1 | sed -E 's/^  C4  //')"
+          echo "    at --min-sim $REF_MIN_SIM: offset $REF_START, C4 ${REF_C4:-<missing>} (reported, not gated)"
+        fi
       fi
+      [[ "$CUT_START" == "$REF_START" ]] || \
+        fail "$CUTRUN: --start $CUT_START but --min-sim $REF_MIN_SIM gives $REF_START. --start is the offset of the first nonzero command and must not move between cuts; something is wrong with the bag, not with the cut. Reference: $REF_SRC"
+      echo "    $CUT_START == $REF_START  ok  (reference: $REF_SRC)"
     fi
-    [[ "$CUT_START" == "$REF_START" ]] || \
-      fail "$CUTRUN: --start $CUT_START but --min-sim $REF_MIN_SIM gives $REF_START. --start is the offset of the first nonzero command and must not move between cuts; something is wrong with the bag, not with the cut. Reference: $REF_SRC"
-    echo "    $CUT_START == $REF_START  ok  (reference: $REF_SRC)"
 
     # ── supersede, now that the checks have passed ──
     if (( SUPERSEDING )); then
@@ -671,31 +834,39 @@ for K in "${ROBOTS[@]}"; do
 
     # ── step 3: strip -> offline map ──
     echo
-    echo "  [3/5] strip the RAW bag, then the offline known-pose map"
-    # strip_bag_for_offline_slam.py refuses to overwrite, so an existing segment
-    # has to go. It is an intermediate this script owns: rebuilt from the raw bag
-    # on the same --start/--duration the check just printed, so the copy would be
-    # what the strip below writes again. This is only reached when a map is about
-    # to be written anyway -- an existing map without --force was skipped above --
-    # which is also what makes a retry after a failed replay work without hand
-    # cleanup. Deleted only after confirming it really is a rosbag2 directory.
-    if [[ -e "$SLAMIN" ]]; then
-      [[ -d "$SLAMIN" && -f "$SLAMIN/metadata.yaml" ]] || \
-        fail "$SLAMIN exists and is not a rosbag2 directory -- refusing to delete it. Look at it and remove it by hand."
-      echo "    removing the old stripped segment ($(du -sh "$SLAMIN" | cut -f1)); it is rebuilt below from the raw bag on the same --start/--duration"
-      rm -rf "$SLAMIN" || fail "could not remove $SLAMIN"
+    if (( EXTFIX )); then
+      echo "  [3/5] the offline known-pose map, on the stripped bag already here"
+    else
+      echo "  [3/5] strip the RAW bag, then the offline known-pose map"
+      # strip_bag_for_offline_slam.py refuses to overwrite, so an existing segment
+      # has to go. It is an intermediate this script owns: rebuilt from the raw bag
+      # on the same --start/--duration the check just printed, so the copy would be
+      # what the strip below writes again. This is only reached when a map is about
+      # to be written anyway -- an existing map without --force was skipped above --
+      # which is also what makes a retry after a failed replay work without hand
+      # cleanup. Deleted only after confirming it really is a rosbag2 directory.
+      if [[ -e "$SLAMIN" ]]; then
+        [[ -d "$SLAMIN" && -f "$SLAMIN/metadata.yaml" ]] || \
+          fail "$SLAMIN exists and is not a rosbag2 directory -- refusing to delete it. Look at it and remove it by hand."
+        echo "    removing the old stripped segment ($(du -sh "$SLAMIN" | cut -f1)); it is rebuilt below from the raw bag on the same --start/--duration"
+        rm -rf "$SLAMIN" || fail "could not remove $SLAMIN"
+      fi
+
+      STRIP_GATE=()
+      [[ "$TRAVEL_GATE" == "true" ]] && STRIP_GATE=(--travel-gate "$K")
+      run_step "$STRIP_LOG" python3 "$STRIP" "$BAG" "$SLAMIN" \
+          --start "$CUT_START" --duration "$CUT_DUR" "${STRIP_GATE[@]}" \
+        || fail "$CUTRUN: strip_bag_for_offline_slam.py failed ($STRIP_LOG)"
+      [[ -f "$SLAMIN/metadata.yaml" ]] || fail "$CUTRUN: $SLAMIN is not a bag after the strip"
     fi
 
-    STRIP_GATE=()
-    [[ "$TRAVEL_GATE" == "true" ]] && STRIP_GATE=(--travel-gate "$K")
-    run_step "$STRIP_LOG" python3 "$STRIP" "$BAG" "$SLAMIN" \
-        --start "$CUT_START" --duration "$CUT_DUR" "${STRIP_GATE[@]}" \
-      || fail "$CUTRUN: strip_bag_for_offline_slam.py failed ($STRIP_LOG)"
-    [[ -f "$SLAMIN/metadata.yaml" ]] || fail "$CUTRUN: $SLAMIN is not a bag after the strip"
-
     # DETERMINISTIC passed explicitly rather than exported, so the command in
-    # the log is the whole recipe for the map beside it.
-    run_step "$OFFLINE_LOG" env BAG="$SLAMIN" RUN="$CUTRUN" \
+    # the log is the whole recipe for the map beside it. OVL_ENV is empty without
+    # --extfix, so that recipe is unchanged; with it, the overlay path appears
+    # here and nowhere else. `env` execs bash in the same process, so by the time
+    # run_offline_maps.sh:475 greps for strays this argv reads
+    # "bash experiments/slam/run_offline_maps.sh K" and matches nothing.
+    run_step "$OFFLINE_LOG" env "${OVL_ENV[@]}" BAG="$SLAMIN" RUN="$CUTRUN" \
         SCAN_MATCHING=false FREE_SPACE_RELAY=true DETERMINISTIC="$DET_MODE" \
         bash "$OFFLINE" "$K" \
       || fail "$CUTRUN: run_offline_maps.sh failed ($OFFLINE_LOG)"
@@ -775,6 +946,17 @@ for K in "${ROBOTS[@]}"; do
            $(( (SECONDS - CUT_START_SECONDS) / 60 )) $(( (SECONDS - CUT_START_SECONDS) % 60 ))
   done
 done
+
+if (( DRY_RUN )); then
+  echo
+  printf '  %d planned run(s); nothing was replayed and nothing was written.\n' "$DRY_N"
+  if (( DRY_MISSING )); then
+    die "$DRY_MISSING of $DRY_N stripped bags are MISSING. With --extfix they are
+not rebuilt: run the gated batch for those cuts first, or correct TRAVEL_GATE."
+  fi
+  echo "  every bag the batch would read is present."
+  exit 0
+fi
 
 R_RUN=""          # nothing half-finished to close
 print_table

@@ -1013,6 +1013,102 @@ against the real overlay at `~/src/slam_toolbox_ws/install`: sourced, `nounset`
 restored, `ros2 pkg prefix slam_toolbox` moves to the overlay, and `nsk_swarm`'s
 `free_space_relay` stays reachable.
 
+**Stage C HELD, and R1 is not the deb compared with itself.** k0 and k2 cut60
+gated, replayed through the unpatched overlay as `..._gated_ovl` with the five
+variables the batch passes (`SCAN_MATCHING=false FREE_SPACE_RELAY=true
+DETERMINISTIC=true`, same stripped bags, same robot): **R0** 2/2, the rendered
+params byte-identical to the gated run's with no exempted field — the file carries
+no run name, only the filename does; **drops** 0 against 0 for k0 and 1 against 1
+for k2, k2's being the structural first-scan drop at sim 75.800 in both logs;
+**R1** 2/2 HELD on bytes and geometry, corroborated by a bare `cmp` of the two PGM
+pairs; nothing left running.
+
+The claim R1 cannot make on its own is that two different binaries produced those
+identical bytes, and the provenance line is necessary but not sufficient — it names
+the library on disk, not the one the process loaded. During C1 the running node was
+read out of `/proc/<pid>/maps`: the overlay's own `async_slam_toolbox_node`, with
+`~/src/slam_toolbox_ws/install/slam_toolbox/lib/libtoolbox_common.so`
+(`sha256=5718fbe8c08b0e73`) mapped into it, against the deb's `991de233df7137bc`;
+`libkartoSlamToolbox.so` likewise `8ecb141cbf39f47c` against `343a02caafcd3942`. So
+the overlay really built those maps, and R2 and R3 in stage D can attribute a
+difference to the patch.
+
+**The stray preflight at `:475` matches argv, including the overlay's own path.**
+`pgrep -af 'slam_toolbox|ros2 bag play'` is deliberately conservative — it cannot
+tell a leftover node from a command line that merely mentions one — and
+`~/src/slam_toolbox_ws/install` contains the pattern. A plain foreground
+`env SLAM_TOOLBOX_OVERLAY=... bash run_offline_maps.sh K` is quiet, because `env`
+execs the script in that same process and the argv becomes `bash
+experiments/slam/run_offline_maps.sh K`; anything that keeps a parent holding the
+original words — `timeout`, `nohup`, `bash -c '...'` — self-matches and the run
+dies at `:478` before rendering any params. That is what the first R0 break attempt
+did (rc 1, not 124, no params file), and it is a property of the wrapper, not of
+`DETERMINISTIC`. The same trap awaits `slam_toolbox_ws_extfix`.
+
+Re-run without the wrapper, the break reaches the rendering and **R0 fails on
+exactly four lines**: `minimum_travel_distance` and `minimum_travel_heading` 0.0 to
+0.1, `minimum_time_interval` 0.0 to 0.2, and `scan_queue_size: 290` **absent**
+altogether (113 lines against 112). The dropped-scan count went 0 to 1 in the same
+run, which is the absent queue line doing what `:269-278` says it does.
+
+### Stage D: the patched binary, R2 held and R3 failed 1/2
+
+**The build.** `karto_extent.patch` applied to a fresh copy of the pristine
+extracted source in a second workspace, `~/src/slam_toolbox_ws_extfix`, leaving
+`~/src/slam_toolbox_ws` unpatched: hunk at `Karto.h:6108`, **zero fuzz**, the two
+`+ 1` lines landing at `:6114-6115`. 5 min 57 s with stage B's flags
+(`-DBUILD_TESTING=OFF`; the package forces Release regardless). `CMAKE_CXX_FLAGS`
+identical to stage B's apart from `-ffile-prefix-map`, which embeds the build
+directory and is why a bit-identical library was never the goal. Shas
+`f7171cb029990f75` / `b2261dc254de0f58`, differing from both the deb and the
+unpatched overlay — though for `libkartoSlamToolbox.so` that difference is the
+embedded path and not the patch, which lands only in `toolbox_common`. During the
+k0 replay, `/proc/<pid>/maps` showed `async_slam_toolbox_node` and both libraries
+coming from the extfix install.
+
+**The maps.** k0 `122x82` (436 occupied, 5872 free, 3696 unknown) against the gated
+`121x81`; k2 `121x141` (527, 13334, 3200) against `120x140`. R0 2/2 — the patch
+changes no parameter — drops 0 against 0 and 1 against 1, nothing left running.
+A third unpatched map, k1 `_ovl` at `120x81`, matches its gated map and takes R1 to
+**3/3 HELD**. **R2 2/2 HELD**: 0 overlapping cells differ, exactly +1 per axis,
+origin unchanged, against the overlay's own unpatched build. All three breaks
+failed as required, rc 2.
+
+**R3 FAILED 1/2, and the threshold is NOT moved.** It stays at 99.5 %. k0 HELD at
+100 % of 50 observed added cells; **k2 failed at 99.0476 % of 105** — one cell.
+Reported, not chased:
+
+| | |
+|---|---|
+| cell | x=100, y=140 — in the added ROW (y = the old height), not the column |
+| centre | (+4.831, +3.727) in `robot_2/map` |
+| map | **occupied** |
+| prediction | **free** |
+
+The three cells where k2_cut60's *gated* map already departs from its own
+prediction (C1: 13756 of 13759) are `(11,112)`, `(7,113)` and `(3,114)`, every one
+of them map-unknown against prediction-free. The R3 cell is **89 to 97 cells away**
+from the nearest of them — 9.33 to 10.04 m — and is the opposite disagreement:
+occupied where free was predicted, in a line the prediction says the patch adds. It
+is neither near the known departures nor of their kind. Nothing further was done
+with it.
+
+**The driver for stage E.** `run_b2maps_cuts.sh` gains `--extfix` and `--dry-run`,
+both default off, and with them off the same (robot, cut) through the old and new
+scripts prints identical output — shown over all 20 cuts on the skip path, 219
+lines each, the only filtered line being `started <UTC>`. `--extfix` renames the
+run `${CUTRUN}_extfix`, **reuses** the gated `_slamin` bag (`BAGRUN` keeps the
+gated stem while `CUTRUN` carries the token, which is `run_variant_of` against
+`bag_variant_of` in the shell), skips steps 1, 2 and the strip — all three exist to
+produce that bag — and requires it to be present instead. It refuses to start
+unless `SLAM_TOOLBOX_OVERLAY` names a build whose `libtoolbox_common.so` is
+`EXTFIX_LIB_SHA`, pinned in the script beside `SPAWN_REV` and `DET_MODE` and for
+the same reason; it also refuses the reverse, an exported overlay without
+`--extfix`, which would otherwise build overlay maps under deb names. There is
+deliberately **no `--overlay` flag**: the driver re-execs itself through `tee` and
+that parent lives for the whole batch, so the path would sit in a resident argv and
+`:475` would kill every replay.
+
 **The provenance line, unconditional, once per map.** Printed whether or not an
 overlay is set:
 
