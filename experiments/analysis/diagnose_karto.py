@@ -367,14 +367,49 @@ def nearest_face_normals(shape, origin, rho: float) -> tuple:
 
 # ───────────────────────────── the rebuild ───────────────────────────────────
 
-def rebuild(stem: str, k: int, cut: int, chunk_rays: int = 40000) -> dict:
-    """One map's hit and pass counts, per source, by Karto's rules.
+def bag_path_for(stem: str, k: int, cut: int) -> Path:
+    """The stripped bag whose scans built `stem`'s map.
 
-    Passes go into four buckets -- finite or relay-filled, crossed while moving
-    or while stationary -- plus a fifth that counts the finite passes crossing at
-    grazing incidence. Hits go into two, and only finite rays can produce one.
-    Every gate, break and counterfactual downstream is then arithmetic on these
-    buckets: no ray is traced twice.
+    Through graph_walls.bag_variant_of, never from (k, cut) alone. The gate lives
+    in the BAG -- minimum_travel_distance and _heading are 0.0 in the b2maps
+    configs, so Karto gates nothing -- while an overlay build replays the
+    recording of the run it is named after. So `_gated` belongs in this path and
+    `_extfix` and `_ovl` must not: a stem of the old corpus resolves to exactly
+    the path this function's caller built before any variant existed, and a
+    `_gated_extfix` stem resolves to the gated bag instead of silently admitting
+    scans its map never saw.
+
+    Pure: it builds a name and opens nothing, which is what lets the mapping be
+    tested where there are no bags.
+    """
+    return (gw.BAGS_DIR
+            / f'{gw.RUN_PREFIX}_k{k}_cut{cut}{gw.bag_variant_of(stem)}_slamin')
+
+
+def run_name_for(stem: str, k: int, cut: int) -> str:
+    """The RUN this stem's run artefacts carry: replay config, map->odom log.
+
+    Through graph_walls.run_variant_of, which keeps EVERY variant token -- the
+    opposite of bag_path_for, and for the opposite reason. A run artefact is
+    rendered per build, so an _extfix replay wrote its own config and its own
+    map->odom capture and those are the ones that describe it; a bag is a
+    recording that an overlay build replays unchanged, so _extfix must not
+    appear in a bag name. A plain stem gives the plain run name, which is what
+    the old corpus has always read.
+
+    Pure: it builds a name and opens nothing.
+    """
+    return f'{gw.RUN_PREFIX}_k{k}_cut{cut}{gw.run_variant_of(stem)}'
+
+
+def scan_inputs(stem: str, k: int, cut: int) -> dict:
+    """Everything a ray needs, before anything is traced.
+
+    Factored out of rebuild() so that "which rays built this map" has exactly
+    ONE answer here. The scan admission, the poses, the sensor offset and the
+    relay ceiling are assembled once, and both rebuild() and admitted_rays()
+    take them from this function; a second copy of the sequence would be a
+    second answer, and SPEC_b2_divergence_walls §4 turns on there being one.
     """
     import fit_world_transform as fwt                        # noqa: PLC0415
     import robot_divergence as rd                            # noqa: PLC0415
@@ -382,13 +417,12 @@ def rebuild(stem: str, k: int, cut: int, chunk_rays: int = 40000) -> dict:
     t0 = time.monotonic()
     graph, _el, _seg, grid = gw.graph_and_elements(stem)
     rho, origin = graph['resolution'], graph['origin']
-    h, w = grid.shape
-    r_max, r_max_src = gw.read_replay_r_max(k, cut)
+    r_max, r_max_src = gw.read_replay_r_max(k, cut, gw.run_variant_of(stem))
 
-    data = gw.read_bag(gw.BAGS_DIR / f'{gw.RUN_PREFIX}_k{k}_cut{cut}_slamin', k)
+    data = gw.read_bag(bag_path_for(stem, k, cut), k)
     geom = data['geom']
     base_scan, _hops = gw.compose_base_scan(data['static'], k)
-    fwt.RUN = f'{gw.RUN_PREFIX}_k{k}_cut{cut}'
+    fwt.RUN = run_name_for(stem, k, cut)
     mto, _p = fwt.load_map_to_odom(k)
     rd.check_map_to_odom(mto, stem)
     poses = gw.interpolate_poses(data['tf'], data['stamps'])
@@ -402,9 +436,73 @@ def rebuild(stem: str, k: int, cut: int, chunk_rays: int = 40000) -> dict:
     stat_scan = stationary_scans(returns['sensor_x'], returns['sensor_y'],
                                  returns['sensor_yaw'], poses[3])
     reach = reaching_grid(poses[3])
-
     beam = geom['angle_min'] + np.arange(geom['n_beams']) \
         * geom['angle_increment']
+
+    return {'graph': graph, 'grid': grid, 'rho': rho, 'origin': origin,
+            'geom': geom, 'data': data, 'poses': poses, 'returns': returns,
+            'ranges': ranges, 'filled': filled, 'stat_scan': stat_scan,
+            'reach': reach, 'range_threshold': range_threshold, 'beam': beam,
+            'r_max': r_max, 'r_max_source': r_max_src, 't_read': t_read}
+
+
+def admitted_rays(stem: str, k: int, cut: int) -> dict:
+    """The rays that built this map: origin, unit direction, free length.
+
+    SPEC_b2_divergence_walls §4's ray set, and built from scan_inputs so the
+    admission is rebuild()'s rather than a second opinion. Out, in order: a scan
+    with no pose (the first-scan drop, graph_walls.interpolate_poses), scans 2-4
+    (reaching_grid), and a beam Karto ignores outright (Karto.h:6170). A beam at
+    or above the threshold is kept but traced only to the threshold
+    (Karto.h:6173), which is what the relay ceiling means for a no-return beam.
+
+    `free_len` is therefore the length Karto CLEARS along the ray, which is the
+    quantity T2's condition 3 compares against `s + eps`. `hit` is Karto's
+    isEndPointValid: whether the beam ended on a cell it marked occupied.
+    """
+    si = scan_inputs(stem, k, cut)
+    geom, beam, rt = si['geom'], si['beam'], si['range_threshold']
+    returns = si['returns']
+    sel = np.nonzero(si['reach'])[0]
+
+    r = si['ranges'][sel]
+    use = (~np.isnan(r)) & (r > geom['range_min']) & (r < geom['range_max'])
+    sidx, bidx = np.nonzero(use)
+    ang = returns['sensor_yaw'][sel][sidx] + beam[bidx]
+    raw = r[sidx, bidx]
+    return {
+        'ox': returns['sensor_x'][sel][sidx],
+        'oy': returns['sensor_y'][sel][sidx],
+        'dx': np.cos(ang), 'dy': np.sin(ang),
+        'free_len': np.minimum(raw, rt),
+        'hit': raw < rt - KT_TOLERANCE,
+        'scan': sel[sidx],
+        'n_rays': int(raw.size),
+        'range_threshold': rt,
+        'rho': si['rho'], 'origin': si['origin'], 'shape': si['grid'].shape,
+    }
+
+
+def rebuild(stem: str, k: int, cut: int, chunk_rays: int = 40000) -> dict:
+    """One map's hit and pass counts, per source, by Karto's rules.
+
+    Passes go into four buckets -- finite or relay-filled, crossed while moving
+    or while stationary -- plus a fifth that counts the finite passes crossing at
+    grazing incidence. Hits go into two, and only finite rays can produce one.
+    Every gate, break and counterfactual downstream is then arithmetic on these
+    buckets: no ray is traced twice.
+    """
+    si = scan_inputs(stem, k, cut)
+    graph, grid = si['graph'], si['grid']
+    rho, origin = si['rho'], si['origin']
+    h, w = grid.shape
+    geom, data = si['geom'], si['data']
+    poses, returns = si['poses'], si['returns']
+    ranges, filled = si['ranges'], si['filled']
+    stat_scan, reach = si['stat_scan'], si['reach']
+    range_threshold, beam = si['range_threshold'], si['beam']
+    r_max_src, t_read = si['r_max_source'], si['t_read']
+
     gx_n, gy_n, _d = nearest_face_normals(grid.shape, origin, rho)
     cos_graze = math.cos(math.radians(GRAZE_DEG))
 
