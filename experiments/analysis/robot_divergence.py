@@ -238,12 +238,17 @@ def die(msg: str) -> None:
 
 # ──────────────────────────── registration ───────────────────────────────────
 
-def map_name(k: int, cut: int) -> str:
-    return f'{RUN_PREFIX}_k{k}_cut{cut}_robot{k}'
+# `variant` is the RUN variant as graph_walls.run_variant_of returns it: '' for a
+# plain stem, '_gated', '_gated_extfix'. Defaulted to '' so every existing caller
+# builds the name it always built, and passed explicitly by the one caller that
+# reads a variant corpus. It goes before _robot{k}, which is where the stem
+# grammar puts it: b2maps_k{K}_cut{C}[_gated][_ovl|_extfix]_robot{K}.
+def map_name(k: int, cut: int, variant: str = '') -> str:
+    return f'{RUN_PREFIX}_k{k}_cut{cut}{variant}_robot{k}'
 
 
-def run_name(k: int, cut: int) -> str:
-    return f'{RUN_PREFIX}_k{k}_cut{cut}'
+def run_name(k: int, cut: int, variant: str = '') -> str:
+    return f'{RUN_PREFIX}_k{k}_cut{cut}{variant}'
 
 
 def check_map_to_odom(mto: tuple[float, float, float], where: str,
@@ -265,14 +270,18 @@ def check_map_to_odom(mto: tuple[float, float, float], where: str,
             'experiments/slam/fit_world_transform.py for that.')
 
 
-def register_map(k: int, cut: int, spawn_xy: tuple[float, float]) -> dict:
+def register_map(k: int, cut: int, spawn_xy: tuple[float, float],
+                 variant: str = '') -> dict:
     """One map, loaded, classified, and carried into the world frame.
 
     The registered origin is the whole of the registration: with map_T_odom
     identity and spawn yaw 0 the chain collapses to spawn + YAML origin, and
     convention A lives in sample()'s row flip.
+
+    `variant` names the RUN, so the map, the map->odom log and the stem reported
+    all come from one run. Empty by default, which is the plain corpus.
     """
-    stem = map_name(k, cut)
+    stem = map_name(k, cut, variant)
     pgm = MAPS_DIR / f'{stem}.pgm'
     meta_path = MAPS_DIR / f'{stem}.yaml'
     for p in (pgm, meta_path):
@@ -287,7 +296,7 @@ def register_map(k: int, cut: int, spawn_xy: tuple[float, float]) -> dict:
     thresholds = check_thresholds(negate, occupied_thresh, free_thresh,
                                   m['other'], meta_path.name)
 
-    fwt.RUN = run_name(k, cut)         # the imported parser reads this global
+    fwt.RUN = run_name(k, cut, variant)   # the imported parser reads this global
     mto, mto_path = fwt.load_map_to_odom(k)
     check_map_to_odom(mto, stem)
 

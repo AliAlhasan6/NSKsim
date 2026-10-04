@@ -1230,3 +1230,103 @@ tests). Two findings came out of writing them, and both changed the tool:
 E3 is not in this tool. It needs world truth, and §6 keeps truth in the validation
 path: `diagnose_extent.py` computes max-side and min-side recall for any stem it is
 given, including an `_extfix` one, once that replay's config and map->odom log exist.
+
+### 12.9 Stage E: the 20 patched maps, E3, and the first variant corpus Part B has seen
+
+**The batch.** `20261003T224251Z`, **162 min 50 s**, HEAD `9035dd4`, `--extfix` over
+all 20 cuts: 18 maps built and 2 skipped as already identical (k0 and k2 cut60, from
+stage D). Every row drops 0 scans or 1 at the segment's first scan, leaves no
+process behind, and fits at A 98.0-99.7 %, all RESOLVED on convention A. Each
+cut1200 map gained **exactly 401 occupied cells** over its gated twin — k0
+1662 → 2063 — with free and unknown unchanged, which is the far row and column being
+filled and nothing else moving. **R2 20/20 HELD. R3 19/20**, failing only
+`k2_cut60`: the one cell of stage D, same map and same prediction. **R3's verdict is
+unchanged and the 99.5 % threshold is unmoved.**
+
+**E3 could not be asked until the tool learned the patched lattice, and the refusal
+that stopped it was right.** `diagnose_extent.py` recomputes Karto's extent and
+refused all five cut1200 `_extfix` maps — under stock `ComputeDimensions` it
+reproduces 121x81 where the map says 122x82, so the shortfall it would have reported
+was not that map's. It now reads the rule off the stem: `_extfix` →
+`Round(span) + EXTENT_FIX_CELLS`, every other stem → stock, with the rule recorded
+per map and in `shortfall_summary.lattice_rules`. A map matching **neither** rule is
+still refused, and the refusal now names the rule each map was held to.
+`--break wrong-lattice-rule` recomputes under the other binary's rule and must
+refuse everything: shown both ways — an `_extfix` map under the stock rule
+(recomputed 121x81, saved 122x82) and a gated map under the patched rule (122x82
+against 121x81) — 1/1 REFUSED each, exit 2, nothing written.
+
+**E3 HELD 5/5**, within 2 pp on every cut1200 map, worst **1.06 pp** — the same
+worst case §12.6 predicted on the predicted maps:
+
+| map | max side | min side | gap | unpatched gap |
+|---|---|---|---|---|
+| k0_cut1200 | 0.9948 | 0.9842 | −1.06 pp | +21.39 pp |
+| k1_cut1200 | 0.9899 | 0.9861 | −0.37 pp | +2.48 pp |
+| k2_cut1200 | 0.9903 | 0.9864 | −0.40 pp | +17.52 pp |
+| k3_cut1200 | 0.9896 | 0.9861 | −0.35 pp | +1.14 pp |
+| k4_cut1200 | 0.9834 | 0.9903 | +0.69 pp | +0.69 pp |
+
+k4 is the control: its gap was already inside the bound and the patch did not move
+it. The far-edge shortfall is now **headroom** on all 20 — −0.016 to −0.994 cells —
+and the fraction invariant holds with the lattice's own added cells put back:
+`shortfall + added ∈ [0, 1)`, 20/20, which is one statement covering both binaries.
+
+**Off-grid kept returns: 0 on 20/20, 0 in total.** That is §12.4's E1 prediction
+confirmed on maps a patched binary built rather than on predicted ones, and it
+dissolves the problem §12.2 worked around: the in-grid denominator was introduced
+post hoc because a return off the grid has no cell to check, and there are now none,
+so the two denominators coincide. For scale, the only prior corpus — ungated,
+unpatched — had **47.94 %** of k0_cut1200's kept returns off the grid and an
+all-returns B1 of 50.68 %; the patched gated map is 0.00 % and 100.00 %. Two things
+differ between those maps, the gate and the binary, so that pair is context and not
+a controlled delta; the controlled statement is R2's, which holds every overlapping
+cell identical.
+
+**X1 is not judgeable on this corpus, and that is not a failure.** It asks where
+off-grid returns land; with none, there is no set to take a share of. The tool now
+says exactly that per map instead of formatting a `None`.
+
+#### Stage F: Part A and Part B on a variant corpus, which had never been run
+
+Until this change `obs_for_map` **refused every variant stem**, so Parts A and B had
+only ever run on the 20 plain maps — there are no graph JSONs for the gated corpus at
+all. Part B builds four per-cut inputs, and they do not follow one rule: the replay
+config, the relay log and the map->odom capture name the **run** and carry every
+token, while the stripped bag carries the **gate only**, because an overlay build
+replays the recording of the run it is named after. That is `run_variant_of` against
+`bag_variant_of`, now threaded through `read_replay_r_max`,
+`read_relayed_scan_count`, the bag path and `robot_divergence.register_map` (which
+gained a defaulted `variant`, so every existing caller builds the name it always
+built). Pinned by test: a `_gated_extfix` stem must reach for `..._gated_slamin` and
+not `..._gated_extfix_slamin`, a bag nobody recorded.
+
+Pre-registered before the numbers, in
+`experiments/logs/graph_walls/stage_f_preregistration.txt` and above:
+
+| | prediction | result |
+|---|---|---|
+| **F1** | all-returns B1 ≥ 90 % on 20/20 **and** `B1_offgrid` = 0 on 20/20 | **HELD** — all-returns 20/20, off-grid 0.00 % on every map, in-grid B1 20/20 worst 99.98 % |
+| **F2** | B2 side contradictions ≤ 1 % on 20/20 | **HELD** — worst 0.249 % |
+| **F3** | A8 ≥ 95 % on 20/20, A10 20/20; A9 reported | **HELD** — A8 20/20, A10 20/20; A9 HELD 5/5 robots, rising to 99.18-99.34 % at cut1200 |
+
+**Three latent faults the first variant run exposed, all three fixed here, none of
+them in the maps.**
+
+1. `diagnose_extent`'s X1 failure list formatted the max-side share without a `None`
+   guard — unreachable until a map had zero off-grid returns, which is precisely what
+   the patch produces. It crashed after reading all 20 maps.
+2. `graph_walls` **died** when a relay printed no `relayed N scans` summary, taking
+   the other 19 maps with it. A missing log still dies — then the run's artefacts are
+   incomplete — but a log without a summary line now leaves B3 **NOT JUDGED** on that
+   map and says so. B1 and B2 read the bag and the map and never that file.
+3. A9's cut series rebuilt the stem as `b2maps_k{K}_cut{C}_robot{K}`, which matches no
+   variant stem, so on this corpus every series came out empty and A9 printed
+   **HELD (0/0 robots)** — judging nothing while reading as a hold. The series now
+   comes from the stems the run was given, and two stems sharing one (robot, cut) are
+   left out and named rather than mixed.
+
+**B3 is 19/19 held, 1 of 20 not judged**: `b2maps_k4_cut1200_gated_extfix_robot4`,
+whose `free_space_relay` was stopped before printing its summary — the driver
+SIGKILLs it after a 10 s grace. That costs B3 its reference on that map and costs
+nothing else. A skip is not a pass, and it is counted apart from both columns.

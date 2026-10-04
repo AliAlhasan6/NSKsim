@@ -766,6 +766,51 @@ def test_a_gated_stem_parses_to_the_same_robot_and_cut():
             gw._k_and_cut(bad, 'why')
 
 
+def test_part_b_reads_the_run_variants_config_and_the_bag_variants_bag(
+        tmp_path, monkeypatch):
+    """Part B's four per-cut inputs, each under the rule that belongs to it.
+
+    Three name the RUN -- the replay config, the relay log, the map->odom capture
+    -- and the fourth is the stripped BAG, which carries the gate ONLY: an
+    overlay build replays the recording of the run it is named after, so
+    b2maps_k0_cut60_gated_extfix_robot0 must read ..._gated_slamin. Reaching for
+    ..._gated_extfix_slamin would look for a bag nobody ever made, and this is
+    the test that stops it: obs_for_map used to refuse every variant stem rather
+    than get this right, and nothing failed when that refusal was removed.
+
+    read_bag is stubbed, so no ROS and no corpus are needed.
+    """
+    stem = 'b2maps_k0_cut60_gated_extfix_robot0'
+    assert gw.run_variant_of(stem) == '_gated_extfix'
+    assert gw.bag_variant_of(stem) == '_gated'
+
+    monkeypatch.setattr(gw, 'LOGS_DIR', tmp_path)
+    (tmp_path / 'offline_mapping_b2maps_k0_cut60_gated_extfix_robot_0.yaml'
+     ).write_text('    max_laser_range: 7.9\n')
+    (tmp_path / 'offline_slam_b2maps_k0_cut60_gated_extfix_robot_0.log'
+     ).write_text('[relay] relayed 290 scans\n')
+
+    seen = {}
+
+    def stub_read_bag(bag, k):
+        seen['bag'] = bag
+        raise SystemExit(99)        # stop before rosbag2_py is needed
+
+    monkeypatch.setattr(gw, 'read_bag', stub_read_bag)
+    with pytest.raises(SystemExit):
+        gw.obs_for_map({'resolution': 0.1}, stem, 0, 60, np.zeros((3, 3), int),
+                       params(), bags_dir=tmp_path)
+    assert seen['bag'].name == 'b2maps_k0_cut60_gated_slamin'
+
+    # And the run-variant readers refuse the plain names, which are not there.
+    assert gw.read_replay_r_max(0, 60, '_gated_extfix')[0] == 7.9
+    assert gw.read_relayed_scan_count(0, 60, '_gated_extfix')[0] == 290
+    for call in (lambda: gw.read_replay_r_max(0, 60),
+                 lambda: gw.read_relayed_scan_count(0, 60)):
+        with pytest.raises(SystemExit):
+            call()
+
+
 def test_the_frame_is_read_from_a_gated_stem_too():
     """graph_walls takes the frame from `robot(\\d+)$`, which `_gated` leaves
     alone -- checked rather than assumed, since it is a second parser."""

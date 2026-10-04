@@ -63,10 +63,20 @@ WHAT IS MEASURED, and X1/X2 are printed before any of it.
      which fell off the grid.
 
 Parts 2 and 3 need Part B's chain, so they resolve the gated bag, config and
-map->odom log with LOCAL helpers (variant_* below). That is deliberately not the
-same change as threading the variant through graph_walls.obs_for_map's three
-builders, which is its own task; nothing here is imported by Part B and the relay
-log (B3) is not read at all.
+map->odom log with LOCAL helpers (variant_* below). graph_walls.obs_for_map now
+threads the variant through its own three builders under the same two rules, so
+these are no longer the only place that gets it right; they stay because
+variant_bag also REFUSES a binary token by name, which is a refusal and not a
+path. The relay log (B3) is not read here at all.
+
+THE LATTICE RULE IS THE BINARY'S, NOT THIS FILE'S. Stock ComputeDimensions lays
+Round(span) cells over the extent, and with docs/patches/karto_extent.patch it
+lays Round(span) + 1 -- that +1 IS the patch. A stem carrying `_extfix` is
+therefore recomputed under the patched rule and every other stem under the stock
+one, which is also why the shortfall comes out NEGATIVE on a patched map: the same
+fraction, one cell of headroom lower. A map whose saved width matches neither rule
+is still refused. `--break wrong-lattice-rule` recomputes every map under the
+other binary's rule and must refuse all of them.
 
 TRUTH. The SDF faces are truth, used for parts 2 and 3 and for X1. Diagnosis only:
 §6 forbids any later tool from reading A8-A11, and the same rule is applied here --
@@ -124,9 +134,9 @@ X2_MIN_SHARE = 0.80
 
 
 # ────────────────────── the gated/ungated input paths ────────────────────────
-# Local to this file. graph_walls derives these from (robot, cut) alone and
-# refuses a _gated stem for exactly that reason; threading the variant through
-# Part B is a separate change and is not made here.
+# Local to this file, and kept after graph_walls learned the same two rules:
+# variant_bag refuses a binary token BY NAME rather than failing on a missing
+# path, which is the one thing a shared path builder would not do for us.
 
 def variant_of(stem: str) -> str:
     """The suffix this stem's RUN artefacts carry. graph_walls owns the rule.
@@ -196,12 +206,37 @@ def variant_map_to_odom(k: int, cut: int, variant: str):
 
 # ──────────────────────────────── part 1 ─────────────────────────────────────
 
-def shortfall(stem: str) -> dict:
+def lattice_rule(stem: str, break_name: str | None = None) -> tuple[int, str]:
+    """The cells this stem's BINARY adds to Round(span), and the rule's name.
+
+    Two rules, because there are two binaries. Stock ComputeDimensions sets
+    W = Round(span) (Karto.h:6111-6112); with docs/patches/karto_extent.patch it
+    sets W = Round(span) + 1, which is the whole of the patch. The stem's binary
+    token says which one built the map, so the recomputation is not guessing --
+    and a map whose saved width matches NEITHER rule is still refused below,
+    which is what makes this a check rather than an accommodation.
+
+    EXTENT_FIX_CELLS is imported rather than written as 1: compare_overlay_maps'
+    R2 asks the same question of the same number, and two spellings of it could
+    drift apart.
+    """
+    extfix = 'extfix' in gw.stem_variants(stem)
+    if break_name == 'wrong-lattice-rule':
+        extfix = not extfix
+    if extfix:
+        return pg.EXTENT_FIX_CELLS, f'Round(span) + {pg.EXTENT_FIX_CELLS} (karto_extent.patch)'
+    return 0, 'Round(span) (stock ComputeDimensions)'
+
+
+def shortfall(stem: str, break_name: str | None = None) -> dict:
     """Karto's extent recomputed, against the saved one, with the shortfall.
 
     `karto_extent` is imported from predict_gated_maps unchanged: it is the
     function whose extent self-check reproduced every saved origin, width and
     height exactly, so it is the one thing here that does not need re-arguing.
+    What the patch changes is not the extent but how many cells are laid over it,
+    so the +1 is applied HERE, to the recomputed width and height, and
+    karto_extent keeps answering the question it was validated on.
     """
     k, cut = gw._k_and_cut(stem, 'the extent needs the robot and the cut')
     variant = variant_of(stem)                  # the RUN variant: config, map->odom
@@ -226,6 +261,8 @@ def shortfall(stem: str) -> dict:
 
     (ox, oy), w, h = pg.karto_extent(sx, sy, ranges, beam, syaw, sel, geom,
                                      rho, range_threshold)
+    added, rule = lattice_rule(stem, break_name)
+    w, h = w + added, h + added
     # karto_extent returns the bounding box MINIMUM and a ROUNDED size, which
     # throws away the fraction the shortfall is made of, so the far corner is
     # walked separately rather than changing an imported function the extent
@@ -237,7 +274,14 @@ def shortfall(stem: str) -> dict:
 
     out = {
         'map': stem, 'robot': k, 'cut_s': cut,
-        'variant': 'gated' if variant else 'ungated',
+        # The GATE, which is what X1 and X2 split their subsets on -- read from
+        # the gate token rather than from the whole variant string, so an
+        # _extfix map lands in the subset its bag belongs to.
+        'variant': 'gated' if gw.GATE_VARIANT in gw.stem_variants(stem)
+                   else 'ungated',
+        'run_variant': variant or '(plain)',
+        'lattice_rule': rule,
+        'lattice_cells_added': added,
         'resolution': rho,
         'bag': str(variant_bag(k, cut, bag_variant).relative_to(REPO_ROOT)),
         'r_max': {'value': r_max, 'source': r_max_src},
@@ -429,6 +473,17 @@ def main() -> int:
                     help='git rev of the launch file DOT_POSES are read at')
     ap.add_argument('--no-json', action='store_true',
                     help='print everything and write nothing')
+    ap.add_argument('--out', default=str(OUT_PATH),
+                    help='where the JSON goes. Default %(default)s. A run over '
+                         'other stems should name its own file rather than '
+                         'overwrite the corpus one')
+    ap.add_argument('--break', dest='break_name',
+                    choices=['wrong-lattice-rule'],
+                    help='recompute each map under the OTHER binary\'s lattice '
+                         'rule. Every map must then be REFUSED: a run that '
+                         'reproduced a saved width under the wrong rule would '
+                         'mean the check is not reading the width. Writes '
+                         'nothing, exits 2')
     args = ap.parse_args()
     t0 = time.monotonic()
 
@@ -483,26 +538,58 @@ def main() -> int:
     print('1 -- the far-edge shortfall. span is the bounding box in cells; '
           'shortfall is')
     print('    span - (W - 0.5), which is u - Round(u) + 0.5 and lies in [0, 1) '
-          'by construction.')
+          'by construction')
+    print('    under the STOCK lattice. Under karto_extent.patch W is one cell '
+          'larger, so the')
+    print('    same expression goes NEGATIVE by the same fraction: that '
+          'headroom is the patch.')
+    if args.break_name:
+        print()
+        print(f'  (BROKEN ON PURPOSE: --break {args.break_name}. Every map must '
+              'be REFUSED below;')
+        print('   one that reproduced its saved width under the wrong rule '
+              'would be a finding.')
+        print('   Nothing is written.)')
     print()
-    print(f'{"map":<36}{"W":>5}{"H":>5}{"span x":>10}{"span y":>10}'
-          f'{"short x":>9}{"short y":>9}{"m x":>7}{"m y":>7}  lattice')
+    print(f'{"map":<42}{"W":>5}{"H":>5}{"span x":>10}{"span y":>10}'
+          f'{"short x":>9}{"short y":>9}  {"rule":<38}lattice')
     for stem in stems:
-        row = shortfall(stem)
+        row = shortfall(stem, args.break_name)
         rows[stem] = row
-        print(f'{stem:<36}{row["recomputed"]["width"]:>5}'
+        print(f'{stem:<42}{row["recomputed"]["width"]:>5}'
               f'{row["recomputed"]["height"]:>5}'
               f'{row["span_cells"][0]:>10.3f}{row["span_cells"][1]:>10.3f}'
               f'{row["shortfall_cells_x"]:>9.3f}{row["shortfall_cells_y"]:>9.3f}'
-              f'{row["shortfall_m_x"]:>7.3f}{row["shortfall_m_y"]:>7.3f}'
-              f'  {"ok" if row["lattice_reproduced"] else "REFUSED"}')
+              f'  {row["lattice_rule"]:<38}'
+              f'{"ok" if row["lattice_reproduced"] else "REFUSED"}')
     print()
     bad = [s for s, r in rows.items() if not r['lattice_reproduced']]
+    if args.break_name:
+        # The refusal IS the expected outcome here, so it is reported rather than
+        # raised: a break that dies through the same path as a real failure
+        # cannot be told apart from one.
+        print(f'--break {args.break_name}: {len(bad)}/{len(rows)} map(s) '
+              'REFUSED under the wrong rule')
+        for s in rows:
+            r = rows[s]
+            print(f'    {s}: saved {r["saved"]["width"]}x{r["saved"]["height"]}, '
+                  f'recomputed {r["recomputed"]["width"]}x'
+                  f'{r["recomputed"]["height"]} under "{r["lattice_rule"]}"'
+                  + ('' if s in bad else '  -- STILL REPRODUCED, which is a finding'))
+        if len(bad) != len(rows):
+            print('  A map that reproduced its saved width under the other '
+                  "binary's rule means this check is not reading the width.")
+        else:
+            print('  Refused as required. Nothing was written.')
+        return 2
     if bad:
         gw.die(f'the recomputed lattice does not reproduce the saved one on '
                f'{len(bad)} map(s): {bad}. Then the shortfall reported for them '
                'is not their shortfall, and no part of this diagnosis about them '
-               'means anything.')
+               'means anything. The rule each one was recomputed under is in the '
+               'table above: a map built through the overlay carries _extfix in '
+               'its stem, and one that carries neither token is held to stock '
+               'ComputeDimensions.')
     sfx = [r['shortfall_cells_x'] for r in rows.values()]
     sfy = [r['shortfall_cells_y'] for r in rows.values()]
     print(f'  shortfall in x over {len(rows)} maps: min {min(sfx):.3f}, '
@@ -634,8 +721,17 @@ def main() -> int:
           f'({a["n_cut1200_on_max_side"]}/{a["n_cut1200"]})')
     for s in a['failing_max_side']:
         og = rows[s]['face_strikes']['offgrid']
-        print(f'        {s}: {og["share_on_max_side_boundary"]:.2%} on the max '
-              f'side, {og["share_within_tol_of_a_face"]:.2%} on any face')
+        # Both shares are None when a map has NO off-grid returns, which is the
+        # state karto_extent.patch is meant to produce: there is then no set to
+        # take a share of, and X1 -- a claim about WHERE off-grid returns land --
+        # has nothing to be true or false about. Guarded here and not only in the
+        # table above, where it already was.
+        print(f'        {s}: '
+              + ('0 off-grid returns, so neither share exists and X1 has '
+                 'nothing to judge on this map'
+                 if og['share_on_max_side_boundary'] is None else
+                 f'{og["share_on_max_side_boundary"]:.2%} on the max side, '
+                 f'{og["share_within_tol_of_a_face"]:.2%} on any face'))
     print(f'      X1 overall: {"HELD" if x1["holds"] else "FAILED"}   '
           f'(ungated near {x1["ungated"]["n_offgrid_near_a_face"]}'
           f'/{x1["ungated"]["n_maps"]}, gated '
@@ -748,15 +844,24 @@ def main() -> int:
                   'max': max(sfx)},
             'y': {'min': min(sfy), 'median': float(np.median(sfy)),
                   'max': max(sfy)},
-            'always_in_0_1': bool(all(0.0 <= v < 1.0 for v in sfx + sfy)),
+            # Tested with the lattice's own added cells put back, so the one
+            # invariant covers both binaries: stock shortfalls land in [0, 1),
+            # and a patched map's land in [-1, 0) -- the same fraction, one cell
+            # of headroom lower.
+            'always_in_0_1': bool(all(
+                0.0 <= v + r['lattice_cells_added'] < 1.0
+                for r in rows.values()
+                for v in (r['shortfall_cells_x'], r['shortfall_cells_y']))),
+            'lattice_rules': sorted({r['lattice_rule'] for r in rows.values()}),
             'lattice_reproduced': f'{len(rows)}/{len(rows)}',
         },
         'elapsed_s': elapsed,
         'per_map': rows,
     }
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(json.dumps(out, indent=2, sort_keys=False) + '\n')
-    print(f'wrote {OUT_PATH.relative_to(REPO_ROOT)}')
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out, indent=2, sort_keys=False) + '\n')
+    print(f'wrote {out_path}')
     return 0
 
 

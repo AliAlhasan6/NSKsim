@@ -1302,14 +1302,18 @@ def summary_line(graph: dict) -> str:
 # corroboration by a count of observers who share a frame, an odometry model and
 # a rangefinder model.
 
-def read_replay_r_max(k: int, cut: int) -> tuple[float, str]:
+def read_replay_r_max(k: int, cut: int, run_variant: str = '') -> tuple[float, str]:
     """`max_laser_range` from the cut's own replay config, with its line.
 
     Read, not assumed. This is the number the replay gave Karto, so it is the
     boundary between a return that could have marked a cell occupied and one
     that could only ever have cleared free space. All 20 configs carry 7.9.
+
+    `run_variant` is run_variant_of's suffix: every token is in the run name, so
+    a _gated_extfix map reads the config its own replay rendered. Empty by
+    default, which is the plain corpus.
     """
-    path = (LOGS_DIR / f'offline_mapping_{RUN_PREFIX}_k{k}_cut{cut}'
+    path = (LOGS_DIR / f'offline_mapping_{RUN_PREFIX}_k{k}_cut{cut}{run_variant}'
             f'_robot_{k}.yaml')
     if not path.is_file():
         die(f'replay config not found, so r_max cannot be read: {path}')
@@ -1321,7 +1325,8 @@ def read_replay_r_max(k: int, cut: int) -> tuple[float, str]:
     die(f'no max_laser_range in {path}')
 
 
-def read_relayed_scan_count(k: int, cut: int) -> tuple[int, str]:
+def read_relayed_scan_count(k: int, cut: int,
+                            run_variant: str = '') -> tuple[int, str]:
     """B3's reference: how many scans the replay actually delivered to SLAM.
 
     From free_space_relay's own summary line. The relay is what stood between
@@ -1332,14 +1337,23 @@ def read_relayed_scan_count(k: int, cut: int) -> tuple[int, str]:
     Read with errors='replace': these logs carry raw terminal bytes, which is
     the same reason the explore logs need `grep -a`.
     """
-    path = LOGS_DIR / f'offline_slam_{RUN_PREFIX}_k{k}_cut{cut}_robot_{k}.log'
+    path = (LOGS_DIR / f'offline_slam_{RUN_PREFIX}_k{k}_cut{cut}{run_variant}'
+            f'_robot_{k}.log')
     if not path.is_file():
         die(f'offline slam log not found, so B3 has no reference: {path}')
     text = path.read_text(errors='replace')
     hits = re.findall(r'relayed (\d+) scans', text)
     if not hits:
-        die(f'no "relayed N scans" line in {path.name}, so B3 cannot be '
-            'evaluated')
+        # NOT fatal, and the distinction matters. A MISSING LOG means the run's
+        # artefacts are incomplete and everything read beside them is suspect, so
+        # that still dies above. A log that exists but carries no summary line
+        # means only that the relay was stopped before it printed one -- the
+        # batch SIGKILLs it after a 10 s grace -- which costs B3 its reference
+        # and costs the other checks nothing: B1 and B2 read the bag and the map,
+        # never this file. B3 is then NOT JUDGED on that map and says so, rather
+        # than being counted as held or taking the other 19 maps down with it.
+        return None, (f'{path.name} carries no "relayed N scans" line, so B3 '
+                      'has no reference on this map')
     return int(hits[-1]), f'{path.name} ("relayed {hits[-1]} scans")'
 
 
@@ -1738,20 +1752,19 @@ def obs_for_map(graph: dict, stem: str, k: int, cut: int, grid: np.ndarray,
     validation pass compares against the world. Nothing truth-derived comes back
     into the graph.
     """
-    variants = stem_variants(stem)
-    if variants:
-        die(f'{stem}: Part B builds its per-cut inputs -- the replay bag, the '
-            'replay config, the relay log -- from (robot, cut) alone, so on a '
-            f'{"_".join(("",) + variants)} map it would read the PLAIN ones. '
-            'Threading the variant through those three builders is a separate '
-            'change; until it is made, run Part B on the plain maps and compare '
-            'the variants with compare_gated_maps.py and '
-            'compare_overlay_maps.py, which need only trinary_map.')
+    # Each of Part B's four per-cut inputs, under the rule that belongs to it.
+    # Three of them name the RUN -- the replay config, the relay log, the
+    # map->odom capture are all written by one replay and carry every token --
+    # and the fourth is the stripped BAG, which carries the gate only, because an
+    # overlay build replays the recording of the run it is named after. This is
+    # run_variant_of against bag_variant_of, and getting the bag wrong would
+    # reach for a recording nobody ever made.
+    rv, bv = run_variant_of(stem), bag_variant_of(stem)
     rho = graph['resolution']
     eps = params.eps(rho)
-    r_max, r_max_src = read_replay_r_max(k, cut)
-    relayed, relayed_src = read_relayed_scan_count(k, cut)
-    bag = bags_dir / f'{RUN_PREFIX}_k{k}_cut{cut}_slamin'
+    r_max, r_max_src = read_replay_r_max(k, cut, rv)
+    relayed, relayed_src = read_relayed_scan_count(k, cut, rv)
+    bag = bags_dir / f'{RUN_PREFIX}_k{k}_cut{cut}{bv}_slamin'
     data = read_bag(bag, k)
 
     geom = data['geom']
@@ -1765,7 +1778,7 @@ def obs_for_map(graph: dict, stem: str, k: int, cut: int, grid: np.ndarray,
 
     import robot_divergence as rd                    # noqa: PLC0415
     import fit_world_transform as fwt                # noqa: PLC0415
-    fwt.RUN = f'{RUN_PREFIX}_k{k}_cut{cut}'
+    fwt.RUN = f'{RUN_PREFIX}_k{k}_cut{cut}{rv}'
     mto, mto_path = fwt.load_map_to_odom(k)
     rd.check_map_to_odom(mto, stem)                  # identity, or it dies
 
@@ -1803,10 +1816,13 @@ def obs_for_map(graph: dict, stem: str, k: int, cut: int, grid: np.ndarray,
         'B2_limit': B2_MAX_SHARE,
         'B2_holds': bool(n_contra <= B2_MAX_SHARE * returns['n_kept']),
         'B3_scans_read': n_scans_read,
+        # None throughout when the relay printed no summary: not judged, which is
+        # neither held nor failed. relayed_src carries the reason.
         'B3_scans_relayed': relayed,
-        'B3_difference': n_scans_read - relayed,
+        'B3_difference': None if relayed is None else n_scans_read - relayed,
         'B3_tolerance': B3_SCAN_TOL,
-        'B3_holds': bool(abs(n_scans_read - relayed) <= B3_SCAN_TOL),
+        'B3_holds': None if relayed is None
+                    else bool(abs(n_scans_read - relayed) <= B3_SCAN_TOL),
     })
     graph['observations'] = {
         'bag': str(bag.relative_to(REPO_ROOT)),
@@ -1862,8 +1878,9 @@ def obs_summary_line(graph: dict) -> str:
             f'offgrid {c["B1_offgrid"]:>6.2%}  '
             f'B1all {c["B1_on_occupied_share_all_returns"]:>6.2%}  '
             f'B2 {c["B2_side_contradiction_share"]:>6.3%}  '
-            f'B3 {c["B3_difference"]:>+2d}  '
-            f'segs seen {seen:>3}/{len(graph["segments"]):<3}')
+            + ('B3 n/j  ' if c['B3_difference'] is None
+               else f'B3 {c["B3_difference"]:>+2d}  ')
+            + f'segs seen {seen:>3}/{len(graph["segments"]):<3}')
 
 
 # ───────────────────── truth: A8-A11 validation only ─────────────────────────
@@ -2218,9 +2235,10 @@ def _k_and_cut(stem: str, why: str) -> tuple[int, int]:
     comparisons between them are between maps of ONE cut.
 
     It gives the same (K, cut) and nothing more, so a caller that then builds a
-    per-cut INPUT path from (K, cut) -- the bag, the replay config, the relay log
-    -- would reach for the plain artefact. obs_for_map refuses any variant stem for
-    exactly that reason rather than reading the wrong bag quietly.
+    per-cut INPUT path from (K, cut) alone -- the bag, the replay config, the relay
+    log -- would reach for the plain artefact. Every such caller therefore pairs it
+    with run_variant_of or bag_variant_of: obs_for_map does, and so does the
+    registration A8-A11 reads.
     """
     m = re.match(_STEM_RE, stem)
     if not m:
@@ -2241,7 +2259,6 @@ def print_b_predictions(rows: dict, break_name: str | None) -> bool:
     b1 = [(s, r['graph']['checks']) for s, r in rows.items()]
     n1 = sum(1 for _s, c in b1 if c['B1_holds'])
     n2 = sum(1 for _s, c in b1 if c['B2_holds'])
-    n3 = sum(1 for _s, c in b1 if c['B3_holds'])
     n = len(b1)
     print('PREDICTIONS -- pre-registered in §6, reported, NOT gated')
     print(f'  B1  IN-GRID kept returns within one cell of an occupied cell >= '
@@ -2270,14 +2287,30 @@ def print_b_predictions(rows: dict, break_name: str | None) -> bool:
     for s, c in b1:
         if not c['B2_holds']:
             print(f'        {s}: {c["B2_side_contradiction_share"]:.3%}')
+    # Judged and unjudged are counted apart: a map whose relay printed no summary
+    # has no reference for B3, and folding it into either column would be a claim
+    # this run cannot make.
+    judged3 = [(s, c) for s, c in b1 if c['B3_holds'] is not None]
+    unjudged3 = [s for s, c in b1 if c['B3_holds'] is None]
+    n3 = sum(1 for _s, c in judged3 if c['B3_holds'])
     print(f'  B3  scans read equal the replay\'s integrated count within '
-          f'{B3_SCAN_TOL}: {"HELD" if n3 == n else "FAILED"} ({n3}/{n})   '
-          'differences '
-          + ' '.join(f'{c["B3_difference"]:+d}' for _s, c in b1))
-    for s, c in b1:
+          f'{B3_SCAN_TOL}: '
+          + ('NO MAP JUDGED' if not judged3 else
+             f'{"HELD" if n3 == len(judged3) else "FAILED"} '
+             f'({n3}/{len(judged3)})')
+          + '   differences '
+          + ' '.join(f'{c["B3_difference"]:+d}' for _s, c in judged3))
+    for s, c in judged3:
         if not c['B3_holds']:
             print(f'        {s}: read {c["B3_scans_read"]}, relayed '
                   f'{c["B3_scans_relayed"]}')
+    if unjudged3:
+        print(f'      NOT JUDGED on {len(unjudged3)}/{n}: '
+              + ', '.join(unjudged3))
+        print('      the relay was stopped before printing its summary, so B3 '
+              'has no reference there.')
+        print('      B1 and B2 read the bag and the map and are unaffected; a '
+              'skip is not a pass.')
     worst_seg = None
     for s, r in rows.items():
         for seg in r['graph']['segments']:
@@ -2308,7 +2341,10 @@ def print_b_predictions(rows: dict, break_name: str | None) -> bool:
                   'a finding, not a pass.')
     print('=' * 100)
     print()
-    return n1 == n and n2 == n and n3 == n
+    # judged3/n3 come from the B3 block above: a map B3 could not judge is
+    # neither a hold nor a failure, so it is excluded from the denominator
+    # rather than silently counted as either.
+    return n1 == n and n2 == n and bool(judged3) and n3 == len(judged3)
 
 
 def print_validation(rows: dict, world: dict, samples: dict,
@@ -2357,14 +2393,22 @@ def print_validation(rows: dict, world: dict, samples: dict,
     a8_bad = [s for s, r in rows.items()
               if not r['validation']['A8']['share_assigned'] >= A8_MIN_SHARE]
     a10_bad = [s for s, r in rows.items() if not r['validation']['A10']['holds']]
+    # A9's series is this robot's cuts IN THIS RUN, found from the stems the run
+    # was given rather than rebuilt as f'..._k{k}_cut{c}_robot{k}'. The rebuilt
+    # name matches no variant stem, so on the gated or _extfix corpus every
+    # series came out empty and A9 reported "0/0 robots" -- judging nothing while
+    # reading as a hold. Two stems with one (robot, cut) -- a run mixing variants
+    # -- make the series ambiguous, so that pair is left out and named.
+    by_kc: dict[tuple[int, int], list[str]] = {}
+    for stem in rows:
+        by_kc.setdefault(_k_and_cut(stem, 'A9 compares one robot across cuts'),
+                         []).append(stem)
+    ambiguous = {kc: s for kc, s in by_kc.items() if len(s) > 1}
     per_robot = {}
     for k in range(NUM_ROBOTS):
-        series = []
-        for c in CUTS:
-            stem = f'{RUN_PREFIX}_k{k}_cut{c}_robot{k}'
-            if stem in rows:
-                series.append(rows[stem]['validation']['A9']['recall'])
-        per_robot[k] = series
+        per_robot[k] = [rows[by_kc[(k, c)][0]]['validation']['A9']['recall']
+                        for c in CUTS
+                        if len(by_kc.get((k, c), ())) == 1]
     rising = {k: all(b >= a for a, b in zip(v, v[1:])) for k, v in
               per_robot.items() if len(v) > 1}
 
@@ -2377,8 +2421,17 @@ def print_validation(rows: dict, world: dict, samples: dict,
         print(f'        {s}: '
               f'{100 * rows[s]["validation"]["A8"]["share_assigned"]:.2f}%')
     print('  A9  recall non-decreasing with cut for each robot: '
-          f'{"HELD" if all(rising.values()) else "FAILED"} '
-          f'({sum(rising.values())}/{len(rising)} robots)')
+          + ('NO ROBOT JUDGED -- no robot has two cuts in this run'
+             if not rising else
+             f'{"HELD" if all(rising.values()) else "FAILED"} '
+             f'({sum(rising.values())}/{len(rising)} robots)')
+          + ''.join(f'\n        k{k}: '
+                    + ' '.join(f'{100 * v:.2f}%' for v in per_robot[k])
+                    for k in sorted(per_robot) if per_robot[k]))
+    if ambiguous:
+        print('        left out of A9, two stems for one (robot, cut) so the '
+              'series would mix variants: '
+              + ', '.join(f'k{k} cut{c}' for (k, c) in sorted(ambiguous)))
     for k, ok in rising.items():
         if not ok:
             print(f'        robot_{k}: '
@@ -2588,7 +2641,7 @@ def main() -> int:
             k, cut = _k_and_cut(stem, 'A8-A11 need the robot, the cut and the '
                                       'map->odom log. Pass --no-validate for '
                                       'other maps')
-            reg = rd.register_map(k, cut, spawn[k])
+            reg = rd.register_map(k, cut, spawn[k], run_variant_of(stem))
             graph = row['graph']
             if [round(v, 12) for v in reg['yaml_origin']] != \
                     [round(v, 12) for v in graph['origin']]:
