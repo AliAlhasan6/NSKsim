@@ -1,11 +1,11 @@
-# SPEC — B2 divergence on walls (v0.3, draft)
+# SPEC — B2 divergence on walls (v0.4, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
-diagnostic. Sections 1–8 are decided. Section 9
-(pre-registrations) is a DRAFT: nothing in it is registered until Ali accepts it
-and it is committed. No code is written until the stop-point questions in §11 are
-answered.
+diagnostic. v0.4: T2 leaves the measure under §7's fallback (C0 failed under
+v0.3). Sections 1–8 are decided. Section 9 (pre-registrations) is a DRAFT:
+nothing in it is registered until Ali accepts it and it is committed. No code is
+written until the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -22,8 +22,12 @@ observed by B's evidence:
 - **unobserved:** B never observed that place;
 - **contradicted:** B's own scans crossed the place without a return.
 
-Same world means nothing is contradicted. Convergence means the unobserved share
-falls while the contradicted share stays at zero.
+Same world is argued from corroboration: at full coverage, B corroborates nearly
+all of A's walls. Contradiction is not measured (v0.4).
+
+The measure therefore has two classes, corroborated and not corroborated. The
+three-way sort above is what v0.1 to v0.3 attempted; `unobserved` and
+`contradicted` are now one class, because only T1 separates them and T1 cannot.
 
 The pair is ordered: A → B judges A's walls by B's evidence, and B → A is a separate
 computation. How the two combine is open (§10).
@@ -88,7 +92,8 @@ A's frame, with
 Only elements of B's faces count, not every boundary in B's map. Corroboration is
 face to face (D1), and B's unclassified elements include its own parked robots.
 
-**T2 — contradicted.** B's admitted rays satisfy all four:
+**T2 (removed from the measure in v0.4; kept as a record).** B's admitted rays
+satisfy all four:
 
 1. **Crossing.** The ray crosses the element's segment (closed, length `rho`) while
    travelling against the normal (`d · n < 0`), that is, from the free side that A
@@ -110,7 +115,8 @@ face to face (D1), and B's unclassified elements include its own parked robots.
    joints were tested and ruled out), so one ray is not evidence that B saw open
    space. The majority threshold is chosen on principle, not calibrated. Post hoc.
 
-**T3 — unobserved.** Everything else.
+**T3 — not corroborated.** Everything else. Under v0.4 this is simply the
+complement of T1, and it absorbs what T2 would have called contradicted.
 
 Why corroboration goes first: if B saw the same face, a ray slipping past an
 element's edge or through a corner is a discretisation artefact, not evidence that the
@@ -157,13 +163,15 @@ Per ordered pair (A, B) and cut C (20 pairs × 4 cuts = 80 rows):
 
 - `L_A`, the total length of A's classified elements, and `L_excl`, A's element
   length outside faces;
-- the three shares, summing to 1;
-- per face: face id and the three lengths, so that any contradiction can be located;
-- per contradicted element: the number of rays meeting conditions 1 and 2 and the
-  number meeting 1-3, the crossing angle, and the distance to the nearest face end;
-- per pair, the deep share: crossings meeting conditions 1-3 over crossings meeting
-  1 and 2. Reported whatever T2 decides, because it is the quantity O5 is about;
-- the contradicted share at `theta_g` = 15, 20, 25, 30, 35, 40 and 45°.
+- the two shares, corroborated and not corroborated, summing to 1;
+- per face: face id and the two lengths, so that a gap in coverage can be located.
+
+The T2 outputs are produced only with the T2 flag on, which is off by default
+(v0.4). They are, unchanged from v0.3: per face the three lengths; per
+contradicted element the number of rays meeting conditions 1 and 2 and the number
+meeting 1-3, the crossing angle, and the distance to the nearest face end; per
+pair the deep share, crossings meeting conditions 1-3 over crossings meeting 1 and
+2; and the contradicted share at `theta_g` = 15, 20, 25, 30, 35, 40 and 45°.
 
 Each tool that writes a result file writes a new, dated file. Nothing overwrites an
 earlier result.
@@ -226,17 +234,26 @@ open space (A's face is spurious).
 Candidates only. Each becomes registered when Ali accepts it and it is committed,
 and is never reworded afterwards.
 
-- **P1.** C0 is at most 1 % of `L_A` on every map at `theta_g = 30°`.
-- **P2.** Same world at full coverage: contradicted share at most 1 % for every
-  ordered pair at cut1200.
+- **P1. VOID (v0.4).** C0 is at most 1 % of `L_A` on every map at `theta_g = 30°`.
+  Void because it was tested and failed: 0/20 under v0.1, 4/20 under v0.3. It is
+  the failure that removed T2, so it cannot also be a prediction about it.
+- **P2. VOID (v0.4).** Same world at full coverage: contradicted share at most 1 %
+  for every ordered pair at cut1200. Void because the contradicted share is no
+  longer measured.
 - **P3.** Unobserved share non-increasing with cut, for every ordered pair. A rise of
   any size counts as a failure and is shown. Note: `L_A` grows with the cut, so this
   is a prediction that can fail, not an identity. A variant with A held at cut1200 is
   reported alongside.
 - **P4.** At least 95 % of corroborated length lies within `eps` of a world wall
   surface, for every pair at every cut.
-- **P5.** At cut1200, the contradicted share changes by at most 0.5 pp across
-  `theta_g` from 15° to 45°, for every pair, so the result does not hinge on 30°.
+- **P5. VOID (v0.4).** At cut1200, the contradicted share changes by at most
+  0.5 pp across `theta_g` from 15° to 45°, for every pair, so the result does not
+  hinge on 30°. Void on two counts: the contradicted share is no longer measured,
+  and the sweep it is stated over is not even monotone under v0.3 (8/20 maps).
+
+P3 and P4 are about the unobserved and corroborated shares, so they survive T2's
+removal in substance but not in wording: P3 names a share that is now the whole
+complement of T1. Both are left for redrafting and neither is registered.
 
 ## 10. Open, not decided
 

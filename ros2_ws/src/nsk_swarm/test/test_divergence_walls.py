@@ -50,6 +50,20 @@ visibly not this.
                                                             the two corners
                                                             touch
   S2   supercover of an axis-aligned segment                exactly 4 cells
+  V1   the module default (v0.4)                            t2 off, two
+                                                            classes, nothing
+                                                            contradicted
+  V2   a would-be contradiction, both ways                  CONTRADICTED with
+                                                            t2 on,
+                                                            NOT_CORROBORATED
+                                                            with it off
+  V3   the two shares                                       7 of 12 corroborate
+                                                            (eps reaches one
+                                                            column past B)
+  V4   the measure with no ray set at all                   rays=None is fine
+  V5   per face, two lengths                                1.2 m not
+                                                            corroborated
+  V6   the deep share is a T2 output                        2/3 on, 0.0 off
   S3   31 deg ray whose element Karto's line steps past     contradicted here,
                                                             and the Bresenham
                                                             cell set lacks it
@@ -158,9 +172,15 @@ def rays(*spec, offset=(0.0, 0.0)):
             'dx': np.cos(a[:, 2]), 'dy': np.sin(a[:, 2]), 'free_len': a[:, 3]}
 
 
-def run(a, el_b, rs, theta_g=dw.THETA_G_DEG, skip_t1=False):
+def run(a, el_b, rs, theta_g=dw.THETA_G_DEG, skip_t1=False, t2=True):
+    """Classify. `t2=True` here, because most of this file tests T2.
+
+    T2 left the measure in v0.4 and the module default is off; the cases that
+    exercise it therefore have to ask for it. The v0.4 default has its own
+    group of tests below, which pass `t2=False`.
+    """
     return dw.classify(a['el'], a['seg_of'], el_b, rs, a['rho'], a['origin'],
-                       a['shape'], theta_g_deg=theta_g, skip_t1=skip_t1)
+                       a['shape'], theta_g_deg=theta_g, skip_t1=skip_t1, t2=t2)
 
 
 def counts(result):
@@ -341,6 +361,73 @@ def test_c4_two_of_four_is_not_a_majority():
     res = run(a, no_faces(), _at_element_0(0.50, 0.50, 1.0, 1.0))
     assert (res['n12'][0], res['n123'][0]) == (4, 2)
     assert not res['contradicted'][0]
+
+
+# ───────────────────── v0.4: the measure is T1 and its complement ────────────
+
+def test_v04_default_has_two_classes_and_no_t2():
+    """The module default is T2 off, and then nothing is contradicted."""
+    a = side(wall_grid())
+    r = _at_element_0(1.0, 1.0, 1.0)          # would contradict under T2
+    res = dw.classify(a['el'], a['seg_of'], no_faces(), r, a['rho'],
+                      a['origin'], a['shape'])
+    assert dw.T2_DEFAULT is False
+    assert res['t2'] is False
+    assert not res['contradicted'].any()
+    assert set(np.unique(res['cls'])) <= {dw.CORROBORATED, dw.NOT_CORROBORATED}
+
+
+def test_v04_a_would_be_contradiction_is_merely_not_corroborated():
+    """The same scene, both ways: T2 on calls it contradicted, v0.4 does not."""
+    a = side(wall_grid())
+    r = _at_element_0(1.0, 1.0, 1.0)
+    on = run(a, no_faces(), r, t2=True)
+    off = run(a, no_faces(), r, t2=False)
+    assert on['cls'][0] == dw.CONTRADICTED
+    assert off['cls'][0] == dw.NOT_CORROBORATED
+
+
+def test_v04_shares_are_two_and_sum_to_one():
+    """§6: the two shares, corroborated and not corroborated, summing to 1."""
+    a = side(wall_grid())
+    el_b = b_faces(wall_grid(h=12, w=6))      # B saw columns 0-5 of 12
+    s = dw.shares(run(a, el_b, rays(), t2=False))
+    assert set(k for k in s if k in
+               ('corroborated', 'not_corroborated', 'unobserved',
+                'contradicted')) == {'corroborated', 'not_corroborated'}
+    assert s['corroborated'] + s['not_corroborated'] == pytest.approx(1.0)
+    # 7 of 12, not 6: T1 reaches eps = 0.171 m, so A's element at x = 0.6 is
+    # matched by B's last one at x = 0.5, and only x >= 0.7 is out of reach.
+    assert (s['n_corroborated'], s['n_not_corroborated']) == (7, 5)
+
+
+def test_v04_needs_no_rays_at_all():
+    """With T2 off nothing reads the ray set, so None must be acceptable.
+
+    This is the saving that matters on the corpus: building B's admitted rays
+    is the expensive half of a pair, and the measure does not use them.
+    """
+    a = side(wall_grid())
+    res = dw.classify(a['el'], a['seg_of'], b_faces(wall_grid()), None,
+                      a['rho'], a['origin'], a['shape'])
+    assert dw.shares(res)['corroborated'] == 1.0
+
+
+def test_v04_per_face_reports_two_lengths():
+    """§6: per face, the two lengths."""
+    a = side(wall_grid())
+    row = dw.per_face(run(a, no_faces(), rays(), t2=False), 1)[0]
+    assert set(k for k in row if k.endswith('_m')) == {'corroborated_m',
+                                                       'not_corroborated_m'}
+    assert row['not_corroborated_m'] == pytest.approx(1.2)
+
+
+def test_v04_deep_share_is_a_t2_output():
+    """The deep share is produced with the flag on and is 0.0 otherwise."""
+    a = side(wall_grid())
+    r = _at_element_0(0.50, 1.0, 1.0)
+    assert dw.deep_share(run(a, no_faces(), r, t2=True)) == pytest.approx(2 / 3)
+    assert dw.deep_share(run(a, no_faces(), r, t2=False)) == 0.0
 
 
 # ──────────────────────────── the named breaks ───────────────────────────────

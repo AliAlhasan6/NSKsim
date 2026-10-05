@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """B2 divergence on walls: sort A's wall faces by B's evidence.
 
-docs/specs/SPEC_b2_divergence_walls.md v0.1, §3-§6. For an ordered pair (A, B)
-and a cut C, every face element of A is corroborated, contradicted or unobserved.
-The measure uses no ground truth beyond the poses that built the maps.
+docs/specs/SPEC_b2_divergence_walls.md v0.4, §3-§6. For an ordered pair (A, B)
+and a cut C, every face element of A is corroborated or not corroborated. The
+measure uses no ground truth beyond the poses that built the maps.
+
+T2 -- the contradiction test -- left the measure in v0.4 under §7's fallback,
+after C0 failed: 0/20 maps under v0.1, 4/20 under v0.3, against a floor of 1 %.
+It is kept whole behind `t2`, which defaults to off, because the deep tail it
+exposed is unexplained (O5) and the record is worth more than the deletion.
 
 WHAT THIS FILE OWNS, AND WHAT IT BORROWS. It owns §4: the three tests in order,
 the supercover walk and the element bookkeeping. Everything underneath is
@@ -57,10 +62,21 @@ G1_TOL_M = 0.15                    # §7 G1
 C0_LIMIT = 0.01                    # §7 C0, 1 % of L_A
 
 # The three classes, in the order the tests run (§4).
-CORROBORATED, CONTRADICTED, UNOBSERVED = 0, 1, 2
+CORROBORATED, CONTRADICTED, UNOBSERVED, NOT_CORROBORATED = 0, 1, 2, 3
 CLASS_NAME = {CORROBORATED: 'corroborated',
               CONTRADICTED: 'contradicted',
-              UNOBSERVED: 'unobserved'}
+              UNOBSERVED: 'unobserved',
+              NOT_CORROBORATED: 'not_corroborated'}
+
+# v0.4: the measure is T1 and its complement. T2 failed C0 -- 0/20 maps under
+# v0.1 and 4/20 under v0.3, against a 1 % floor -- and §7's fallback takes it
+# out of the measure rather than shipping a contradiction count the self-test
+# says is mostly the test firing on itself. It is kept whole, behind this flag,
+# because the deep tail it exposed is unexplained (O5) and the record is worth
+# more than the deletion.
+T2_DEFAULT = False
+MEASURE_CLASSES = (CORROBORATED, NOT_CORROBORATED)      # v0.4, flag off
+T2_CLASSES = (CORROBORATED, CONTRADICTED, UNOBSERVED)   # v0.1-v0.3, flag on
 
 
 def die(msg: str) -> None:
@@ -429,53 +445,79 @@ def weight_of_evidence(n12: np.ndarray, n123: np.ndarray) -> np.ndarray:
 def classify(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict, rays_in_a: dict,
              rho: float, origin: tuple[float, float], shape: tuple[int, int],
              *, eps: float | None = None, theta_g_deg: float = THETA_G_DEG,
-             skip_t1: bool = False) -> dict:
-    """§4: T1, then T2, then T3, and an element takes the first that applies.
+             skip_t1: bool = False, t2: bool = T2_DEFAULT) -> dict:
+    """§4. With `t2` off (the v0.4 default) the measure is T1 and its complement.
 
     Only elements assigned to a face of A are classified (§3); the rest are
-    counted as excluded length and never appear in a share. `skip_t1` is C0's
-    switch, which applies T2 alone.
+    counted as excluded length and never appear in a share.
+
+    `t2` on restores v0.1-v0.3: T1, then T2, then T3, an element taking the
+    first that applies. It is what C0 and the §7 breaks exercise, and it is the
+    only path that walks the rays -- so with the flag off nothing here reads
+    `rays_in_a` at all, and a caller that wants only the measure need not build
+    a ray set. `skip_t1` is C0's switch, which applies T2 alone; it implies
+    `t2`, because T2 alone is the only thing left to apply.
     """
     eps = gw.EPS_FACTOR * rho if eps is None else eps
-    free_flat = free_cell_of(el_a, shape)
+    t2 = bool(t2 or skip_t1)
 
     corr = (np.zeros(el_a['n'], dtype=bool) if skip_t1
             else corroborate(el_a, el_b_in_a, eps))
-    cross = ray_crossings(rays_in_a, el_a, free_flat, rho, origin, shape,
-                          theta_g_deg, eps)
-    contra = (~corr) & weight_of_evidence(cross['n12'], cross['n123'])
-
-    cls = np.where(corr, CORROBORATED,
-                   np.where(contra, CONTRADICTED, UNOBSERVED))
-    return {
-        'cls': cls,
+    out = {
         'assigned': seg_of_a >= 0,
         'seg_of': seg_of_a,
         'x': el_a['x'], 'y': el_a['y'],
-        'n12': cross['n12'], 'n123': cross['n123'],
-        'max_abs_dn': cross['max_abs_dn'],
         'corroborated': corr,
-        'contradicted': contra,
         'theta_g_deg': theta_g_deg,
         'eps': eps,
         'rho': rho,
+        't2': t2,
     }
+    if not t2:
+        zero = np.zeros(el_a['n'], dtype=np.int64)
+        out.update({
+            'cls': np.where(corr, CORROBORATED, NOT_CORROBORATED),
+            'contradicted': np.zeros(el_a['n'], dtype=bool),
+            'n12': zero, 'n123': zero,
+            'max_abs_dn': np.zeros(el_a['n']),
+        })
+        return out
+
+    cross = ray_crossings(rays_in_a, el_a, free_cell_of(el_a, shape), rho,
+                          origin, shape, theta_g_deg, eps)
+    contra = (~corr) & weight_of_evidence(cross['n12'], cross['n123'])
+    out.update({
+        'cls': np.where(corr, CORROBORATED,
+                        np.where(contra, CONTRADICTED, UNOBSERVED)),
+        'contradicted': contra,
+        'n12': cross['n12'], 'n123': cross['n123'],
+        'max_abs_dn': cross['max_abs_dn'],
+    })
+    return out
 
 
 def deep_share(result: dict) -> float:
     """§6: crossings meeting conditions 1-3 over those meeting 1 and 2.
 
-    Reported whatever T2 decides, because it is the quantity O5 is about and it
-    does not depend on condition 4's verdict.
+    A T2 output, so it is produced only with the flag on (v0.4) and is 0.0
+    otherwise. Within a T2 run it is reported whatever condition 4 decides,
+    because it is the quantity O5 is about.
     """
     d = int(result['n12'].sum())
     return (int(result['n123'].sum()) / d) if d else 0.0
 
 
-def shares(result: dict) -> dict:
-    """§6: L_A, L_excl and the three shares, which sum to 1.
+def classes_of(result: dict) -> tuple:
+    """Which classes this result uses: two under v0.4, three with T2 on."""
+    return T2_CLASSES if result.get('t2') else MEASURE_CLASSES
 
-    Every element is `rho` long, so a share by length is a share by count.
+
+def shares(result: dict) -> dict:
+    """§6: L_A, L_excl and the shares, which sum to 1.
+
+    Two shares under v0.4 -- corroborated and not corroborated -- and the three
+    of v0.1-v0.3 when T2 is on. Every element is `rho` long, so a share by
+    length is a share by count.
     """
     rho = result['rho']
     assigned = result['assigned']
@@ -486,7 +528,8 @@ def shares(result: dict) -> dict:
         'L_excl': float(int((~assigned).sum()) * rho),
         'n_elements': n,
     }
-    for code, name in CLASS_NAME.items():
+    for code in classes_of(result):
+        name = CLASS_NAME[code]
         c = int((cls == code).sum())
         out[f'n_{name}'] = c
         out[f'{name}'] = (c / n) if n else 0.0
@@ -494,15 +537,16 @@ def shares(result: dict) -> dict:
 
 
 def per_face(result: dict, n_faces: int) -> list[dict]:
-    """§6: face id and the three lengths, so a contradiction can be located."""
+    """§6: face id and the per-class lengths, so a gap can be located."""
     rho = result['rho']
     cls, seg = result['cls'], result['seg_of']
     rows = []
     for fid in range(n_faces):
         m = seg == fid
         row = {'id': fid, 'length': float(int(m.sum()) * rho)}
-        for code, name in CLASS_NAME.items():
-            row[f'{name}_m'] = float(int((m & (cls == code)).sum()) * rho)
+        for code in classes_of(result):
+            row[f'{CLASS_NAME[code]}_m'] = float(
+                int((m & (cls == code)).sum()) * rho)
         rows.append(row)
     return rows
 
@@ -557,7 +601,7 @@ def theta_sweep(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict,
     out = []
     for tg in sweep:
         r = classify(el_a, seg_of_a, el_b_in_a, rays_in_a, rho, origin, shape,
-                     eps=eps, theta_g_deg=tg)
+                     eps=eps, theta_g_deg=tg, t2=True)
         out.append({'theta_g_deg': tg,
                     'contradicted': shares(r)['contradicted'],
                     'deep_share': deep_share(r)})
@@ -632,8 +676,14 @@ def face_elements_only(el: dict, seg_of: np.ndarray) -> dict:
 
 
 def run_pair(a_stem: str, b_stem: str, *, flip: bool = False,
-             theta_g_deg: float = THETA_G_DEG) -> dict:
-    """One ordered pair at one cut, end to end. Reads the corpus."""
+             theta_g_deg: float = THETA_G_DEG, t2: bool = T2_DEFAULT) -> dict:
+    """One ordered pair at one cut, end to end. Reads the corpus.
+
+    With `t2` off (the v0.4 default) the row carries the two measure classes and
+    nothing else, and no ray set is built: the rays exist only for T2, and
+    building them is the expensive half of a pair. With `t2` on the row also
+    carries the T2 outputs §6 lists, unchanged from v0.3.
+    """
     import diagnose_karto as dk                              # noqa: PLC0415
     import fit_world_transform as fwt                        # noqa: PLC0415
     import robot_divergence as rd                            # noqa: PLC0415
@@ -650,8 +700,8 @@ def run_pair(a_stem: str, b_stem: str, *, flip: bool = False,
     # and would put every map 3.15 m away.
     spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
     spawn_a, spawn_b = spawn[ka], spawn[kb]
-    rays = rays_in_frame(dk.admitted_rays(b_stem, kb, cut_b),
-                         spawn_b, spawn_a, flip=flip)
+    rays = (rays_in_frame(dk.admitted_rays(b_stem, kb, cut_b),
+                          spawn_b, spawn_a, flip=flip) if t2 else None)
 
     bx, by = to_frame_a(b['el']['x'], b['el']['y'], spawn_b, spawn_a, flip=flip)
     el_b = dict(face_elements_only(b['el'], b['seg_of']))
@@ -659,17 +709,22 @@ def run_pair(a_stem: str, b_stem: str, *, flip: bool = False,
 
     t0 = time.monotonic()
     res = classify(a['el'], a['seg_of'], el_b, rays, a['rho'], a['origin'],
-                   a['shape'], theta_g_deg=theta_g_deg)
+                   a['shape'], theta_g_deg=theta_g_deg, t2=t2)
     seconds = time.monotonic() - t0
-    return {
-        'A': a_stem, 'B': b_stem, 'cut': cut_a,
+    row = {
+        'A': a_stem, 'B': b_stem, 'cut': cut_a, 't2': bool(t2),
         'shares': shares(res),
         'per_face': per_face(res, len(a['segments'])),
-        'contradicted': contradicted_detail(res, a['segments']),
-        'theta_sweep': theta_sweep(a['el'], a['seg_of'], el_b, rays, a['rho'],
-                                   a['origin'], a['shape']),
         'seconds': seconds,
     }
+    if t2:
+        row.update({
+            'contradicted': contradicted_detail(res, a['segments']),
+            'deep_share': deep_share(res),
+            'theta_sweep': theta_sweep(a['el'], a['seg_of'], el_b, rays,
+                                       a['rho'], a['origin'], a['shape']),
+        })
+    return row
 
 
 def write_result(payload: dict, out_dir: Path = OUT_DIR_DEFAULT) -> Path:
@@ -690,16 +745,24 @@ def main() -> int:
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
     ap.add_argument('--break', dest='brk', choices=('frame-sign',), default=None,
                     help='X1: run with the frame sign flipped')
+    ap.add_argument('--t2', action='store_true',
+                    help='restore T2 and its outputs (v0.1-v0.3). Off by '
+                         'default: T2 left the measure in v0.4 under §7\'s '
+                         'fallback, after C0 failed')
     ap.add_argument('--out-dir', type=Path, default=OUT_DIR_DEFAULT)
     args = ap.parse_args()
 
     row = run_pair(args.a, args.b, flip=args.brk == 'frame-sign',
-                   theta_g_deg=args.theta_g)
+                   theta_g_deg=args.theta_g, t2=args.t2)
     s = row['shares']
-    print(f'{row["A"]} -> {row["B"]}  L_A {s["L_A"]:.1f} m  '
-          f'corroborated {s["corroborated"]:.3f}  '
-          f'unobserved {s["unobserved"]:.3f}  '
-          f'contradicted {s["contradicted"]:.3f}')
+    line = (f'{row["A"]} -> {row["B"]}  L_A {s["L_A"]:.1f} m  '
+            f'corroborated {s["corroborated"]:.3f}  ')
+    if args.t2:
+        line += (f'unobserved {s["unobserved"]:.3f}  '
+                 f'contradicted {s["contradicted"]:.3f}')
+    else:
+        line += f'not corroborated {s["not_corroborated"]:.3f}'
+    print(line)
     print(f'written: {write_result(row, args.out_dir)}')
     return 0
 
