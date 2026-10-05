@@ -1,9 +1,11 @@
-# SPEC — B2 divergence on walls (v0.1, draft)
+# SPEC — B2 divergence on walls (v0.3, draft)
 
-Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. Sections 1–8
-are decided. Section 9 (pre-registrations) is a DRAFT: nothing in it is
-registered until Ali accepts it and it is committed. No code is written until the
-stop-point questions in §11 are answered.
+Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
+T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
+diagnostic. Sections 1–8 are decided. Section 9
+(pre-registrations) is a DRAFT: nothing in it is registered until Ali accepts it
+and it is committed. No code is written until the stop-point questions in §11 are
+answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -86,17 +88,27 @@ A's frame, with
 Only elements of B's faces count, not every boundary in B's map. Corroboration is
 face to face (D1), and B's unclassified elements include its own parked robots.
 
-**T2 — contradicted.** At least `k = 1` admitted ray of B satisfies all three:
+**T2 — contradicted.** B's admitted rays satisfy all four:
 
 1. **Crossing.** The ray crosses the element's segment (closed, length `rho`) while
    travelling against the normal (`d · n < 0`), that is, from the free side that A
    observed.
 2. **Not grazing.** The angle between the ray and the face line is at least
    `theta_g = 30°`, that is, `|d · n| ≥ sin theta_g`.
-3. **Runs on.** If the crossing is at range `s`, the ray's free length reaches at
-   least `s + eps` with no hit before it. For a beam with a return at range `R`, this
-   means `R ≥ s + eps`. For a relay-filled no-return beam, the free length is the one
-   Karto clears (`max_laser_range`), and the same inequality applies.
+3. **Runs on.** If the crossing is at range `s`, the ray reaches a depth of at
+   least `eps` behind the face line with no hit before it: `(R - s)·|d · n| ≥ eps`
+   for a beam with a return at range `R`, and `(L - s)·|d · n| ≥ eps` for a
+   relay-filled beam, whose free length `L` is the one Karto clears
+   (`max_laser_range`). Changed in v0.2, after C0 failed: v0.1 measured `eps` along
+   the ray, but A's own wall surface can lie a cell or more behind the face line, so
+   a ray at 30° could travel 0.2 m past the face and still hit A's own wall. Post
+   hoc, with that physical reason.
+4. **Weight of evidence.** At least 2 of B's rays meet conditions 1-3 at the
+   element, and they are more than half of B's rays that meet conditions 1 and 2
+   there. Added in v0.3, after the deep-tail diagnostic: on A's own maps, 4-10 % of
+   crossings run on by metres for a reason not yet found (turning and wall-box
+   joints were tested and ruled out), so one ray is not evidence that B saw open
+   space. The majority threshold is chosen on principle, not calibrated. Post hoc.
 
 **T3 — unobserved.** Everything else.
 
@@ -147,8 +159,10 @@ Per ordered pair (A, B) and cut C (20 pairs × 4 cuts = 80 rows):
   length outside faces;
 - the three shares, summing to 1;
 - per face: face id and the three lengths, so that any contradiction can be located;
-- per contradicted element: the number of crossing rays, the crossing angle, the
-  distance to the nearest face end, and whether `k = 2` would also contradict it;
+- per contradicted element: the number of rays meeting conditions 1 and 2 and the
+  number meeting 1-3, the crossing angle, and the distance to the nearest face end;
+- per pair, the deep share: crossings meeting conditions 1-3 over crossings meeting
+  1 and 2. Reported whatever T2 decides, because it is the quantity O5 is about;
 - the contradicted share at `theta_g` = 15, 20, 25, 30, 35, 40 and 45°.
 
 Each tool that writes a result file writes a new, dated file. Nothing overwrites an
@@ -170,7 +184,9 @@ transform's sign or anchor is wrong.
 **C0 — the contradiction test's floor.** Apply T2 alone (T1 switched off) to A's own
 rays against A's own faces. This measures how often the test fires on a map against
 the rays that built it. Reported per map. If C0 exceeds 1 % of `L_A` on any map at
-`theta_g = 30°`, stop for review before any cross-robot number is read.
+`theta_g = 30°`, stop for review before any cross-robot number is read. If C0 fails
+under v0.3, T2 leaves the measure: elements are reported as corroborated or not, and
+the deep tail as a stated limitation.
 
 **Named breaks.** Each must be shown failing, as a test:
 
@@ -231,6 +247,11 @@ and is never reworded afterwards.
 - **O3.** A symmetric summary of A → B and B → A, and the series over cuts.
 - **O4.** Whether to report separately the unobserved length that parked robots
   shadow.
+- **O5.** The deep tail, unexplained. On A's own maps 4-10 % of crossings that meet
+  conditions 1 and 2 run on well past the face, and the distribution is bimodal:
+  under 0.2 m or over 1 m, with almost nothing between. Turning (yaw rate at the
+  scan) and wall-box joints were each pre-registered and each ruled out. Condition 4
+  is a guard against it, not an explanation of it.
 
 ## 11. Stop points for Claude Code
 

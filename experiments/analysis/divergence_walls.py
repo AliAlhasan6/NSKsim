@@ -52,8 +52,7 @@ OUT_DIR_DEFAULT = gw.LOGS_DIR / 'divergence'
 # ── §4's constants ───────────────────────────────────────────────────────────
 THETA_G_DEG = 30.0                 # the primary grazing bound
 THETA_G_SWEEP = (15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0)   # §6's last row
-K_PRIMARY = 1                      # T2's "at least k admitted rays"
-K_REPORTED = 2                     # §6 reports whether k=2 would also contradict
+MIN_RUNNING_ON = 2                 # condition 4's floor (v0.3)
 G1_TOL_M = 0.15                    # §7 G1
 C0_LIMIT = 0.01                    # §7 C0, 1 % of L_A
 
@@ -314,21 +313,27 @@ def ray_crossings(rays: dict, el: dict, free_flat: np.ndarray, rho: float,
     return range for a finite beam, the relay ceiling for a filled one. The walk
     is through A's lattice, which is why this is redone per ordered pair.
 
-    The three conditions of §4, on the exact geometry and never on the walk:
+    The conditions of §4, on the exact geometry and never on the walk:
 
       1. crossing   `d . n < 0` and the hit lies within the closed element,
                     `|w| <= rho/2`, at `s >= 0`;
       2. not grazing `|d . n| >= sin theta_g`;
-      3. runs on     `free_len >= s + eps`.
+      3. runs on     `(free_len - s) * |d . n| >= eps`, a DEPTH behind the face
+                     line and not a distance along the ray (v0.2). `free_len` is
+                     `R` for a beam with a return and `L` for a relay-filled one,
+                     so one expression covers both of §4's cases.
 
-    Returns per-element counts and, for the elements that have any, the angle and
-    end-distance §6 reports.
+    Condition 4 is not here: it is a statement about the rays at an element taken
+    together, so it belongs to `classify`. What this returns is the two counts it
+    needs -- `n12`, the rays meeting 1 and 2, and `n123`, those also meeting 3 --
+    plus the angle §6 reports.
     """
     n_el = el['n']
-    counts = np.zeros(n_el, dtype=np.int64)
+    n12 = np.zeros(n_el, dtype=np.int64)
+    n123 = np.zeros(n_el, dtype=np.int64)
     best_cos = np.zeros(n_el)
     if n_el == 0 or rays['ox'].size == 0:
-        return {'n_rays': counts, 'max_abs_dn': best_cos}
+        return {'n12': n12, 'n123': n123, 'max_abs_dn': best_cos}
 
     # elements indexed by their free cell, so a visited cell is a lookup
     h, w = shape
@@ -381,25 +386,50 @@ def ray_crossings(rays: dict, el: dict, free_flat: np.ndarray, rho: float,
         hy = oy[pr] + s * dy[pr]
         wv = (hx - el['x'][pe]) * tx_e[pe] + (hy - el['y'][pe]) * ty_e[pe]
 
-        ok = (approaching
-              & (s >= 0.0)
-              & (np.abs(wv) <= half + 1e-12)
-              & (np.abs(d_n) >= sin_g - 1e-12)
-              & (flen[pr] >= s + eps - 1e-12))
-        if not ok.any():
+        # `s <= free_len` is part of condition 1: a ray that stopped inside the
+        # free cell never crossed the element. Under v0.1 condition 3 implied it
+        # (`free_len >= s + eps`), so it was never written down; condition 4
+        # makes `n12` an observable in its own right, and without this a ray
+        # that stopped short would be counted as a crossing that declined to
+        # run on -- padding the denominator of the majority.
+        ok12 = (approaching
+                & (s >= 0.0)
+                & (s <= flen[pr] + 1e-12)
+                & (np.abs(wv) <= half + 1e-12)
+                & (np.abs(d_n) >= sin_g - 1e-12))
+        if not ok12.any():
             continue
-        counts += np.bincount(pe[ok], minlength=n_el)
-        np.maximum.at(best_cos, pe[ok], np.abs(d_n[ok]))
+        # condition 3 (v0.2): depth behind the face line, not range along the ray
+        depth = (flen[pr] - s) * np.abs(d_n)
+        ok123 = ok12 & (depth >= eps - 1e-12)
+        n12 += np.bincount(pe[ok12], minlength=n_el)
+        if ok123.any():
+            n123 += np.bincount(pe[ok123], minlength=n_el)
+            np.maximum.at(best_cos, pe[ok123], np.abs(d_n[ok123]))
 
-    return {'n_rays': counts, 'max_abs_dn': best_cos}
+    return {'n12': n12, 'n123': n123, 'max_abs_dn': best_cos}
 
 
 # ─────────────────────────────── §4 in order ─────────────────────────────────
 
+def weight_of_evidence(n12: np.ndarray, n123: np.ndarray) -> np.ndarray:
+    """§4 condition 4 (v0.3): is the running-on evidence worth believing?
+
+    Two clauses, and both must hold at the element. At least MIN_RUNNING_ON of
+    B's rays meet conditions 1-3, and they are MORE THAN HALF of the rays that
+    met 1 and 2 there. One ray running on is not evidence that B saw open space:
+    the deep-tail diagnostic found 4-10 % of crossings on a robot's OWN map
+    running on by metres, for a reason still unexplained (O5).
+
+    The majority is strict, so 2 of 4 does not contradict and 2 of 3 does.
+    """
+    return (n123 >= MIN_RUNNING_ON) & (2 * n123 > n12)
+
+
 def classify(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict, rays_in_a: dict,
              rho: float, origin: tuple[float, float], shape: tuple[int, int],
              *, eps: float | None = None, theta_g_deg: float = THETA_G_DEG,
-             k: int = K_PRIMARY, skip_t1: bool = False) -> dict:
+             skip_t1: bool = False) -> dict:
     """§4: T1, then T2, then T3, and an element takes the first that applies.
 
     Only elements assigned to a face of A are classified (§3); the rest are
@@ -413,7 +443,7 @@ def classify(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict, rays_in_a: dict,
             else corroborate(el_a, el_b_in_a, eps))
     cross = ray_crossings(rays_in_a, el_a, free_flat, rho, origin, shape,
                           theta_g_deg, eps)
-    contra = (~corr) & (cross['n_rays'] >= k)
+    contra = (~corr) & weight_of_evidence(cross['n12'], cross['n123'])
 
     cls = np.where(corr, CORROBORATED,
                    np.where(contra, CONTRADICTED, UNOBSERVED))
@@ -422,15 +452,24 @@ def classify(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict, rays_in_a: dict,
         'assigned': seg_of_a >= 0,
         'seg_of': seg_of_a,
         'x': el_a['x'], 'y': el_a['y'],
-        'n_crossing_rays': cross['n_rays'],
+        'n12': cross['n12'], 'n123': cross['n123'],
         'max_abs_dn': cross['max_abs_dn'],
         'corroborated': corr,
         'contradicted': contra,
         'theta_g_deg': theta_g_deg,
-        'k': k,
         'eps': eps,
         'rho': rho,
     }
+
+
+def deep_share(result: dict) -> float:
+    """§6: crossings meeting conditions 1-3 over those meeting 1 and 2.
+
+    Reported whatever T2 decides, because it is the quantity O5 is about and it
+    does not depend on condition 4's verdict.
+    """
+    d = int(result['n12'].sum())
+    return (int(result['n123'].sum()) / d) if d else 0.0
 
 
 def shares(result: dict) -> dict:
@@ -468,13 +507,15 @@ def per_face(result: dict, n_faces: int) -> list[dict]:
     return rows
 
 
-def contradicted_detail(result: dict, segments: list | None = None,
-                        k2: int = K_REPORTED) -> list[dict]:
-    """§6, per contradicted element: rays, angle, end distance, and k=2.
+def contradicted_detail(result: dict, segments: list | None = None
+                        ) -> list[dict]:
+    """§6, per contradicted element: the two counts, the angle, the end distance.
 
-    The angle reported is the crossing angle to the face line, `asin |d . n|`,
-    which is the quantity `theta_g` bounds. The end distance needs A's segments
-    and is omitted when the caller has none.
+    `n12` and `n123` are the rays meeting conditions 1 and 2, and those also
+    meeting 3 -- the pair condition 4 is a statement about, so a reader can see
+    why an element was or was not contradicted. The angle is the crossing angle
+    to the face line, `asin |d . n|`, which is what `theta_g` bounds. The end
+    distance needs A's segments and is omitted when the caller has none.
     """
     rows = []
     idx = np.nonzero(result['contradicted'] & result['assigned'])[0]
@@ -483,9 +524,9 @@ def contradicted_detail(result: dict, segments: list | None = None,
         row = {
             'element': int(i),
             'face': int(result['seg_of'][i]),
-            'n_rays': int(result['n_crossing_rays'][i]),
+            'n12': int(result['n12'][i]),
+            'n123': int(result['n123'][i]),
             'angle_deg': math.degrees(math.asin(min(1.0, abs(dn)))),
-            'also_at_k2': bool(result['n_crossing_rays'][i] >= k2),
         }
         if segments is not None:
             s = segments[int(result['seg_of'][i])]
@@ -500,18 +541,26 @@ def contradicted_detail(result: dict, segments: list | None = None,
 def theta_sweep(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict,
                 rays_in_a: dict, rho: float, origin, shape, *,
                 eps: float | None = None,
-                sweep: tuple = THETA_G_SWEEP, k: int = K_PRIMARY) -> list[dict]:
+                sweep: tuple = THETA_G_SWEEP) -> list[dict]:
     """§6's last row: the contradicted share at each `theta_g`.
 
-    X5 is the statement that this is non-increasing: a larger `theta_g` admits
-    strictly fewer crossings, so no element can become contradicted by raising
-    it.
+    X5 says this is non-increasing. That followed from condition 3 alone, where
+    a larger `theta_g` admits strictly fewer crossings and no element can gain
+    one. It does NOT follow under condition 4: raising `theta_g` drops crossings
+    from `n12` as well as `n123`, and dropping one that did not run on RAISES
+    the ratio, so an element can cross the majority and become contradicted.
+    2 of 4 is not a contradiction; drop two shallow crossings and 2 of 2 is.
+
+    The sweep is therefore reported, and X5 is a claim to be tested rather than
+    a property to be relied on.
     """
     out = []
     for tg in sweep:
         r = classify(el_a, seg_of_a, el_b_in_a, rays_in_a, rho, origin, shape,
-                     eps=eps, theta_g_deg=tg, k=k)
-        out.append({'theta_g_deg': tg, 'contradicted': shares(r)['contradicted']})
+                     eps=eps, theta_g_deg=tg)
+        out.append({'theta_g_deg': tg,
+                    'contradicted': shares(r)['contradicted'],
+                    'deep_share': deep_share(r)})
     return out
 
 

@@ -13,14 +13,19 @@ visibly not this.
   id   case                                                 expected
   ───────────────────────────────────────────────────────────────────────────
   U1   A and B see the same wall                            corroborated 12/12
-  U2   a ray through a wall only A has                      1 contradicted,
+  U2   two rays through a wall only A has                   1 contradicted,
                                                             11 unobserved
   U3   the same ray at 20 deg to the face line              0 contradicted at
                                                             theta_g 30; 1 at 15
   U4   a ray stopped by an occluder before the wall         0 contradicted;
                                                             1 without occluder
-  U5   a ray whose hit lies within eps beyond the face      0 contradicted;
-                                                            1 at s + eps
+  U5   45 deg rays overshooting by eps ALONG d, so only     0 contradicted;
+       eps*cos45 of DEPTH (v0.1 called this contradicted)   1 at eps of depth
+  C4a  one ray through a wall only A has                    unobserved (1 of 1)
+  C4b  three crossings, one running on                      unobserved (1 of 3)
+  C4c  three crossings, two running on                      contradicted (2/3)
+  C4d  four crossings, two running on                       unobserved (2 of 4,
+                                                            half is not more)
   U6   a one-cell wall from opposite sides, both ways       0 contradicted each
                                                             way, unobserved 1.0
   U7   45 deg crossing 0.005 m from an element's end        element 5
@@ -153,9 +158,9 @@ def rays(*spec, offset=(0.0, 0.0)):
             'dx': np.cos(a[:, 2]), 'dy': np.sin(a[:, 2]), 'free_len': a[:, 3]}
 
 
-def run(a, el_b, rs, theta_g=dw.THETA_G_DEG, k=dw.K_PRIMARY, skip_t1=False):
+def run(a, el_b, rs, theta_g=dw.THETA_G_DEG, skip_t1=False):
     return dw.classify(a['el'], a['seg_of'], el_b, rs, a['rho'], a['origin'],
-                       a['shape'], theta_g_deg=theta_g, k=k, skip_t1=skip_t1)
+                       a['shape'], theta_g_deg=theta_g, skip_t1=skip_t1)
 
 
 def counts(result):
@@ -180,14 +185,20 @@ def test_u1_same_wall_is_corroborated(offset):
 
 @pytest.mark.parametrize('offset', [(0.0, 0.0), OFFSET], ids=['aligned', 'offset'])
 def test_u2_ray_through_a_only_wall_is_contradicted(offset):
-    """U2 (and U8): B crossed the place and came back with nothing."""
+    """U2 (and U8): B crossed the place twice and came back with nothing.
+
+    Two rays, because condition 4 (v0.3) wants at least two running on and a
+    strict majority. One would leave the element unobserved -- which is its own
+    case below.
+    """
     a = side(wall_grid())
-    r = rays((0.0, 0.1, 90.0, 1.0), offset=offset)
+    r = rays((0.0, 0.1, 90.0, 1.0), (0.01, 0.1, 90.0, 1.0), offset=offset)
     res = run(a, no_faces(), r)
     corr, contra, unobs = counts(res)
     assert (corr, contra) == (0, 1)
     assert unobs == 11
     assert res['contradicted'][0]          # the element at x = 0.0
+    assert (res['n12'][0], res['n123'][0]) == (2, 2)
 
 
 def test_u3_grazing_ray_is_unobserved():
@@ -197,7 +208,7 @@ def test_u3_grazing_ray_is_unobserved():
     test of condition 2 rather than a ray that happened to miss.
     """
     a = side(wall_grid(h=12, w=24))
-    r = rays((0.0, 0.1, 20.0, 2.0))
+    r = rays((0.0, 0.1, 20.0, 2.0), (0.01, 0.1, 20.0, 2.0))
     assert counts(run(a, no_faces(), r, theta_g=30.0))[1] == 0
     assert counts(run(a, no_faces(), r, theta_g=15.0))[1] == 1
 
@@ -205,19 +216,37 @@ def test_u3_grazing_ray_is_unobserved():
 def test_u4_occluded_ray_is_unobserved():
     """U4: the ray stops short, so it never crossed the place at all."""
     a = side(wall_grid())
-    occluded = rays((0.0, 0.1, 90.0, 0.2))        # s = 0.45, stops at 0.2
-    clear = rays((0.0, 0.1, 90.0, 1.0))
-    assert counts(run(a, no_faces(), occluded))[1] == 0
+    occluded = rays((0.0, 0.1, 90.0, 0.2),        # s = 0.45, both stop at 0.2
+                    (0.01, 0.1, 90.0, 0.2))
+    clear = rays((0.0, 0.1, 90.0, 1.0), (0.01, 0.1, 90.0, 1.0))
+    res = run(a, no_faces(), occluded)
+    assert counts(res)[1] == 0
+    assert res['n12'][0] == 0        # it never reached the element to cross it
     assert counts(run(a, no_faces(), clear))[1] == 1
 
 
-def test_u5_hit_within_eps_beyond_the_face_is_unobserved():
-    """U5: condition 3 wants the ray to RUN ON, by eps, not merely to arrive."""
+def test_u5_hit_within_eps_of_depth_beyond_the_face_is_unobserved():
+    """U5, in v0.2's DEPTH form: eps is measured behind the face, not along d.
+
+    At 45 deg the two forms disagree, which is the point of the case. A ray that
+    overshoots by exactly eps ALONG ITS OWN DIRECTION reaches a depth of only
+    eps*cos45 = 0.121 m behind the face line, and v0.1 would have called that a
+    contradiction. v0.2 wants eps of depth, which costs eps/cos45 = 0.241 m of
+    travel.
+
+    Two rays throughout, so condition 4 is satisfied whenever condition 3 is and
+    this stays a test of condition 3.
+    """
     a = side(wall_grid())
-    s = 0.45
-    short = rays((0.0, 0.1, 90.0, s + 0.5 * EPS))
-    past = rays((0.0, 0.1, 90.0, s + EPS + 0.01))
-    assert counts(run(a, no_faces(), short))[1] == 0
+    cos45 = math.sqrt(0.5)
+    s = (0.55 - 0.06) / cos45                      # 45 deg from y = 0.06
+    short = rays((0.01, 0.06, 45.0, s + EPS),            # v0.1 passed this
+                 (0.02, 0.06, 45.0, s + EPS))
+    past = rays((0.01, 0.06, 45.0, s + EPS / cos45 + 0.01),
+                (0.02, 0.06, 45.0, s + EPS / cos45 + 0.01))
+    res_short = run(a, no_faces(), short)
+    assert counts(res_short)[1] == 0
+    assert res_short['n12'][5] == 2 and res_short['n123'][5] == 0
     assert counts(run(a, no_faces(), past))[1] == 1
 
 
@@ -257,10 +286,61 @@ def test_u7_crossing_near_an_element_end_is_found(offset):
     element's free cell too. S3 is the case where the walk decides the class.
     """
     a = side(wall_grid())
-    r = rays((0.055, 0.06, 45.0, 1.2), offset=offset)
+    r = rays((0.055, 0.06, 45.0, 1.2), (0.056, 0.06, 45.0, 1.2), offset=offset)
     res = run(a, no_faces(), r)
     assert counts(res)[1] == 1
     assert res['contradicted'][5]
+
+
+# ─────────────────── condition 4, the weight of evidence ─────────────────────
+#
+# All four act on element 0 of the plain wall, at x = 0.0, whose closed segment
+# is [-0.05, 0.05]. A vertical ray from y = 0.1 crosses it at s = 0.45; a
+# free_len of 1.0 clears it by 0.55 m of depth and one of 0.50 by 0.05 m, which
+# is under eps. So `free_len` alone decides whether a crossing runs on, and the
+# cases differ only in how many of each there are.
+
+def _at_element_0(*lens):
+    return rays(*[(-0.03 + 0.02 * i, 0.1, 90.0, L) for i, L in enumerate(lens)])
+
+
+def test_c4_one_ray_through_an_a_only_wall_is_unobserved():
+    """One ray is not evidence that B saw open space (v0.3, condition 4)."""
+    a = side(wall_grid())
+    res = run(a, no_faces(), _at_element_0(1.0))
+    assert (res['n12'][0], res['n123'][0]) == (1, 1)
+    assert counts(res) == (0, 0, 12)
+
+
+def test_c4_three_crossings_one_running_on_is_unobserved():
+    """1 of 3 fails both clauses: under two, and not a majority."""
+    a = side(wall_grid())
+    res = run(a, no_faces(), _at_element_0(0.50, 0.50, 1.0))
+    assert (res['n12'][0], res['n123'][0]) == (3, 1)
+    assert not res['contradicted'][0]
+    assert counts(res)[1] == 0
+
+
+def test_c4_three_crossings_two_running_on_is_contradicted():
+    """2 of 3 clears both clauses: at least two, and 2 > 3/2."""
+    a = side(wall_grid())
+    res = run(a, no_faces(), _at_element_0(0.50, 1.0, 1.0))
+    assert (res['n12'][0], res['n123'][0]) == (3, 2)
+    assert res['contradicted'][0]
+    assert counts(res)[1] == 1
+
+
+def test_c4_two_of_four_is_not_a_majority():
+    """2 of 4 has two running on but is exactly half, and half is not more.
+
+    The clause that separates this from 2 of 3 is the strict majority, and it is
+    also what makes the theta_g sweep non-monotone in principle: drop the two
+    shallow crossings and the same element becomes 2 of 2.
+    """
+    a = side(wall_grid())
+    res = run(a, no_faces(), _at_element_0(0.50, 0.50, 1.0, 1.0))
+    assert (res['n12'][0], res['n123'][0]) == (4, 2)
+    assert not res['contradicted'][0]
 
 
 # ──────────────────────────── the named breaks ───────────────────────────────
@@ -298,7 +378,10 @@ def test_x2_synthetic_face_in_free_space_is_contradicted():
     a = side(g, seg_of=seg_of)
     assert a['el']['n'] == 22
 
-    r = rays(*[(0.1 * c, 0.05, 90.0, 1.0) for c in range(1, 11)])
+    # three rays per element, because condition 4 wants two running on and a
+    # majority; the prediction is about the face, not about the ray count
+    r = rays(*[(0.1 * c + dxx, 0.05, 90.0, 1.0)
+               for c in range(1, 11) for dxx in (-0.02, 0.0, 0.02)])
     res = run(a, no_faces(), r)
     face0 = dw.per_face(res, 2)[0]
     assert face0['length'] == pytest.approx(1.0)
@@ -331,7 +414,8 @@ def test_x5_contradicted_share_is_non_increasing_in_theta_g():
     theta_g passes it.
     """
     a = side(wall_grid(h=12, w=24))
-    r = rays((0.0, 0.1, 20.0, 2.0), (1.5, 0.1, 90.0, 1.0))
+    r = rays((0.0, 0.1, 20.0, 2.0), (0.01, 0.1, 20.0, 2.0),
+             (1.5, 0.1, 90.0, 1.0), (1.51, 0.1, 90.0, 1.0))
     sweep = dw.theta_sweep(a['el'], a['seg_of'], no_faces(), r, a['rho'],
                            a['origin'], a['shape'],
                            sweep=tuple(float(t) for t in range(0, 50, 5)))
@@ -386,7 +470,8 @@ def test_s3_bresenham_would_lose_a_crossing_the_supercover_keeps():
     a = side(wall_grid(h=12, w=14))
     ox, oy, ang, flen = 0.0, 0.06, 31.0, 1.4
 
-    res = run(a, no_faces(), rays((ox, oy, ang, flen)))
+    res = run(a, no_faces(), rays((ox, oy, ang, flen),
+                                  (ox + 0.001, oy, ang, flen)))
     assert counts(res)[1] == 1
     assert res['contradicted'][8]
 
