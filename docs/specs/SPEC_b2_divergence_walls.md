@@ -1,12 +1,13 @@
-# SPEC — B2 divergence on walls (v0.6, draft)
+# SPEC — B2 divergence on walls (v0.7, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
 diagnostic. v0.4: T2 leaves the measure under §7's fallback (C0 failed under
 v0.3); v0.5 splits T1's distance test across and along the face. Sections 1–8
 are decided. v0.6: P3, P4 and P6 registered on 6 Oct 2026, before any share was
-computed, except the four A = k0 cut1200 values seen in t1_across. No code is
-written until the stop-point questions in §11 are answered.
+computed, except the four A = k0 cut1200 values seen in t1_across. v0.7: erratum
+to P6's quoted seen values; no registered wording changed. No code is written
+until the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -267,6 +268,14 @@ not as live predictions.
   cut1200) is at least 90 %. The four pairs with A = k0 were seen in the
   t1_across diagnostic (93.8–94.3 %); they are reported, labelled seen, and not
   part of the test. The 90 % is informed by them.
+
+Erratum to P6 (6 Oct 2026; P6's registered wording is unchanged). The four seen
+values P6 quotes came from the t1_across diagnostic, whose scratch script divided
+by all 1,377 of A's elements instead of the 1,320 assigned to faces. The v0.5
+corroborated shares actually seen were 97.80-98.33 %, not 93.8-94.3 %, so the
+90 % threshold sat about 8 points below them, not 4. P6 tests only the 16 pairs
+with A ≠ k0, so its verdict does not depend on this. Found by the cross-check in
+s4_predictions_20261005T230035Z.json.
 
 ## 10. Open, not decided
 
