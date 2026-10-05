@@ -1,11 +1,12 @@
-# SPEC — B2 divergence on walls (v0.4, draft)
+# SPEC — B2 divergence on walls (v0.5, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
 diagnostic. v0.4: T2 leaves the measure under §7's fallback (C0 failed under
-v0.3). Sections 1–8 are decided. Section 9 (pre-registrations) is a DRAFT:
-nothing in it is registered until Ali accepts it and it is committed. No code is
-written until the stop-point questions in §11 are answered.
+v0.3); v0.5 splits T1's distance test across and along the face. Sections 1–8
+are decided. Section 9 (pre-registrations) is a DRAFT: nothing in it is
+registered until Ali accepts it and it is committed. No code is written until
+the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -87,7 +88,15 @@ A's frame, with
   (`graph_walls.py:308-313`) and the transform is a pure translation, so this is
   exact. Both normals come from `face_elements()`, never from `segments[].normal`,
   which is a fitted value,
-- `|m' − m| ≤ eps = rho(1 + √2/2) = 0.1707 m`.
+- `|(m' − m)·n| ≤ eps = rho(1 + √2/2) = 0.1707 m` across the face, and
+  `|(m' − m)·t| ≤ rho/2 = 0.05 m` along it, where `t = (-n_y, n_x)`. Both
+  inclusive, with a 1e-9 m tolerance. Changed in v0.5: a Euclidean `eps`
+  reaches the NEXT element along a face, `rho = 0.1 m` away, so corroboration
+  ran one element past the end of B's coverage. The across tolerance is
+  unchanged, and the `t1_across` diagnostic
+  (`experiments/logs/divergence/t1_across_20261005T214716Z.json`) held its
+  printed prediction on all four pairs: a near mode under 0.25 m, a far mode
+  beyond 0.5 m, and 0.07-0.36 % between them against a 1 % bound.
 
 Only elements of B's faces count, not every boundary in B's map. Corroboration is
 face to face (D1), and B's unclassified elements include its own parked robots.

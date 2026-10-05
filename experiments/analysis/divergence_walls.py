@@ -58,6 +58,7 @@ OUT_DIR_DEFAULT = gw.LOGS_DIR / 'divergence'
 THETA_G_DEG = 30.0                 # the primary grazing bound
 THETA_G_SWEEP = (15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0)   # §6's last row
 MIN_RUNNING_ON = 2                 # condition 4's floor (v0.3)
+T1_TOL_M = 1e-9                    # both T1 tolerances are inclusive (v0.5)
 G1_TOL_M = 0.15                    # §7 G1
 C0_LIMIT = 0.01                    # §7 C0, 1 % of L_A
 
@@ -162,18 +163,29 @@ def element_tangent(el: dict) -> tuple[np.ndarray, np.ndarray]:
     return -el['ny'], el['nx']
 
 
-def corroborate(el_a: dict, el_b: dict, eps: float) -> np.ndarray:
+def corroborate(el_a: dict, el_b: dict, eps: float,
+                rho: float) -> np.ndarray:
     """T1. Which of A's elements have a matching element of B.
 
     A match has the SAME dir -- element normals are axis-aligned by construction
     (graph_walls.DIRS) and the frame change is a pure translation, so the §4
     angle condition is an equality and is tested as one -- and a midpoint within
-    `eps`. B's elements must already be in A's frame.
+    TWO tolerances, split across and along the face (v0.5):
 
-    Bucketed on an eps-sized lattice so the test is local: a match can only lie
-    in the 3x3 block of buckets around A's own. Only elements of B's FACES are
-    passed in by the caller (D1); B's unclassified elements, its parked robots
-    among them, are not B's evidence of a wall.
+        |(m' - m) . n| <= eps      across, eps = rho(1 + sqrt2/2) = 0.1707 m
+        |(m' - m) . t| <= rho/2    along,  t = (-n_y, n_x), rho/2 = 0.05 m
+
+    both inclusive, with a 1e-9 m tolerance. A single Euclidean eps reached the
+    NEXT element along the face, rho = 0.1 m away, so corroboration ran one
+    element past the end of B's coverage; the across tolerance is unchanged and
+    is the one the t1_across diagnostic measured. B's elements must already be
+    in A's frame.
+
+    Bucketed on an eps-sized lattice so the test is local: both tolerances are
+    at most eps, so a match can only lie in the 3x3 block of buckets around A's
+    own. Only elements of B's FACES are passed in by the caller (D1); B's
+    unclassified elements, its parked robots among them, are not B's evidence of
+    a wall.
     """
     out = np.zeros(el_a['n'], dtype=bool)
     if el_a['n'] == 0 or el_b['n'] == 0:
@@ -188,17 +200,20 @@ def corroborate(el_a: dict, el_b: dict, eps: float) -> np.ndarray:
 
     ax = np.floor(el_a['x'] / eps).astype(np.int64)
     ay = np.floor(el_a['y'] / eps).astype(np.int64)
-    eps2 = eps * eps
+    half = 0.5 * rho                      # the along tolerance, v0.5
     for i in range(el_a['n']):
         d = int(el_a['dir'][i])
         xi, yi = el_a['x'][i], el_a['y'][i]
+        nx, ny = el_a['nx'][i], el_a['ny'][i]
+        tx, ty = -ny, nx
         hit = False
         for ddx in (-1, 0, 1):
             for ddy in (-1, 0, 1):
                 for j in table.get((d, int(ax[i]) + ddx, int(ay[i]) + ddy), ()):
                     dx = el_b['x'][j] - xi
                     dy = el_b['y'][j] - yi
-                    if dx * dx + dy * dy <= eps2 + 1e-12:
+                    if (abs(dx * nx + dy * ny) <= eps + T1_TOL_M
+                            and abs(dx * tx + dy * ty) <= half + T1_TOL_M):
                         hit = True
                         break
                 if hit:
@@ -462,7 +477,7 @@ def classify(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict, rays_in_a: dict,
     t2 = bool(t2 or skip_t1)
 
     corr = (np.zeros(el_a['n'], dtype=bool) if skip_t1
-            else corroborate(el_a, el_b_in_a, eps))
+            else corroborate(el_a, el_b_in_a, eps, rho))
     out = {
         'assigned': seg_of_a >= 0,
         'seg_of': seg_of_a,

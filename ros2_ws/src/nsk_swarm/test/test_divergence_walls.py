@@ -57,9 +57,13 @@ visibly not this.
                                                             t2 on,
                                                             NOT_CORROBORATED
                                                             with it off
-  V3   the two shares                                       7 of 12 corroborate
-                                                            (eps reaches one
-                                                            column past B)
+  V3   the two shares                                       6 of 12 corroborate
+                                                            (v0.5: the along
+                                                            rule stops at the
+                                                            end of B's cover)
+  V3b  the same, B shifted 0.05 m along the face            7 of 12, the end
+                                                            element matching at
+                                                            exactly rho/2
   V4   the measure with no ray set at all                   rays=None is fine
   V5   per face, two lengths                                1.2 m not
                                                             corroborated
@@ -396,8 +400,26 @@ def test_v04_shares_are_two_and_sum_to_one():
                ('corroborated', 'not_corroborated', 'unobserved',
                 'contradicted')) == {'corroborated', 'not_corroborated'}
     assert s['corroborated'] + s['not_corroborated'] == pytest.approx(1.0)
-    # 7 of 12, not 6: T1 reaches eps = 0.171 m, so A's element at x = 0.6 is
-    # matched by B's last one at x = 0.5, and only x >= 0.7 is out of reach.
+    # 6 of 12 under v0.5. The along tolerance is rho/2 = 0.05 m, so A's element
+    # at x = 0.6 is NOT matched by B's last one at x = 0.5: that is a whole
+    # element away. Under the v0.4 Euclidean eps it was, and corroboration ran
+    # one element past the end of B's coverage.
+    assert (s['n_corroborated'], s['n_not_corroborated']) == (6, 6)
+
+
+def test_v05_half_overlapping_end_element_still_matches():
+    """The same wall with B shifted half an element along the face.
+
+    B's elements now sit at x = 0.05 .. 0.55, so every A element from 0.0 to
+    0.6 has one within rho/2 = 0.05 m along the face -- the end one at 0.6 by
+    exactly the tolerance, which is inclusive. 0.7 is 0.15 m away and is not.
+    Seven match, which is the case the along rule must still admit: an element
+    half-overlapping the end of B's coverage is corroborated, one clear of it
+    is not.
+    """
+    a = side(wall_grid())
+    el_b = b_faces(wall_grid(h=12, w=6), offset=(0.05, 0.0))
+    s = dw.shares(run(a, el_b, rays(), t2=False))
     assert (s['n_corroborated'], s['n_not_corroborated']) == (7, 5)
 
 
