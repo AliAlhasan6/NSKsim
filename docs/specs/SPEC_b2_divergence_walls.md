@@ -1,12 +1,12 @@
-# SPEC — B2 divergence on walls (v0.5, draft)
+# SPEC — B2 divergence on walls (v0.6, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
 diagnostic. v0.4: T2 leaves the measure under §7's fallback (C0 failed under
 v0.3); v0.5 splits T1's distance test across and along the face. Sections 1–8
-are decided. Section 9 (pre-registrations) is a DRAFT: nothing in it is
-registered until Ali accepts it and it is committed. No code is written until
-the stop-point questions in §11 are answered.
+are decided. v0.6: P3, P4 and P6 registered on 6 Oct 2026, before any share was
+computed, except the four A = k0 cut1200 values seen in t1_across. No code is
+written until the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -47,8 +47,8 @@ For robot K in 0–4 and cut C in {60, 120, 240, 1200} s:
 | Rays | robot K's scans in `experiments/logs/b2maps/b2maps_k{K}_cut{C}_gated_slamin` |
 
 Robot K's map comes from run K, in which robot K explores and the other four stay
-parked. A pair (A, B) therefore compares the explorers of two different runs, at the
-same cut.
+parked. A pair (A, B) therefore compares the explorers of two different runs. A
+pair may take A and B at different cuts; P3 uses A at cut1200.
 
 **Common frame.** Spawn registration from `DOT_POSES` at `08617b2`: translation only,
 yaw 0, given by design and never fitted. With each map frame anchored at its robot's
@@ -238,10 +238,11 @@ wall surface in `knowledge_world.sdf` at `08617b2` is reported. Each contradicte
 element is located against truth as well: on a real wall (B's evidence is wrong) or in
 open space (A's face is spurious).
 
-## 9. Pre-registrations — DRAFT, not registered
+## 9. Pre-registrations
 
-Candidates only. Each becomes registered when Ali accepts it and it is committed,
-and is never reworded afterwards.
+P3, P4 and P6 are REGISTERED: accepted and committed on 6 Oct 2026, and never
+reworded afterwards. P1, P2 and P5 are void, kept as a record of what was tried,
+not as live predictions.
 
 - **P1. VOID (v0.4).** C0 is at most 1 % of `L_A` on every map at `theta_g = 30°`.
   Void because it was tested and failed: 0/20 under v0.1, 4/20 under v0.3. It is
@@ -249,20 +250,23 @@ and is never reworded afterwards.
 - **P2. VOID (v0.4).** Same world at full coverage: contradicted share at most 1 %
   for every ordered pair at cut1200. Void because the contradicted share is no
   longer measured.
-- **P3.** Unobserved share non-increasing with cut, for every ordered pair. A rise of
-  any size counts as a failure and is shown. Note: `L_A` grows with the cut, so this
-  is a prediction that can fail, not an identity. A variant with A held at cut1200 is
-  reported alongside.
-- **P4.** At least 95 % of corroborated length lies within `eps` of a world wall
-  surface, for every pair at every cut.
+- **P3. REGISTERED 6 Oct 2026.** Convergence, A held at cut1200: for every ordered
+  pair, the not-corroborated share of A's cut1200 walls is non-increasing as B's
+  cut goes 60 → 120 → 240 → 1200. A rise of any size at any step counts as a
+  failure and is shown. For A = k0, the value at B's cut1200 was seen. The
+  same-cut series (A and B at the same cut) is reported, not tested.
+- **P4. REGISTERED 6 Oct 2026.** Truth check: for every pair at every cut, at
+  least 95 % of corroborated length lies within eps of a wall surface in
+  knowledge_world.sdf at 08617b2.
 - **P5. VOID (v0.4).** At cut1200, the contradicted share changes by at most
   0.5 pp across `theta_g` from 15° to 45°, for every pair, so the result does not
   hinge on 30°. Void on two counts: the contradicted share is no longer measured,
   and the sweep it is stated over is not even monotone under v0.3 (8/20 maps).
-
-P3 and P4 are about the unobserved and corroborated shares, so they survive T2's
-removal in substance but not in wording: P3 names a share that is now the whole
-complement of T1. Both are left for redrafting and neither is registered.
+- **P6. REGISTERED 6 Oct 2026.** Same world at full coverage: for each of the 16
+  ordered pairs with A ≠ k0, the corroborated share at cut1200 (A and B both at
+  cut1200) is at least 90 %. The four pairs with A = k0 were seen in the
+  t1_across diagnostic (93.8–94.3 %); they are reported, labelled seen, and not
+  part of the test. The 90 % is informed by them.
 
 ## 10. Open, not decided
 
