@@ -50,6 +50,16 @@ visibly not this.
                                                             the two corners
                                                             touch
   S2   supercover of an axis-aligned segment                exactly 4 cells
+  C1   a pair at two different cuts (§2)                     runs; cut_A 1200,
+                                                             cut_B 60, and no
+                                                             row has a bare
+                                                             `cut`
+  C2   a same-cut pair                                       no bare `cut`;
+                                                             shares and
+                                                             per_face equal the
+                                                             direct call
+  C3   the cut is bookkeeping, the spawn is geometry         1.0 / 0.167 / 0.0
+                                                             at 0, 1 and 2 m
   V1   the module default (v0.4)                            t2 off, two
                                                             classes, nothing
                                                             contradicted
@@ -450,6 +460,77 @@ def test_v04_deep_share_is_a_t2_output():
     r = _at_element_0(0.50, 1.0, 1.0)
     assert dw.deep_share(run(a, no_faces(), r, t2=True)) == pytest.approx(2 / 3)
     assert dw.deep_share(run(a, no_faces(), r, t2=False)) == 0.0
+
+
+# ──────────────────── a pair, and its two cuts (§2) ──────────────────────────
+
+def fake_side(grid, stem='b2maps_kX_cutY_gated_extfix_robotX'):
+    """A side shaped like load_side's output, built from a grid.
+
+    pair_row reads no file, so a hand-built side is all it needs: this is what
+    lets a pair be tested where there is no corpus.
+    """
+    s = side(grid)
+    return {'stem': stem, 'el': s['el'], 'seg_of': s['seg_of'],
+            'grid': grid, 'rho': s['rho'], 'origin': s['origin'],
+            'shape': s['shape'],
+            'segments': [{'p0': [0.0, 0.55], 'p1': [1.1, 0.55]}]}
+
+
+def test_pair_row_accepts_two_different_cuts():
+    """§2: a pair may take A and B at different cuts. P3 needs exactly this.
+
+    Before this change run_pair refused outright -- "a pair is one cut" -- and
+    P3, which holds A at cut1200 and walks B's cut, could not have been run.
+    """
+    a = fake_side(wall_grid(), 'b2maps_k0_cut1200_gated_extfix_robot0')
+    b = fake_side(wall_grid(h=12, w=6), 'b2maps_k1_cut60_gated_extfix_robot1')
+    row = dw.pair_row(a, b, (0.0, 0.0), (0.0, 0.0), 1200, 60)
+    assert (row['cut_A'], row['cut_B']) == (1200, 60)
+    assert 'cut' not in row              # no row carries a bare cut
+    assert row['shares']['corroborated'] + \
+        row['shares']['not_corroborated'] == pytest.approx(1.0)
+    assert row['shares']['n_corroborated'] == 6
+
+
+def test_pair_row_same_cut_computes_what_it_computed_before():
+    """A same-cut pair's NUMBERS are untouched; its key shape deliberately is not.
+
+    The row reports its cut as cut_A and cut_B like every other row, and
+    carries no bare `cut` -- a key present on some rows and absent on others is
+    a trap for whoever reads the two series side by side. What must not move is
+    the computation, so shares and per_face are checked against what classify,
+    shares and per_face give directly: all run_pair ever did with them.
+    """
+    a = fake_side(wall_grid(), 'b2maps_k0_cut240_gated_extfix_robot0')
+    b = fake_side(wall_grid(h=12, w=6), 'b2maps_k1_cut240_gated_extfix_robot1')
+    row = dw.pair_row(a, b, (0.0, 0.0), (0.0, 0.0), 240, 240)
+    assert row['cut_A'] == row['cut_B'] == 240
+    assert 'cut' not in row
+
+    el_b = dict(dw.face_elements_only(b['el'], b['seg_of']))
+    res = dw.classify(a['el'], a['seg_of'], el_b, None, a['rho'], a['origin'],
+                      a['shape'])
+    assert row['shares'] == dw.shares(res)
+    assert row['per_face'] == dw.per_face(res, 1)
+
+
+def test_pair_row_carries_the_spawn_difference():
+    """The two cuts are bookkeeping; the frame change is still the spawns.
+
+    B displaced clear of A and declared at another cut must not corroborate:
+    the cut does not enter the geometry, and the spawn difference does. The
+    wall is 1.2 m long, so the displacement has to exceed that -- at 1.0 m the
+    two still overlap by 0.2 m and 2 of 12 elements match.
+    """
+    a = fake_side(wall_grid(), 'b2maps_k0_cut1200_gated_extfix_robot0')
+    b = fake_side(wall_grid(), 'b2maps_k1_cut60_gated_extfix_robot1')
+    near = dw.pair_row(a, b, (0.0, 0.0), (0.0, 0.0), 1200, 60)
+    overlap = dw.pair_row(a, b, (0.0, 0.0), (1.0, 0.0), 1200, 60)
+    clear = dw.pair_row(a, b, (0.0, 0.0), (2.0, 0.0), 1200, 60)
+    assert near['shares']['corroborated'] == 1.0
+    assert overlap['shares']['n_corroborated'] == 2
+    assert clear['shares']['corroborated'] == 0.0
 
 
 # ──────────────────────────── the named breaks ───────────────────────────────

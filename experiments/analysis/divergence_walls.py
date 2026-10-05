@@ -690,9 +690,58 @@ def face_elements_only(el: dict, seg_of: np.ndarray) -> dict:
     return out
 
 
+def pair_row(a: dict, b: dict, spawn_a, spawn_b, cut_a: int, cut_b: int,
+             rays: dict | None = None, *, flip: bool = False,
+             theta_g_deg: float = THETA_G_DEG, t2: bool = T2_DEFAULT) -> dict:
+    """The computation half of a pair: two loaded sides in, one row out.
+
+    Reads no file and resolves no spawn, so it can be exercised on hand-built
+    sides. `run_pair` is this function plus the corpus I/O.
+
+    A AND B MAY BE AT DIFFERENT CUTS (§2). Nothing in the geometry cares: the
+    frame change is a translation between two spawns, and the cut only decides
+    which map and which rays each side brought. P3 is stated over A held at
+    cut1200 while B's cut moves, so the pair has to allow it.
+
+    EVERY row carries `cut_A` and `cut_B`, and no row carries a bare `cut`.
+    A single `cut` was right when every pair was same-cut and is a trap now: it
+    would be present on some rows and absent on others, so a reader could take
+    it for granted on the same-cut series and silently get nothing on P3's.
+    One shape for both is worth the broken key.
+    """
+    bx, by = to_frame_a(b['el']['x'], b['el']['y'], spawn_b, spawn_a, flip=flip)
+    el_b = dict(face_elements_only(b['el'], b['seg_of']))
+    el_b['x'], el_b['y'] = bx[b['seg_of'] >= 0], by[b['seg_of'] >= 0]
+
+    t0 = time.monotonic()
+    res = classify(a['el'], a['seg_of'], el_b, rays, a['rho'], a['origin'],
+                   a['shape'], theta_g_deg=theta_g_deg, t2=t2)
+    seconds = time.monotonic() - t0
+    row = {
+        'A': a['stem'], 'B': b['stem'],
+        'cut_A': cut_a, 'cut_B': cut_b, 't2': bool(t2),
+        'shares': shares(res),
+        'per_face': per_face(res, len(a['segments'])),
+        'seconds': seconds,
+    }
+    if t2:
+        row.update({
+            'contradicted': contradicted_detail(res, a['segments']),
+            'deep_share': deep_share(res),
+            'theta_sweep': theta_sweep(a['el'], a['seg_of'], el_b, rays,
+                                       a['rho'], a['origin'], a['shape']),
+        })
+    return row
+
+
 def run_pair(a_stem: str, b_stem: str, *, flip: bool = False,
              theta_g_deg: float = THETA_G_DEG, t2: bool = T2_DEFAULT) -> dict:
-    """One ordered pair at one cut, end to end. Reads the corpus.
+    """One ordered pair, end to end. Reads the corpus.
+
+    A and B need not be at the same cut (§2). The refusal that used to stand
+    here -- "a pair is one cut" -- was written when every comparison was
+    same-cut; P3 holds A at cut1200 and walks B's cut, so it had to go. B's
+    rays, when T2 asks for them, come from B's OWN cut.
 
     With `t2` off (the v0.4 default) the row carries the two measure classes and
     nothing else, and no ray set is built: the rays exist only for T2, and
@@ -707,8 +756,6 @@ def run_pair(a_stem: str, b_stem: str, *, flip: bool = False,
     b = load_side(b_stem)
     ka, cut_a = gw._k_and_cut(a_stem, 'the pair needs the robot and the cut')
     kb, cut_b = gw._k_and_cut(b_stem, 'the pair needs the robot and the cut')
-    if cut_a != cut_b:
-        die(f'{a_stem} is cut{cut_a} and {b_stem} is cut{cut_b}; a pair is one cut')
 
     # Inside the function, not at import: this shells out to git. rd.SPAWN_REV
     # is 08617b2, the b2maps era -- bag_overlap's own default is the b16 ring
@@ -717,29 +764,8 @@ def run_pair(a_stem: str, b_stem: str, *, flip: bool = False,
     spawn_a, spawn_b = spawn[ka], spawn[kb]
     rays = (rays_in_frame(dk.admitted_rays(b_stem, kb, cut_b),
                           spawn_b, spawn_a, flip=flip) if t2 else None)
-
-    bx, by = to_frame_a(b['el']['x'], b['el']['y'], spawn_b, spawn_a, flip=flip)
-    el_b = dict(face_elements_only(b['el'], b['seg_of']))
-    el_b['x'], el_b['y'] = bx[b['seg_of'] >= 0], by[b['seg_of'] >= 0]
-
-    t0 = time.monotonic()
-    res = classify(a['el'], a['seg_of'], el_b, rays, a['rho'], a['origin'],
-                   a['shape'], theta_g_deg=theta_g_deg, t2=t2)
-    seconds = time.monotonic() - t0
-    row = {
-        'A': a_stem, 'B': b_stem, 'cut': cut_a, 't2': bool(t2),
-        'shares': shares(res),
-        'per_face': per_face(res, len(a['segments'])),
-        'seconds': seconds,
-    }
-    if t2:
-        row.update({
-            'contradicted': contradicted_detail(res, a['segments']),
-            'deep_share': deep_share(res),
-            'theta_sweep': theta_sweep(a['el'], a['seg_of'], el_b, rays,
-                                       a['rho'], a['origin'], a['shape']),
-        })
-    return row
+    return pair_row(a, b, spawn_a, spawn_b, cut_a, cut_b, rays,
+                    flip=flip, theta_g_deg=theta_g_deg, t2=t2)
 
 
 def write_result(payload: dict, out_dir: Path = OUT_DIR_DEFAULT) -> Path:
