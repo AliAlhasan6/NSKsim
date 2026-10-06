@@ -71,6 +71,9 @@ visibly not this.
                                                              0.25, unweighable_B
                                                              0.5
   V8   A against itself                                      w = 0, W = 0
+  G2   a segment count mismatch                              a verdict, not a
+                                                             crash; diff None
+                                                             on a mismatch
   V1   the module default (v0.4)                            t2 off, two
                                                             classes, nothing
                                                             contradicted
@@ -689,6 +692,36 @@ def test_o1_fields_are_absent_without_histograms():
     a = side(wall_grid())
     s = dw.shares(run(a, b_faces(wall_grid()), rays(), t2=False))
     assert 'W' not in s and 'w_mean' not in s and 'unweighable_A' not in s
+
+
+def test_g2_a_segment_count_mismatch_is_a_verdict_not_a_crash():
+    """G2: the guard reports a count mismatch; it does not raise on one.
+
+    The survey stage has to get through all 20 maps, so the guard returns a
+    verdict and `load_side` is what turns a bad one into a refusal. A mismatch
+    also has no endpoint difference to report, which is why that field is None
+    rather than zero -- zero would read as a perfect match.
+    """
+    saved = [{'p0': [0.0, 0.0], 'p1': [1.0, 0.0]},
+             {'p0': [0.0, 1.0], 'p1': [1.0, 1.0]}]
+    recomputed = [{'p0': [0.0, 0.0], 'p1': [1.0, 0.0]}]
+    g = dw.segment_guard(saved, recomputed)
+    assert g['ok'] is False
+    assert (g['n_saved'], g['n_recomputed']) == (2, 1)
+    assert g['max_endpoint_diff_m'] is None
+    assert '2 segments' in g['message'] and '1' in g['message']
+
+    same = dw.segment_guard(saved, saved)
+    assert same['ok'] is True
+    assert same['max_endpoint_diff_m'] == pytest.approx(0.0)
+    assert same['message'] is None
+
+    moved = [{'p0': [0.0, 0.0], 'p1': [1.0, 0.0]},
+             {'p0': [0.0, 1.0], 'p1': [1.0, 1.003]}]
+    off = dw.segment_guard(saved, moved)
+    assert off['ok'] is False
+    assert off['max_endpoint_diff_m'] == pytest.approx(0.003)
+    assert 'tolerance' in off['message']
 
 
 # ──────────────────────────── the named breaks ───────────────────────────────

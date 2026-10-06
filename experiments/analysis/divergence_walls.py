@@ -60,6 +60,9 @@ THETA_G_SWEEP = (15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0)   # §6's last row
 MIN_RUNNING_ON = 2                 # condition 4's floor (v0.3)
 T1_TOL_M = 1e-9                    # both T1 tolerances are inclusive (v0.5)
 G1_TOL_M = 0.15                    # §7 G1
+SEGMENT_GUARD_TOL_M = 1e-6         # G2: saved vs recomputed segment ends
+CUTS = (60, 120, 240, 1200)
+CORPUS_VARIANT = '_gated_extfix'   # the corpus S3 and S4 run on
 C0_LIMIT = 0.01                    # §7 C0, 1 % of L_A
 
 # The three classes, in the order the tests run (§4).
@@ -812,7 +815,53 @@ def rays_in_frame(rays: dict, spawn_b, spawn_a, flip: bool = False) -> dict:
             'free_len': rays['free_len']}
 
 
-def load_side(stem: str) -> dict:
+def corpus_stems(variant: str = CORPUS_VARIANT) -> list[str]:
+    """The 20 map stems S3 and S4 run on, built the variant-aware way.
+
+    graph_walls.corpus_stems() gives the PLAIN corpus; this is the gated,
+    extent-fixed one, and the variant token is a parameter rather than baked in
+    so a different build can be surveyed without editing the caller.
+    """
+    return [f'{gw.RUN_PREFIX}_k{k}_cut{c}{variant}_robot{k}'
+            for k in range(5) for c in CUTS]
+
+
+def segment_guard(saved_segments, recomputed_segments,
+                  tol: float = SEGMENT_GUARD_TOL_M) -> dict:
+    """Do the JSON's segments and the recomputed ones line up, index for index?
+
+    O1 reads `bearing_hist` off the SAVED json and everything else off the
+    recompute, so segment i has to be the same face in both or the weight is
+    taken from the wrong wall. Endpoints only -- this never looks inside `obs`.
+
+    Returns a verdict rather than refusing, so a survey can measure the margin
+    on a corpus that passes; `load_side` is what turns a failure into a refusal.
+    """
+    n_saved, n_recomputed = len(saved_segments), len(recomputed_segments)
+    out = {'ok': False, 'n_saved': n_saved, 'n_recomputed': n_recomputed,
+           'max_endpoint_diff_m': None, 'tol_m': tol, 'message': None}
+    if n_saved != n_recomputed:
+        out['message'] = (f'the JSON has {n_saved} segments and the recompute '
+                          f'{n_recomputed}; bearing_hist cannot be matched to '
+                          'a segment by index')
+        return out
+    worst, worst_i = 0.0, None
+    for i, (sv, rc) in enumerate(zip(saved_segments, recomputed_segments)):
+        for end in ('p0', 'p1'):
+            d = math.hypot(sv[end][0] - rc[end][0], sv[end][1] - rc[end][1])
+            if d > worst:
+                worst, worst_i = d, i
+    out['max_endpoint_diff_m'] = worst
+    out['ok'] = worst <= tol
+    if not out['ok']:
+        out['message'] = (f'segment {worst_i} differs between the JSON and the '
+                          f'recompute by {worst:.3e} m, over the {tol:.0e} m '
+                          'tolerance, so bearing_hist would be read off the '
+                          'wrong face')
+    return out
+
+
+def load_side(stem: str, *, strict: bool = True) -> dict:
     """One robot's map, elements and faces, with §3's two conditions enforced.
 
     Elements are RECOMPUTED, never read: the JSON stores segments only. `g` comes
@@ -837,25 +886,18 @@ def load_side(stem: str) -> dict:
     # does not. The two segment lists must therefore line up, and that is
     # checked rather than assumed -- same count, same endpoints.
     saved_segs = saved.get('segments', [])
-    hist = None
+    guard, hist = None, None
     if saved_segs and all('obs' in s and 'bearing_hist' in s['obs']
                           for s in saved_segs):
-        if len(saved_segs) != len(graph['segments']):
-            die(f'{stem}: the JSON has {len(saved_segs)} segments and the '
-                f'recompute {len(graph["segments"])}; bearing_hist cannot be '
-                'matched to a segment by index')
-        for i, (sv, rc) in enumerate(zip(saved_segs, graph['segments'])):
-            if (abs(sv['p0'][0] - rc['p0'][0]) > 1e-6
-                    or abs(sv['p0'][1] - rc['p0'][1]) > 1e-6
-                    or abs(sv['p1'][0] - rc['p1'][0]) > 1e-6
-                    or abs(sv['p1'][1] - rc['p1'][1]) > 1e-6):
-                die(f'{stem}: segment {i} differs between the JSON and the '
-                    'recompute, so bearing_hist would be read off the wrong '
-                    'face')
-        hist = [s['obs']['bearing_hist'] for s in saved_segs]
+        guard = segment_guard(saved_segs, graph['segments'])
+        if not guard['ok']:
+            if strict:
+                die(f'{stem}: {guard["message"]}')
+        else:
+            hist = [s['obs']['bearing_hist'] for s in saved_segs]
 
     return {'stem': stem, 'graph': graph, 'el': el, 'seg_of': seg_of,
-            'bearing_hist': hist,
+            'bearing_hist': hist, 'segment_guard': guard,
             'grid': grid, 'rho': graph['resolution'],
             'origin': tuple(graph['origin']), 'shape': grid.shape,
             'segments': graph['segments']}
@@ -962,10 +1004,86 @@ def write_result(payload: dict, out_dir: Path = OUT_DIR_DEFAULT) -> Path:
     return path
 
 
+def _git(*args) -> str:
+    """Read-only git, for provenance. Empty string if git is not there."""
+    import subprocess                                      # noqa: PLC0415
+    try:
+        return subprocess.run(['git', '-C', str(REPO_ROOT), *args],
+                              capture_output=True, text=True,
+                              timeout=20).stdout.strip()
+    except Exception:
+        return ''
+
+
+def run_g2(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+           ) -> dict:
+    """G2: does the segment guard hold on the corpus, and by what margin.
+
+    Survey only. It calls load_side and reads the verdict the guard already
+    produced -- it never touches `obs`, never counts an empty histogram, and
+    never calls the corroboration or weighting code. What it records per map is
+    the verdict, the two segment counts, the largest endpoint difference and
+    the tolerance that difference was judged against.
+
+    `strict=False`, so a map whose guard fails is measured rather than fatal;
+    anything else that refuses -- a missing JSON, a sha256 mismatch -- is caught
+    per map and recorded, and the survey goes on to the next one.
+    """
+    import contextlib                                      # noqa: PLC0415
+    import io                                              # noqa: PLC0415
+
+    stems = corpus_stems(variant)
+    rows, n_pass = [], 0
+    for stem in stems:
+        row = {'map': stem, 'pass': False, 'n_saved': None,
+               'n_recomputed': None, 'max_endpoint_diff_m': None,
+               'tol_m': SEGMENT_GUARD_TOL_M, 'error': None}
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                side = load_side(stem, strict=False)
+        except SystemExit:
+            row['error'] = err.getvalue().strip() or 'refused, no message'
+        else:
+            g = side.get('segment_guard')
+            if g is None:
+                row['error'] = 'the JSON carries no per-segment obs to guard'
+            else:
+                row.update({'pass': bool(g['ok']), 'n_saved': g['n_saved'],
+                            'n_recomputed': g['n_recomputed'],
+                            'max_endpoint_diff_m': g['max_endpoint_diff_m'],
+                            'tol_m': g['tol_m'], 'error': g['message']})
+        n_pass += bool(row['pass'])
+        d = row['max_endpoint_diff_m']
+        print(f'{stem:<42}{"PASS" if row["pass"] else "FAIL":>6}'
+              f'{str(row["n_saved"]):>5}/{str(row["n_recomputed"]):<5}'
+              f'{(f"{d:.3e}" if d is not None else "-"):>12} m'
+              + (f'   {row["error"]}' if row['error'] else ''), flush=True)
+    print(f'G2: {n_pass}/{len(stems)} pass')
+
+    payload = {'stage': 'g2', 'head': _git('rev-parse', 'HEAD'),
+               'tree_dirty': bool(_git('status', '--porcelain')),
+               'variant': variant, 'tol_m': SEGMENT_GUARD_TOL_M,
+               'n_pass': n_pass, 'of': len(stems), 'maps': rows,
+               'note': 'segment endpoints only; no obs, no histogram contents, '
+                       'no corroboration, no weights'}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    path = out_dir / f'g2_guard_{stamp}.json'
+    if path.exists():
+        die(f'{path} exists; this tool never overwrites a result')
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(f'written, overwriting nothing: {path}')
+    return payload
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--a', required=True, help='A\'s map stem')
-    ap.add_argument('--b', required=True, help='B\'s map stem')
+    ap.add_argument('--stage', choices=('g2',), default=None,
+                    help='run a corpus stage instead of one pair. g2 surveys '
+                         'the segment guard on the 20 maps')
+    ap.add_argument('--a', help='A\'s map stem')
+    ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
     ap.add_argument('--break', dest='brk', choices=('frame-sign',), default=None,
                     help='X1: run with the frame sign flipped')
@@ -975,6 +1093,12 @@ def main() -> int:
                          'fallback, after C0 failed')
     ap.add_argument('--out-dir', type=Path, default=OUT_DIR_DEFAULT)
     args = ap.parse_args()
+
+    if args.stage == 'g2':
+        run_g2(args.out_dir)
+        return 0
+    if not (args.a and args.b):
+        ap.error('--a and --b are required unless --stage is given')
 
     row = run_pair(args.a, args.b, flip=args.brk == 'frame-sign',
                    theta_g_deg=args.theta_g, t2=args.t2)
