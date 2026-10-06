@@ -318,6 +318,7 @@ def viewpoint_weights(seg_of_a: np.ndarray, el_b: dict, corr: np.ndarray,
     """
     n = seg_of_a.size
     w = np.full(n, np.nan)
+    seg_b_of = np.full(n, -1, dtype=np.int64)
     un_a = np.zeros(n, dtype=bool)
     un_b = np.zeros(n, dtype=bool)
     seg_b = el_b.get('seg') if el_b else None
@@ -331,6 +332,7 @@ def viewpoint_weights(seg_of_a: np.ndarray, el_b: dict, corr: np.ndarray,
         if sb < 0 or sb >= len(hist_b):
             un_b[i] = True
             continue
+        seg_b_of[i] = sb
         val = circular_emd_deg(hist_a[sa], hist_b[sb])
         if val is None:
             if np.sum(hist_a[sa]) <= 0:
@@ -339,7 +341,81 @@ def viewpoint_weights(seg_of_a: np.ndarray, el_b: dict, corr: np.ndarray,
                 un_b[i] = True
             continue
         w[i] = val / 180.0
-    return {'w': w, 'unweighable_A': un_a, 'unweighable_B': un_b}
+    return {'w': w, 'seg_b_of': seg_b_of,
+            'unweighable_A': un_a, 'unweighable_B': un_b}
+
+
+def segment_dirs(seg_of: np.ndarray, el: dict, segments: list) -> np.ndarray:
+    """The `dir` of each segment, as P7 defines it (spec v0.9).
+
+    "A segment's direction is the T1 element dir of the elements assigned to it,
+    one of the four axis-aligned normals; if they differ, the commonest, ties
+    going to the dir nearest the segment's fitted normal."
+
+    The tie rule is what makes this total. `bincount().argmax()` would break a
+    tie by dir index, which is an accident of the order DIRS happens to be
+    written in; the fitted normal is a property of the face. Nearest means the
+    largest dot product with it. A segment with no elements is -1, and one with
+    no fitted normal falls back to the lowest tied dir, which cannot happen on a
+    real segment but keeps the function total.
+    """
+    out = np.full(len(segments), -1, dtype=np.int64)
+    dir_nx = np.array([d[2] for d in gw.DIRS], dtype=float)
+    dir_ny = np.array([d[3] for d in gw.DIRS], dtype=float)
+    for s in range(len(segments)):
+        d = el['dir'][seg_of == s].astype(np.int64)
+        if not d.size:
+            continue
+        counts = np.bincount(d, minlength=len(gw.DIRS))
+        tied = np.nonzero(counts == counts.max())[0]
+        if tied.size == 1:
+            out[s] = int(tied[0])
+            continue
+        normal = segments[s].get('normal')
+        if normal is None:
+            out[s] = int(tied.min())
+        else:
+            dots = (dir_nx[tied] * float(normal[0])
+                    + dir_ny[tied] * float(normal[1]))
+            out[s] = int(tied[int(np.argmax(dots))])
+    return out
+
+
+def null_weights(seg_of_a: np.ndarray, weights: dict, hist_a, hist_b,
+                 dirs_b: np.ndarray) -> np.ndarray:
+    """P7's null: `w` measured against B's OTHER same-direction segments.
+
+    For a weighable corroborated element, the mean of `W1(p, q_S) / 180°` over
+    every B segment S with the same dir as S_B, not S_B itself, and a non-empty
+    histogram. NaN where no such S exists -- that element is outside E7, which
+    is a different thing from a null of zero.
+
+    Memoised on (S_A, S_B): the answer depends on the pair of segments and not
+    on which of their elements asked.
+    """
+    n = seg_of_a.size
+    out = np.full(n, np.nan)
+    cache: dict[tuple[int, int], float] = {}
+    w = weights['w']
+    seg_b_of = weights['seg_b_of']
+    for i in np.nonzero(~np.isnan(w))[0]:
+        sa, sb = int(seg_of_a[i]), int(seg_b_of[i])
+        if sb < 0:
+            continue
+        key = (sa, sb)
+        if key not in cache:
+            vals = []
+            for s in range(len(hist_b)):
+                if s == sb or dirs_b[s] != dirs_b[sb]:
+                    continue
+                if np.sum(hist_b[s]) <= 0:
+                    continue
+                v = circular_emd_deg(hist_a[sa], hist_b[s])
+                if v is not None:
+                    vals.append(v / 180.0)
+            cache[key] = float(np.mean(vals)) if vals else float('nan')
+        out[i] = cache[key]
+    return out
 
 
 # ─────────────────────────────── the walk ────────────────────────────────────
@@ -1077,11 +1153,177 @@ def run_g2(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
     return payload
 
 
+P7_MIN_PAIRS, P8_MIN_PAIRS = 18, 16
+
+
+def _side_classify(a: dict, b: dict, spawn_a, spawn_b):
+    """classify for one ordered pair, exactly as pair_row builds it."""
+    keep_b = b['seg_of'] >= 0
+    bx, by = to_frame_a(b['el']['x'], b['el']['y'], spawn_b, spawn_a)
+    el_b = dict(face_elements_only(b['el'], b['seg_of']))
+    el_b['x'], el_b['y'] = bx[keep_b], by[keep_b]
+    el_b['seg'] = b['seg_of'][keep_b]
+    res = classify(a['el'], a['seg_of'], el_b, None, a['rho'], a['origin'],
+                   a['shape'], hist_a=a.get('bearing_hist'),
+                   hist_b=b.get('bearing_hist'))
+    return res, shares(res)
+
+
+def _reported(sh: dict, n_e7: int | None = None) -> dict:
+    keys = ('W', 'w_mean', 'w_p10', 'w_p50', 'w_p90', 'unweighable_A',
+            'unweighable_B', 'corroborated', 'n_corroborated', 'n_weighable')
+    out = {k: sh.get(k) for k in keys}
+    if n_e7 is not None:
+        out['n_E7'] = n_e7
+    return out
+
+
+def run_s5(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+           ) -> dict:
+    """S5: G3, then P7 and P8, exactly as registered at spec v0.9.
+
+    Refuses on a dirty tree. A registered prediction evaluated against code that
+    is not in history is not evidence about that code, and the result file would
+    name a commit it was not produced by.
+    """
+    import fit_world_transform as fwt                      # noqa: PLC0415
+    import robot_divergence as rd                          # noqa: PLC0415
+
+    dirty = [ln for ln in _git('status', '--porcelain').splitlines()
+             if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    stems = corpus_stems(variant)
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    sides = {s: load_side(s) for s in stems}
+    by_kc = {}
+    for s in stems:
+        k, c = gw._k_and_cut(s, 'S5 needs the robot and the cut')
+        by_kc[(k, c)] = sides[s]
+    pairs = [(a, b) for a in range(5) for b in range(5) if a != b]
+    out = {'stage': 's5', 'head': head, 'variant': variant,
+           'spec': 'SPEC_b2_divergence_walls v0.9, G3/P7/P8'}
+
+    # ── G3: every map against itself ────────────────────────────────────────
+    g3, g3_fail = [], []
+    for s in stems:
+        side = sides[s]
+        res, sh = _side_classify(side, side, (0.0, 0.0), (0.0, 0.0))
+        w = res['weights']['w'] if res['weights'] else np.array([])
+        good = ~np.isnan(w)
+        worst = float(np.abs(w[good]).max()) if good.any() else 0.0
+        ok = (sh['corroborated'] == 1.0) and worst == 0.0
+        row = {'map': s, 'C': sh['corroborated'], 'max_abs_w': worst,
+               'n_weighable': int(good.sum()), 'holds': ok}
+        g3.append(row)
+        if not ok:
+            g3_fail.append(row)
+        print(f'{s:<42} C {sh["corroborated"]:.4f}  max|w| {worst:.3e}  '
+              f'{"HOLD" if ok else "FAIL"}', flush=True)
+    out['G3'] = {'rows': g3, 'holds': not g3_fail, 'failures': g3_fail}
+    print(f'G3: {len(g3) - len(g3_fail)}/{len(g3)} maps  '
+          f'{"HOLD" if not g3_fail else "FAIL"}')
+    if g3_fail:
+        print('G3 failed, so P7 and P8 are not evaluated in this run.')
+        out['P7'] = out['P8'] = None
+        return _write_s5(out, out_dir)
+
+    # ── P7: w against the same-direction null, both at cut1200 ──────────────
+    print(f'\nP7  A and B at cut1200{"":>6}{"mean w":>10}{"mean w_null":>13}'
+          f'{"|E7|":>7}  verdict')
+    p7_rows, p7_hold = [], 0
+    cached1200 = {}
+    for (a, b) in pairs:
+        A, B = by_kc[(a, 1200)], by_kc[(b, 1200)]
+        res, sh = _side_classify(A, B, spawn[a], spawn[b])
+        dirs_b = segment_dirs(B['seg_of'], B['el'], B['graph']['segments'])
+        wn = null_weights(A['seg_of'], res['weights'], A['bearing_hist'],
+                          B['bearing_hist'], dirs_b)
+        keep = res['assigned'] & res['corroborated']
+        e7 = keep & ~np.isnan(res['weights']['w']) & ~np.isnan(wn)
+        n7 = int(e7.sum())
+        mw = float(res['weights']['w'][e7].mean()) if n7 else None
+        mn = float(wn[e7].mean()) if n7 else None
+        ok = bool(n7 and mw < mn)
+        p7_hold += ok
+        cached1200[(a, b)] = sh
+        p7_rows.append({'A': a, 'B': b, 'n_E7': n7, 'mean_w': mw,
+                        'mean_w_null': mn, 'holds': ok,
+                        'reported': _reported(sh, n7)})
+        print(f'  A=k{a} B=k{b}{"":>12}'
+              + (f'{mw:>10.4f}{mn:>13.4f}' if n7 else f'{"-":>10}{"-":>13}')
+              + f'{n7:>7}  {"HOLD" if ok else "FAIL"}', flush=True)
+    out['P7'] = {'rows': p7_rows, 'n_holding': p7_hold, 'of': len(pairs),
+                 'min_required': P7_MIN_PAIRS, 'holds': p7_hold >= P7_MIN_PAIRS}
+
+    # ── P8: A at cut1200, B at cut1200 against B at cut60 ───────────────────
+    print(f'\nP8  A at cut1200{"":>13}{"w_mean B1200":>14}{"w_mean B60":>12}'
+          f'  verdict')
+    p8_rows, p8_hold = [], 0
+    for (a, b) in pairs:
+        _r60, sh60 = _side_classify(by_kc[(a, 1200)], by_kc[(b, 60)],
+                                    spawn[a], spawn[b])
+        sh1200 = cached1200[(a, b)]
+        m1200, m60 = sh1200.get('w_mean'), sh60.get('w_mean')
+        ok = bool(m1200 is not None and m60 is not None and m1200 < m60)
+        p8_hold += ok
+        p8_rows.append({'A': a, 'B': b, 'w_mean_B1200': m1200,
+                        'w_mean_B60': m60, 'holds': ok,
+                        'reported_B60': _reported(sh60)})
+        print(f'  A=k{a} B=k{b}{"":>12}'
+              + (f'{m1200:>14.4f}' if m1200 is not None else f'{"-":>14}')
+              + (f'{m60:>12.4f}' if m60 is not None else f'{"-":>12}')
+              + f'  {"HOLD" if ok else "FAIL"}', flush=True)
+    out['P8'] = {'rows': p8_rows, 'n_holding': p8_hold, 'of': len(pairs),
+                 'min_required': P8_MIN_PAIRS, 'holds': p8_hold >= P8_MIN_PAIRS}
+
+    # ── reported, not tested ────────────────────────────────────────────────
+    rep = {'A_cut1200_by_B_cut': [], 'same_cut': [], 'empty_histograms': []}
+    for (a, b) in pairs:
+        for c in CUTS:
+            _r, sh = _side_classify(by_kc[(a, 1200)], by_kc[(b, c)],
+                                    spawn[a], spawn[b])
+            rep['A_cut1200_by_B_cut'].append(
+                {'A': a, 'B': b, 'cut_A': 1200, 'cut_B': c, **_reported(sh)})
+            _r2, sh2 = _side_classify(by_kc[(a, c)], by_kc[(b, c)],
+                                      spawn[a], spawn[b])
+            rep['same_cut'].append(
+                {'A': a, 'B': b, 'cut_A': c, 'cut_B': c, **_reported(sh2)})
+    for s in stems:
+        h = sides[s]['bearing_hist'] or []
+        rep['empty_histograms'].append(
+            {'map': s, 'n_segments': len(h),
+             'n_empty': int(sum(1 for x in h if np.sum(x) <= 0))})
+    out['reported'] = rep
+
+    print(f'\nG3: {"HOLD" if not g3_fail else "FAIL"}  {len(g3)}/{len(g3)} maps')
+    print(f'P7: {"HOLD" if out["P7"]["holds"] else "FAIL"}  {p7_hold}/'
+          f'{len(pairs)} pairs, {P7_MIN_PAIRS} required')
+    print(f'P8: {"HOLD" if out["P8"]["holds"] else "FAIL"}  {p8_hold}/'
+          f'{len(pairs)} pairs, {P8_MIN_PAIRS} required')
+    return _write_s5(out, out_dir)
+
+
+def _write_s5(payload: dict, out_dir: Path) -> dict:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    path = out_dir / f's5_viewpoint_{stamp}.json'
+    if path.exists():
+        die(f'{path} exists; this tool never overwrites a result')
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    print(f'written, overwriting nothing: {path}')
+    return payload
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--stage', choices=('g2',), default=None,
+    ap.add_argument('--stage', choices=('g2', 's5'), default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
-                         'the segment guard on the 20 maps')
+                         'the segment guard on the 20 maps; s5 evaluates G3, '
+                         'P7 and P8 on the viewpoint weight')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -1096,6 +1338,9 @@ def main() -> int:
 
     if args.stage == 'g2':
         run_g2(args.out_dir)
+        return 0
+    if args.stage == 's5':
+        run_s5(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')

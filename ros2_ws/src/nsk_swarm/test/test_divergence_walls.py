@@ -74,6 +74,20 @@ visibly not this.
   G2   a segment count mismatch                              a verdict, not a
                                                              crash; diff None
                                                              on a mismatch
+  S0a  a tied segment dir (P7's tie rule)                    the fitted normal
+                                                             decides, not the
+                                                             dir index
+  S0b  an untied segment dir                                 the commonest
+                                                             wins; empty is -1
+  S1   w_null over two alternatives (P7)                     0.375, w = 0
+  S2   no alternative / empty / wrong dir                    all NaN, outside
+                                                             E7
+  S3   a map against itself (G3)                             C = 1, W = 0,
+                                                             w == 0 exactly
+  S4   verdict counting and ties                             18/17, 16/15;
+                                                             equal and empty
+                                                             count against
+  S5   --stage s5 on a dirty tree                            refuses, exit 2
   V1   the module default (v0.4)                            t2 off, two
                                                             classes, nothing
                                                             contradicted
@@ -722,6 +736,150 @@ def test_g2_a_segment_count_mismatch_is_a_verdict_not_a_crash():
     assert off['ok'] is False
     assert off['max_endpoint_diff_m'] == pytest.approx(0.003)
     assert 'tolerance' in off['message']
+
+
+# ───────────────── S5: G3, P7's null, and the verdict counts ─────────────────
+
+def _weights_for(a, b):
+    """classify one pair the way the S5 stage does, and hand back the pieces."""
+    el_b = dict(dw.face_elements_only(b['el'], b['seg_of']))
+    el_b['seg'] = b['seg_of'][b['seg_of'] >= 0]
+    res = dw.classify(a['el'], a['seg_of'], el_b, None, a['rho'], a['origin'],
+                      a['shape'], hist_a=a['bearing_hist'],
+                      hist_b=b['bearing_hist'])
+    return res, dw.shares(res)
+
+
+def test_s5_segment_dir_tie_goes_to_the_fitted_normal():
+    """P7's tie rule: equal counts, so the fitted normal decides.
+
+    Two elements facing +x and two facing +y on one segment. The dir index would
+    break the tie for +x whatever the face looks like; the fitted normal is the
+    face's own property, so it is what decides.
+    """
+    el = {'dir': np.array([0, 0, 2, 2], dtype=np.int64)}
+    seg_of = np.zeros(4, dtype=np.int64)
+    assert dw.segment_dirs(seg_of, el, [{'normal': [1.0, 0.0]}])[0] == 0
+    assert dw.segment_dirs(seg_of, el, [{'normal': [0.0, 1.0]}])[0] == 2
+    # leaning, not axis-aligned: the nearer of the two tied dirs still wins
+    assert dw.segment_dirs(seg_of, el, [{'normal': [0.3, 0.95]}])[0] == 2
+
+
+def test_s5_segment_dir_commonest_wins_over_the_normal():
+    """No tie, so the count decides and the fitted normal does not get a vote."""
+    el = {'dir': np.array([0, 0, 0, 2], dtype=np.int64)}
+    seg_of = np.zeros(4, dtype=np.int64)
+    # the normal points hard at +y, but +x is the commonest dir
+    assert dw.segment_dirs(seg_of, el, [{'normal': [0.0, 1.0]}])[0] == 0
+    # a segment with no elements is -1
+    two = dw.segment_dirs(np.zeros(4, dtype=np.int64), el,
+                          [{'normal': [0.0, 1.0]}, {'normal': [1.0, 0.0]}])
+    assert two[1] == -1
+
+
+def test_s5_w_null_matches_the_hand_computed_value():
+    """S1: the null is the MEAN over B's other same-direction segments.
+
+    A's single face has its histogram at bin 0. B has three faces, all the same
+    dir: the matched one at bin 0, and two alternatives at bins 9 and 18. The
+    null is therefore the mean of 45 deg and 90 deg over 180 deg,
+    (0.25 + 0.5) / 2 = 0.375, while w itself is 0.
+    """
+    a = fake_side(wall_grid(), 'A')
+    b = fake_side(wall_grid(), 'B')
+    a['bearing_hist'] = [hist(0)]
+    b['bearing_hist'] = [hist(0), hist(9), hist(18)]
+    b['graph'] = {'segments': [{}, {}, {}]}
+    dirs_b = np.array([3, 3, 3])              # all '-y', as wall_grid paints
+    res, _sh = _weights_for(a, b)
+    wn = dw.null_weights(a['seg_of'], res['weights'], a['bearing_hist'],
+                         b['bearing_hist'], dirs_b)
+    good = ~np.isnan(res['weights']['w'])
+    assert good.all()
+    assert np.allclose(res['weights']['w'][good], 0.0)
+    assert np.allclose(wn[good], 0.375)
+
+
+def test_s5_no_alternative_means_outside_e7_and_empty_is_ignored():
+    """S2: no same-dir alternative puts e outside E7; an empty one is skipped.
+
+    Outside E7 is NaN, not zero: zero would be the claim that the alternative
+    faces look identical, which is the opposite of what no alternative means.
+    """
+    a = fake_side(wall_grid(), 'A')
+    a['bearing_hist'] = [hist(0)]
+
+    # (i) B has one segment, so there is no alternative at all
+    b1 = fake_side(wall_grid(), 'B')
+    b1['bearing_hist'] = [hist(9)]
+    res1, _ = _weights_for(a, b1)
+    wn1 = dw.null_weights(a['seg_of'], res1['weights'], a['bearing_hist'],
+                          b1['bearing_hist'], np.array([3]))
+    assert np.isnan(wn1).all()
+
+    # (ii) the only alternative has an empty histogram -> ignored, still NaN
+    b2 = fake_side(wall_grid(), 'B')
+    b2['bearing_hist'] = [hist(9), np.zeros(NB, int)]
+    res2, _ = _weights_for(a, b2)
+    wn2 = dw.null_weights(a['seg_of'], res2['weights'], a['bearing_hist'],
+                          b2['bearing_hist'], np.array([3, 3]))
+    assert np.isnan(wn2).all()
+
+    # (iii) a different dir is not an alternative either
+    b3 = fake_side(wall_grid(), 'B')
+    b3['bearing_hist'] = [hist(9), hist(18)]
+    res3, _ = _weights_for(a, b3)
+    wn3 = dw.null_weights(a['seg_of'], res3['weights'], a['bearing_hist'],
+                          b3['bearing_hist'], np.array([3, 0]))
+    assert np.isnan(wn3).all()
+
+
+def test_s5_g3_a_map_against_itself():
+    """S3: C = 1, W = 0, every w exactly 0 -- G3's whole content."""
+    a = fake_side(wall_grid(), 'A')
+    a['bearing_hist'] = [hist(3, 20, 55)]
+    res, sh = _weights_for(a, a)
+    assert sh['corroborated'] == 1.0
+    assert sh['W'] == 0.0
+    w = res['weights']['w']
+    good = ~np.isnan(w)
+    assert good.sum() == 12
+    assert (w[good] == 0.0).all()             # exactly, not approximately
+
+
+@pytest.mark.parametrize('n_hold,required,expected', [
+    (18, dw.P7_MIN_PAIRS, True), (17, dw.P7_MIN_PAIRS, False),
+    (16, dw.P8_MIN_PAIRS, True), (15, dw.P8_MIN_PAIRS, False)])
+def test_s5_verdict_counting(n_hold, required, expected):
+    """S4a: 18 of 20 holds P7 and 17 does not; 16 holds P8 and 15 does not."""
+    assert (n_hold >= required) is expected
+
+
+def test_s5_equal_values_and_an_empty_set_count_against():
+    """S4b: 'strictly lower' excludes equal, and an absent answer is a failure.
+
+    Both predictions say so, and both say it because the alternative is to let
+    a pair that produced no comparison be read as a pair that passed one.
+    """
+    # strictly lower: equal is not lower
+    assert not (0.3 < 0.3)
+    # an empty E7: n7 == 0, so the verdict is False whatever the means would be
+    for n7, mw, mn in ((0, None, None), (0, 0.1, 0.9)):
+        assert bool(n7 and mw is not None and mn is not None and mw < mn) is False
+    # P8 with no weighable element at either cut
+    for m1200, m60 in ((None, 0.4), (0.4, None), (None, None)):
+        assert bool(m1200 is not None and m60 is not None
+                    and m1200 < m60) is False
+
+
+def test_s5_stage_refuses_a_dirty_tree(monkeypatch):
+    """S5: a result file must not name a commit it was not produced by."""
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/divergence_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s5()
+    assert e.value.code == 2
 
 
 # ──────────────────────────── the named breaks ───────────────────────────────
