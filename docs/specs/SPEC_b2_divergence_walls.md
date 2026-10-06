@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.9, draft)
+# SPEC — B2 divergence on walls (v0.10, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -10,7 +10,8 @@ to P6's quoted seen values; no registered wording changed. v0.8 adds the
 viewpoint weight on corroborated elements (O1); it changes no class, no
 existing field and no registered wording. v0.9 registers G3, P7 and P8 on the
 viewpoint weight, before any of W, w, w_null or an unweighable share was
-computed on a real map. No code is written until the
+computed on a real map. v0.10 records the S5 results: G3, P7 and P8 all hold,
+and O1 is closed. No code is written until the
 stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
@@ -357,13 +358,69 @@ and the length of E7; and for each map, the number of segments with an empty
 histogram (O2). No level of w is predicted: bearing_hist counts returns, so a robot
 standing still can dominate a face's histogram.
 
+### Results: G3, P7, P8
+
+Source: `experiments/logs/divergence/s5_viewpoint_20261006T212758Z.json`, sha256
+`f99e001d517734ea4b8d737436f0e9243122c0edd9d30f65a241dde39e89bb67`. The file is
+not tracked — `experiments/logs/` is gitignored — so the hash stands in for it.
+Produced at HEAD `2161665`, the commit that added the stage, against a clean tree.
+Every number here was read from that file by script.
+
+**G3 — HOLD, 20/20.** Every map against itself gives `C` exactly 1.0 and
+`max |w|` exactly 0.0, on all 20. Not approximately: the two histograms are the
+same object, so the transport cost between them is a subtraction that yields zero.
+
+**P7 — HOLD, 19/20, 18 required.** The one failure is A = k1, B = k3: mean `w`
+0.058794 against mean `w_null` 0.057730, a difference of −0.001064, which is
+10.583° against 10.391°, or −0.191°. On that pair the null is simply as close as
+the match.
+
+**P8 — HOLD, 20/20, 16 required.** `w_mean` with B at cut1200 runs 0.0295 to
+0.0588 (5.32° to 10.58°); with B at cut60, 0.0842 to 0.1540 (15.16° to 27.71°).
+The smallest ratio of the two columns is 1.861, at A = k3, B = k1 — so even the
+weakest pair halves its viewpoint gap between cut60 and cut1200.
+
+**Reported, not tested.** At cut1200, same cut, over the 20 ordered pairs: mean
+`w` 0.0295 to 0.0588 (5.32° to 10.58°); mean `w_null` 0.0522 to 0.0704 (9.39° to
+12.68°); `W` 0.0289 to 0.0579; `w_p10` 0.0075 to 0.0227; `w_p50` 0.0185 to 0.0478;
+`w_p90` 0.0399 to 0.1136; `unweighable_A` and `unweighable_B` both 0.0 on every
+row; |E7| 1286 to 1298. Per map (O2), segments with an empty histogram: 1 in the
+whole corpus, on `b2maps_k3_cut1200_gated_extfix_robot3`, and 0 on the other 19.
+Segment counts run 4–7 at cut60, 7–8 at cut120, 9–12 at cut240 and 12–13 at
+cut1200.
+
+**Caution 1 — mirror pairs.** The 20 ordered pairs are not 20 independent tests.
+Over the 10 unordered pairs at cut1200 the largest `|w_mean(A,B) − w_mean(B,A)|`
+is 0.000016, which is 0.003°. `w` is symmetric in its two histograms, so a mirror
+can differ only through which segments were matched; here it barely does. Within a
+mirror, P7's verdict can differ only through `w_null`, which is the asymmetric
+half. Read the 20 rows as 10 pairs of near-duplicates.
+
+**Caution 2 — the sample.** `w` is constant within a matched segment pair: every
+element of A's face S_A that matched B's face S_B gets the same weight. The
+effective sample is therefore the number of distinct `(S_A, S_B)` pairs in E7, not
+|E7|. That count is NOT recorded in the result file, so it cannot be read from it;
+what the file does bound is its size. The cut1200 maps carry 12 or 13 segments
+each, so there are at most 169 distinct pairs against an |E7| of 1286 to 1298 — at
+least a sevenfold overstatement if |E7| is read as a sample size, and in practice
+far more, since most of A's faces match one B face. Recording the pairs is the
+first thing a rerun of S5 should add.
+
+**Reading.** At full coverage, B's views of a wall sit on average within 5.32° to
+10.58° of A's, and other same-facing walls only slightly further at 9.39° to
+12.68°, so corroboration rests on closely aligned viewpoints.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
   observers (schema handoff §3.3); decided in v0.8, see §4 "Viewpoint weight
-  (O1)".
-- **O2.** Faces with empty bearing histograms: 4 of 220 on the old corpus. Recount on
-  the extfix corpus; treatment undecided.
+  (O1)". CLOSED in v0.10: the weight is defined, registered and measured, and
+  G3, P7 and P8 all hold — see "Results: G3, P7, P8" in §9.
+- **O2.** Faces with empty bearing histograms: 4 of 220 on the old corpus.
+  Recounted on the extfix corpus in v0.10 — 1 segment in the whole corpus, on
+  `b2maps_k3_cut1200_gated_extfix_robot3`, per-map counts in "Results: G3, P7,
+  P8" in §9. Treatment still undecided, though `unweighable_B` was 0.0 on every
+  cut1200 row, so nothing was lost to it there.
 - **O3.** A symmetric summary of A → B and B → A, and the series over cuts.
 - **O4.** Whether to report separately the unobserved length that parked robots
   shadow.
@@ -372,6 +429,8 @@ standing still can dominate a face's histogram.
   under 0.2 m or over 1 m, with almost nothing between. Turning (yaw rate at the
   scan) and wall-box joints were each pre-registered and each ruled out. Condition 4
   is a guard against it, not an explanation of it.
+- **O6.** S5's output records the distinct `(S_A, S_B)` pairs per row, so caution
+  2 gets an exact count at the next rerun.
 
 ## 11. Stop points for Claude Code
 
