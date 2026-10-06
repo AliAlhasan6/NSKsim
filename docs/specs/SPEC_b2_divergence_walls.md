@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.8, draft)
+# SPEC — B2 divergence on walls (v0.9, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -8,7 +8,9 @@ are decided. v0.6: P3, P4 and P6 registered on 6 Oct 2026, before any share was
 computed, except the four A = k0 cut1200 values seen in t1_across. v0.7: erratum
 to P6's quoted seen values; no registered wording changed. v0.8 adds the
 viewpoint weight on corroborated elements (O1); it changes no class, no
-existing field and no registered wording. No code is written until the
+existing field and no registered wording. v0.9 registers G3, P7 and P8 on the
+viewpoint weight, before any of W, w, w_null or an unweighable share was
+computed on a real map. No code is written until the
 stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
@@ -320,6 +322,40 @@ corroborated shares actually seen were 97.80-98.33 %, not 93.8-94.3 %, so the
 90 % threshold sat about 8 points below them, not 4. P6 tests only the 16 pairs
 with A ≠ k0, so its verdict does not depend on this. Found by the cross-check in
 s4_predictions_20261005T230035Z.json.
+
+### Registered at v0.9: the O1 viewpoint weight
+
+Registered in a commit that precedes the commit of the code that tests them, and
+before W, w, w_null or any unweighable share was computed on any real map.
+Disclosure: Step 0 of the O1 work observed that all 13 segments of k0_cut1200 have
+non-empty bearing histograms. No histogram content was seen beyond that.
+
+Terms are those of the section "Viewpoint weight (O1)". Pairs are the 20 ordered
+pairs (A, B) of distinct robots k0..k4.
+
+**G3 (gate).** For each of the 20 maps, the map paired with itself gives C = 1, and
+w = 0 exactly on every weighable corroborated element. If G3 fails on any map, P7
+and P8 are not evaluated in that run.
+
+**P7.** A and B both at cut1200. For a weighable corroborated element e of A, let
+w_null(e) be the mean of W1(p, q_S) / 180° over every B segment S that has the same
+direction as S_B, is not S_B, and has a non-empty histogram. A segment's direction
+is the T1 element dir of the elements assigned to it, one of the four axis-aligned
+normals; if they differ, the commonest, ties going to the dir nearest the segment's
+fitted normal. E7 is the set of such e for which at least one such S exists. Over
+E7, the length-weighted mean of w is strictly lower than the length-weighted mean
+of w_null. P7 holds if this is true for at least 18 of the 20 pairs. A pair with E7
+empty counts against P7.
+
+**P8.** A at cut1200. w_mean with B at cut1200 is strictly lower than w_mean with B
+at cut60. P8 holds if this is true for at least 16 of the 20 pairs. A pair with no
+weighable corroborated element at either cut counts against P8.
+
+**Reported, not tested.** For every row with A at cut1200 and B at each cut, and for
+the same-cut series: W, w_mean, w_p10, w_p50, w_p90, unweighable_A, unweighable_B
+and the length of E7; and for each map, the number of segments with an empty
+histogram (O2). No level of w is predicted: bearing_hist counts returns, so a robot
+standing still can dominate a face's histogram.
 
 ## 10. Open, not decided
 
