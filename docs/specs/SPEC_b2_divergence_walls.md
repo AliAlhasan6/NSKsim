@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.7, draft)
+# SPEC — B2 divergence on walls (v0.8, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -6,8 +6,10 @@ diagnostic. v0.4: T2 leaves the measure under §7's fallback (C0 failed under
 v0.3); v0.5 splits T1's distance test across and along the face. Sections 1–8
 are decided. v0.6: P3, P4 and P6 registered on 6 Oct 2026, before any share was
 computed, except the four A = k0 cut1200 values seen in t1_across. v0.7: erratum
-to P6's quoted seen values; no registered wording changed. No code is written
-until the stop-point questions in §11 are answered.
+to P6's quoted seen values; no registered wording changed. v0.8 adds the
+viewpoint weight on corroborated elements (O1); it changes no class, no
+existing field and no registered wording. No code is written until the
+stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -101,6 +103,48 @@ A's frame, with
 
 Only elements of B's faces count, not every boundary in B's map. Corroboration is
 face to face (D1), and B's unclassified elements include its own parked robots.
+
+**Viewpoint weight (O1).** A corroborated element says B has a face there. It does
+not say B saw it from anywhere A did not. The weight below is how far apart the two
+robots' viewing directions were, and it is reported beside the corroborated share,
+never in place of it.
+
+For a corroborated element `e` of A, let `S_A` be the segment `e` belongs to and
+`S_B` the segment of the B element that T1 matched to `e`. Let `p` and `q` be the
+`bearing_hist` of `S_A` and `S_B`, each divided by its own sum (72 bins of 5°,
+`graph_walls.BEARING_BINS`). Bearings are sensor-to-hit directions in each
+robot's own map frame (`graph_walls.py:1544`); registration is translation only,
+so A's and B's bearings compare without rotation. Then
+
+    w(e) = W1(p, q) / 180°
+
+where `W1` is the earth-mover distance on the circle: `D_k = sum_{j<=k} (p_j - q_j)`
+for `k = 0..71`, and `W1 = 5° * sum_k |D_k - a|` with `a` a median of `{D_k}`. `w`
+lies in [0, 1]: 0 when A and B saw the face from the same directions, rising with
+the angle between their views, 1 when they are 180° apart.
+
+T1 records only THAT a match exists, not which element matched. The B element taken
+here is the one with the smallest across distance; ties go to the smallest along
+distance, then to the lowest B segment id.
+
+**Unweighable.** `e` is corroborated but `p` or `q` sums to zero, or the matched B
+element has no segment. Such an `e` gets no weight. Its length is reported as
+`unweighable_A` (A's histogram empty) or `unweighable_B` (B's histogram empty, or
+no B segment).
+
+**The weighted share.** `W` is the sum of `w(e) * rho` over weighable corroborated
+`e`, divided by the corroborated share's own denominator, A's elements assigned to
+faces. So `W <= C`, unweighable elements contribute 0, and `W` is a lower bound.
+
+Per row, also reported: `w_mean`, the length-weighted mean of `w` over weighable
+corroborated elements; `w_p10`, `w_p50`, `w_p90`; and `unweighable_A` and
+`unweighable_B`, both as shares of the same denominator.
+
+**Known limit, accepted.** `bearing_hist` counts returns, not scans, so a close pass
+weighs more than a distant one. Per-scan counts are not stored.
+
+`W` is reported beside `C` and never replaces it. P3, P4 and P6 stay on `C`.
+Predictions on `W` are registered in a separate commit, before any corpus run.
 
 **T2 (removed from the measure in v0.4; kept as a record).** B's admitted rays
 satisfy all four:
@@ -280,7 +324,8 @@ s4_predictions_20261005T230035Z.json.
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
-  observers (schema handoff §3.3); how `bearing_hist` enters is undecided.
+  observers (schema handoff §3.3); decided in v0.8, see §4 "Viewpoint weight
+  (O1)".
 - **O2.** Faces with empty bearing histograms: 4 of 220 on the old corpus. Recount on
   the extfix corpus; treatment undecided.
 - **O3.** A symmetric summary of A → B and B → A, and the series over cuts.

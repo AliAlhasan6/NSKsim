@@ -224,6 +224,121 @@ def corroborate(el_a: dict, el_b: dict, eps: float,
     return out
 
 
+def circular_emd_deg(p, q) -> float | None:
+    """W1 between two bearing histograms on the circle, in degrees (O1).
+
+    Raw counts in, each normalised by its own sum, so the result is scale free.
+    `D_k = sum_{j<=k} (p_j - q_j)`; `W1 = bin * sum_k |D_k - a|` with `a` a
+    median of `{D_k}`. Subtracting the median is what makes it circular rather
+    than a distance on a cut line: it chooses the split point that costs least,
+    so the mass may travel either way round.
+
+    Returns None when either histogram sums to zero -- the element is then
+    unweighable, which is a reported category and not a zero weight.
+
+    The bin width comes from graph_walls.BEARING_BINS, so a change to D4's bin
+    count moves this with it rather than leaving a literal behind.
+    """
+    p = np.asarray(p, dtype=float)
+    q = np.asarray(q, dtype=float)
+    if p.shape != (gw.BEARING_BINS,) or q.shape != (gw.BEARING_BINS,):
+        raise ValueError(f'bearing histograms must be {gw.BEARING_BINS} bins, '
+                         f'got {p.shape} and {q.shape}')
+    sp, sq = p.sum(), q.sum()
+    if sp <= 0.0 or sq <= 0.0:
+        return None
+    d = np.cumsum(p / sp - q / sq)
+    return float((360.0 / gw.BEARING_BINS) * np.abs(d - np.median(d)).sum())
+
+
+def corroborate_matches(el_a: dict, el_b: dict, eps: float,
+                        rho: float) -> tuple[np.ndarray, np.ndarray]:
+    """T1, and WHICH B element matched. O1 needs the matched element's segment.
+
+    `corroborate` answers only whether a match exists, which is all the measure
+    needs; the viewpoint weight needs the match itself. Where several of B's
+    elements qualify, the one taken is the nearest ACROSS the face, then the
+    nearest along it, then the one on the lowest B segment id -- a total order,
+    so the choice does not depend on the order B's elements happen to be in.
+
+    Returns (hit, match), `match` being -1 where there is no match.
+    """
+    hit = np.zeros(el_a['n'], dtype=bool)
+    match = np.full(el_a['n'], -1, dtype=np.int64)
+    if el_a['n'] == 0 or el_b['n'] == 0:
+        return hit, match
+    seg_b = el_b.get('seg')
+    half = 0.5 * rho
+
+    bx = np.floor(el_b['x'] / eps).astype(np.int64)
+    by = np.floor(el_b['y'] / eps).astype(np.int64)
+    table: dict[tuple[int, int, int], list[int]] = {}
+    for i in range(el_b['n']):
+        table.setdefault((int(el_b['dir'][i]), int(bx[i]), int(by[i])),
+                         []).append(i)
+
+    ax = np.floor(el_a['x'] / eps).astype(np.int64)
+    ay = np.floor(el_a['y'] / eps).astype(np.int64)
+    for i in range(el_a['n']):
+        d = int(el_a['dir'][i])
+        xi, yi = el_a['x'][i], el_a['y'][i]
+        nx, ny = el_a['nx'][i], el_a['ny'][i]
+        tx, ty = -ny, nx
+        best = None
+        for ddx in (-1, 0, 1):
+            for ddy in (-1, 0, 1):
+                for j in table.get((d, int(ax[i]) + ddx, int(ay[i]) + ddy), ()):
+                    dx = el_b['x'][j] - xi
+                    dy = el_b['y'][j] - yi
+                    across = abs(dx * nx + dy * ny)
+                    along = abs(dx * tx + dy * ty)
+                    if across <= eps + T1_TOL_M and along <= half + T1_TOL_M:
+                        key = (across, along,
+                               int(seg_b[j]) if seg_b is not None else 0, j)
+                        if best is None or key < best:
+                            best = key
+        if best is not None:
+            hit[i] = True
+            match[i] = best[3]
+    return hit, match
+
+
+def viewpoint_weights(seg_of_a: np.ndarray, el_b: dict, corr: np.ndarray,
+                      match: np.ndarray, hist_a, hist_b) -> dict:
+    """O1's per-element weight, and the unweighable categories.
+
+    `hist_a` and `hist_b` are per-segment bearing histograms, indexed by segment
+    id. A corroborated element with an empty histogram on either side is not
+    weighed zero -- zero means "seen from the same directions" and would be a
+    claim nobody made. It is counted unweighable instead, on whichever side was
+    empty, and left out of the mean and the percentiles.
+    """
+    n = seg_of_a.size
+    w = np.full(n, np.nan)
+    un_a = np.zeros(n, dtype=bool)
+    un_b = np.zeros(n, dtype=bool)
+    seg_b = el_b.get('seg') if el_b else None
+    for i in np.nonzero(corr)[0]:
+        sa = int(seg_of_a[i])
+        j = int(match[i])
+        sb = int(seg_b[j]) if (seg_b is not None and j >= 0) else -1
+        if sa < 0 or sa >= len(hist_a):
+            un_a[i] = True
+            continue
+        if sb < 0 or sb >= len(hist_b):
+            un_b[i] = True
+            continue
+        val = circular_emd_deg(hist_a[sa], hist_b[sb])
+        if val is None:
+            if np.sum(hist_a[sa]) <= 0:
+                un_a[i] = True
+            else:
+                un_b[i] = True
+            continue
+        w[i] = val / 180.0
+    return {'w': w, 'unweighable_A': un_a, 'unweighable_B': un_b}
+
+
 # ─────────────────────────────── the walk ────────────────────────────────────
 
 def supercover(ox: np.ndarray, oy: np.ndarray, dx: np.ndarray, dy: np.ndarray,
@@ -460,7 +575,8 @@ def weight_of_evidence(n12: np.ndarray, n123: np.ndarray) -> np.ndarray:
 def classify(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict, rays_in_a: dict,
              rho: float, origin: tuple[float, float], shape: tuple[int, int],
              *, eps: float | None = None, theta_g_deg: float = THETA_G_DEG,
-             skip_t1: bool = False, t2: bool = T2_DEFAULT) -> dict:
+             skip_t1: bool = False, t2: bool = T2_DEFAULT,
+             hist_a=None, hist_b=None) -> dict:
     """§4. With `t2` off (the v0.4 default) the measure is T1 and its complement.
 
     Only elements assigned to a face of A are classified (§3); the rest are
@@ -476,8 +592,17 @@ def classify(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict, rays_in_a: dict,
     eps = gw.EPS_FACTOR * rho if eps is None else eps
     t2 = bool(t2 or skip_t1)
 
-    corr = (np.zeros(el_a['n'], dtype=bool) if skip_t1
-            else corroborate(el_a, el_b_in_a, eps, rho))
+    weights = None
+    if skip_t1:
+        corr = np.zeros(el_a['n'], dtype=bool)
+    elif hist_a is None or hist_b is None:
+        corr = corroborate(el_a, el_b_in_a, eps, rho)
+    else:
+        # O1 needs the matched element, not just the fact of a match. The mask
+        # is the same either way; corroborate_matches only also says which.
+        corr, match = corroborate_matches(el_a, el_b_in_a, eps, rho)
+        weights = viewpoint_weights(seg_of_a, el_b_in_a, corr, match,
+                                    hist_a, hist_b)
     out = {
         'assigned': seg_of_a >= 0,
         'seg_of': seg_of_a,
@@ -487,6 +612,7 @@ def classify(el_a: dict, seg_of_a: np.ndarray, el_b_in_a: dict, rays_in_a: dict,
         'eps': eps,
         'rho': rho,
         't2': t2,
+        'weights': weights,
     }
     if not t2:
         zero = np.zeros(el_a['n'], dtype=np.int64)
@@ -548,6 +674,37 @@ def shares(result: dict) -> dict:
         c = int((cls == code).sum())
         out[f'n_{name}'] = c
         out[f'{name}'] = (c / n) if n else 0.0
+    out.update(viewpoint_fields(result, n))
+    return out
+
+
+def viewpoint_fields(result: dict, n: int) -> dict:
+    """O1's per-row fields, or {} when no histograms were supplied.
+
+    `W` is `sum(w) / n` with `n` the corroborated share's own denominator, which
+    is the same number as `sum(w * rho) / L_A`: every element is rho long. So
+    `W <= C`, unweighable elements contributing 0 and making `W` a lower bound.
+    """
+    wts = result.get('weights')
+    if wts is None:
+        return {}
+    keep = result['assigned']
+    w = wts['w'][keep]
+    good = ~np.isnan(w)
+    wv = w[good]
+    out = {
+        'W': float(wv.sum() / n) if n else 0.0,
+        'n_weighable': int(good.sum()),
+        'unweighable_A': (float(wts['unweighable_A'][keep].sum()) / n
+                          if n else 0.0),
+        'unweighable_B': (float(wts['unweighable_B'][keep].sum()) / n
+                          if n else 0.0),
+    }
+    for key, val in (('w_mean', float(wv.mean()) if wv.size else None),
+                     ('w_p10', float(np.percentile(wv, 10)) if wv.size else None),
+                     ('w_p50', float(np.percentile(wv, 50)) if wv.size else None),
+                     ('w_p90', float(np.percentile(wv, 90)) if wv.size else None)):
+        out[key] = val
     return out
 
 
@@ -675,7 +832,30 @@ def load_side(stem: str) -> dict:
     if graph['map_sha256'] != saved['map_sha256']:
         die(f'{stem}: map sha256 {graph["map_sha256"][:12]} is not the JSON\'s '
             f'{saved["map_sha256"][:12]}; the JSON describes another map')
+    # O1's histograms come from the SAVED json, not the recompute: bearing_hist
+    # is written by obs_for_map, which reads the bag, and graph_and_elements
+    # does not. The two segment lists must therefore line up, and that is
+    # checked rather than assumed -- same count, same endpoints.
+    saved_segs = saved.get('segments', [])
+    hist = None
+    if saved_segs and all('obs' in s and 'bearing_hist' in s['obs']
+                          for s in saved_segs):
+        if len(saved_segs) != len(graph['segments']):
+            die(f'{stem}: the JSON has {len(saved_segs)} segments and the '
+                f'recompute {len(graph["segments"])}; bearing_hist cannot be '
+                'matched to a segment by index')
+        for i, (sv, rc) in enumerate(zip(saved_segs, graph['segments'])):
+            if (abs(sv['p0'][0] - rc['p0'][0]) > 1e-6
+                    or abs(sv['p0'][1] - rc['p0'][1]) > 1e-6
+                    or abs(sv['p1'][0] - rc['p1'][0]) > 1e-6
+                    or abs(sv['p1'][1] - rc['p1'][1]) > 1e-6):
+                die(f'{stem}: segment {i} differs between the JSON and the '
+                    'recompute, so bearing_hist would be read off the wrong '
+                    'face')
+        hist = [s['obs']['bearing_hist'] for s in saved_segs]
+
     return {'stem': stem, 'graph': graph, 'el': el, 'seg_of': seg_of,
+            'bearing_hist': hist,
             'grid': grid, 'rho': graph['resolution'],
             'origin': tuple(graph['origin']), 'shape': grid.shape,
             'segments': graph['segments']}
@@ -709,13 +889,16 @@ def pair_row(a: dict, b: dict, spawn_a, spawn_b, cut_a: int, cut_b: int,
     it for granted on the same-cut series and silently get nothing on P3's.
     One shape for both is worth the broken key.
     """
+    keep_b = b['seg_of'] >= 0
     bx, by = to_frame_a(b['el']['x'], b['el']['y'], spawn_b, spawn_a, flip=flip)
     el_b = dict(face_elements_only(b['el'], b['seg_of']))
-    el_b['x'], el_b['y'] = bx[b['seg_of'] >= 0], by[b['seg_of'] >= 0]
+    el_b['x'], el_b['y'] = bx[keep_b], by[keep_b]
+    el_b['seg'] = b['seg_of'][keep_b]          # O1 needs the matched segment
 
     t0 = time.monotonic()
     res = classify(a['el'], a['seg_of'], el_b, rays, a['rho'], a['origin'],
-                   a['shape'], theta_g_deg=theta_g_deg, t2=t2)
+                   a['shape'], theta_g_deg=theta_g_deg, t2=t2,
+                   hist_a=a.get('bearing_hist'), hist_b=b.get('bearing_hist'))
     seconds = time.monotonic() - t0
     row = {
         'A': a['stem'], 'B': b['stem'],

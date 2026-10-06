@@ -60,6 +60,17 @@ visibly not this.
                                                              direct call
   C3   the cut is bookkeeping, the spawn is geometry         1.0 / 0.167 / 0.0
                                                              at 0, 1 and 2 m
+  V1   identical bearing histograms (O1)                     0 deg
+  V2   nine bins apart                                       45 deg, w = 0.25
+  V3   bins 70 and 1, across the wrap                        15 deg, not 345
+  V4   half the circle apart                                 180 deg, w = 1
+  V5   symmetry, rotation and scale                          all unchanged
+  V6   an empty histogram either side                        None; unweighable
+                                                             on that side
+  V7   two segments, hand-computed                           W 0.125, w_mean
+                                                             0.25, unweighable_B
+                                                             0.5
+  V8   A against itself                                      w = 0, W = 0
   V1   the module default (v0.4)                            t2 off, two
                                                             classes, nothing
                                                             contradicted
@@ -531,6 +542,153 @@ def test_pair_row_carries_the_spawn_difference():
     assert near['shares']['corroborated'] == 1.0
     assert overlap['shares']['n_corroborated'] == 2
     assert clear['shares']['corroborated'] == 0.0
+
+
+# ─────────────────── O1: the viewpoint weight on T1 ──────────────────────────
+
+NB = gw.BEARING_BINS                      # 72, D4's bin count
+BINW = 360.0 / NB                         # 5 degrees
+
+
+def hist(*bins, n=1):
+    """A bearing histogram with `n` counts in each named bin."""
+    h = np.zeros(NB, dtype=np.int64)
+    for b in bins:
+        h[b % NB] += n
+    return h
+
+
+def test_o1_identical_histograms_give_zero():
+    """V1: same directions, no viewpoint distance."""
+    h = hist(3, 4, 5)
+    assert dw.circular_emd_deg(h, h) == pytest.approx(0.0)
+
+
+def test_o1_nine_bins_apart_is_45_degrees():
+    """V2: 9 bins x 5 deg = 45 deg, so w = 0.25."""
+    d = dw.circular_emd_deg(hist(0), hist(9))
+    assert d == pytest.approx(45.0)
+    assert d / 180.0 == pytest.approx(0.25)
+
+
+def test_o1_distance_goes_the_short_way_round():
+    """V3: bins 70 and 1 are 3 bins apart across the wrap, not 69.
+
+    This is what the median subtraction buys: on a cut line the same pair
+    would be 345 deg.
+    """
+    assert dw.circular_emd_deg(hist(70), hist(1)) == pytest.approx(15.0)
+
+
+def test_o1_opposite_bins_are_180_degrees():
+    """V4: half the circle apart is the maximum, w = 1."""
+    d = dw.circular_emd_deg(hist(0), hist(NB // 2))
+    assert d == pytest.approx(180.0)
+    assert d / 180.0 == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize('shift', [0, 1, 17, 71])
+def test_o1_symmetric_rotation_and_scale_invariant(shift):
+    """V5: W1(p, q) = W1(q, p), and unmoved by rotating or rescaling both."""
+    p, q = hist(2, 3, 40), hist(11, 12)
+    base = dw.circular_emd_deg(p, q)
+    assert dw.circular_emd_deg(q, p) == pytest.approx(base)
+    rp = np.roll(p, shift)
+    rq = np.roll(q, shift)
+    assert dw.circular_emd_deg(rp, rq) == pytest.approx(base)
+    assert dw.circular_emd_deg(p * 7, q * 1000) == pytest.approx(base)
+
+
+def test_o1_empty_histogram_gives_none():
+    """V6a: an empty side is unweighable, which is not a weight of zero."""
+    assert dw.circular_emd_deg(np.zeros(NB, int), hist(0)) is None
+    assert dw.circular_emd_deg(hist(0), np.zeros(NB, int)) is None
+
+
+def _one_segment_pair(hist_a, hist_b):
+    """A and B on the same 12-element wall, one segment each."""
+    a = fake_side(wall_grid(), 'A')
+    b = fake_side(wall_grid(), 'B')
+    b['bearing_hist'] = [hist_b]
+    a['bearing_hist'] = [hist_a]
+    return a, b
+
+
+def test_o1_empty_histogram_lands_in_the_right_unweighable_column():
+    """V6b: whichever side was empty is the side it is counted against."""
+    for which in ('A', 'B'):
+        ha = np.zeros(NB, int) if which == 'A' else hist(0)
+        hb = np.zeros(NB, int) if which == 'B' else hist(0)
+        a, b = _one_segment_pair(ha, hb)
+        row = dw.pair_row(a, b, (0.0, 0.0), (0.0, 0.0), 1200, 1200)
+        s = row['shares']
+        assert s['corroborated'] == 1.0          # T1 is untouched
+        assert s[f'unweighable_{which}'] == pytest.approx(1.0)
+        assert s[f'unweighable_{"B" if which == "A" else "A"}'] == 0.0
+        assert s['W'] == 0.0 and s['n_weighable'] == 0
+        assert s['w_mean'] is None
+
+
+def test_o1_two_segments_give_the_hand_computed_row():
+    """V7: two faces, two viewpoint gaps, and W worked out by hand.
+
+    A's wall is 12 elements on one segment; the test splits it into two faces
+    of 6 by hand, so face 0's elements see a 45 deg gap (w = 0.25) and face 1's
+    an empty B histogram (unweighable_B). Then
+
+        W = (6 * 0.25 + 6 * 0) / 12 = 0.125
+        w_mean = 0.25 over the 6 weighable
+        unweighable_B = 6 / 12 = 0.5
+    """
+    a = fake_side(wall_grid(), 'A')
+    b = fake_side(wall_grid(), 'B')
+    two = np.where(np.arange(a['el']['n']) < 6, 0, 1).astype(np.int64)
+    a['seg_of'] = two
+    b['seg_of'] = two
+    a['segments'] = [{'p0': [0.0, 0.55], 'p1': [0.5, 0.55]},
+                     {'p0': [0.6, 0.55], 'p1': [1.1, 0.55]}]
+    a['bearing_hist'] = [hist(0), hist(0)]
+    b['bearing_hist'] = [hist(9), np.zeros(NB, int)]
+    s = dw.pair_row(a, b, (0.0, 0.0), (0.0, 0.0), 1200, 1200)['shares']
+    assert s['corroborated'] == 1.0
+    assert s['n_weighable'] == 6
+    assert s['W'] == pytest.approx(0.125)
+    assert s['w_mean'] == pytest.approx(0.25)
+    assert s['w_p10'] == pytest.approx(0.25)
+    assert s['w_p90'] == pytest.approx(0.25)
+    assert s['unweighable_B'] == pytest.approx(0.5)
+    assert s['unweighable_A'] == 0.0
+    assert s['W'] <= s['corroborated']
+
+
+def test_o1_a_against_itself_weighs_zero_everywhere():
+    """V8: the same robot's own viewpoints cannot differ from themselves."""
+    a, b = _one_segment_pair(hist(3, 20, 55), hist(3, 20, 55))
+    row = dw.pair_row(a, b, (0.0, 0.0), (0.0, 0.0), 1200, 1200)
+    s = row['shares']
+    assert s['corroborated'] == 1.0
+    assert s['W'] == 0.0
+    assert s['w_mean'] == pytest.approx(0.0)
+    assert s['w_p90'] == pytest.approx(0.0)
+    assert s['n_weighable'] == 12
+
+
+def test_o1_the_mask_is_the_same_with_and_without_matching():
+    """corroborate_matches must not change WHO is corroborated, only add which."""
+    a = side(wall_grid())
+    el_b = b_faces(wall_grid(h=12, w=6))
+    el_b['seg'] = np.zeros(el_b['n'], dtype=np.int64)
+    plain = dw.corroborate(a['el'], el_b, EPS, RHO)
+    withm, match = dw.corroborate_matches(a['el'], el_b, EPS, RHO)
+    assert np.array_equal(plain, withm)
+    assert (match >= 0).sum() == plain.sum()
+
+
+def test_o1_fields_are_absent_without_histograms():
+    """No histograms, no O1 fields -- the measure's own row is unchanged."""
+    a = side(wall_grid())
+    s = dw.shares(run(a, b_faces(wall_grid()), rays(), t2=False))
+    assert 'W' not in s and 'w_mean' not in s and 'unweighable_A' not in s
 
 
 # ──────────────────────────── the named breaks ───────────────────────────────
