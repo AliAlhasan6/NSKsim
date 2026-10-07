@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.10, draft)
+# SPEC — B2 divergence on walls (v0.11, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -11,7 +11,8 @@ viewpoint weight on corroborated elements (O1); it changes no class, no
 existing field and no registered wording. v0.9 registers G3, P7 and P8 on the
 viewpoint weight, before any of W, w, w_null or an unweighable share was
 computed on a real map. v0.10 records the S5 results: G3, P7 and P8 all hold,
-and O1 is closed. No code is written until the
+and O1 is closed. v0.11 decides O3's symmetric form and the convergence series,
+and registers P9, before any row P9 tests was computed. No code is written until the
 stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
@@ -410,6 +411,55 @@ first thing a rerun of S5 should add.
 10.58° of A's, and other same-facing walls only slightly further at 9.39° to
 12.68°, so corroboration rests on closely aligned viewpoints.
 
+## Symmetric summary and convergence series (O3)
+
+**Rows already seen.** The full cut matrix has 320 rows: 20 ordered pairs × 4 cuts
+for A × 4 cuts for B. S4 (`s4_predictions_20261005T230035Z.json`, at `9eb3f17`)
+computed C for 140 of them:
+- A at cut1200 against every B cut (P3, 80 rows);
+- every same-cut row (80 rows, 20 ordered pairs at each cut).
+The two sets share the 20 rows where both maps are at cut1200. No result file in
+`experiments/logs/divergence/` holds a row with A at 60, 120 or 240 and B at a
+different cut. Those 180 rows are unseen.
+
+**The symmetric form.** Take an unordered pair {X, Y} and cuts a and b. The two
+directions, X@a → Y@b and Y@b → X@a, are reported side by side with their
+difference. No mean and no minimum is reported, because when one map is much smaller
+the two directions measure different things:
+- the larger map against the smaller measures the smaller map's coverage;
+- the smaller map against the larger measures whether the smaller map's walls hold up.
+
+**The convergence series.** Convergence is presented as fixed-A series: A is held at
+one cut while B's cut grows 60 → 120 → 240 → 1200. The same-cut series is still
+reported, but it is not a convergence curve, because A's wall set grows under the
+measure.
+
+**What is computed.** Stage S6 computes C for all 320 rows of the cut matrix, with
+the measure P3 tested, unchanged.
+- **G4.** S6 recomputes the 140 seen rows and requires each to equal S4's value
+  exactly, and S5's value wherever S5 holds that row. On any difference it stops
+  before writing a verdict.
+- **Each row** records A, B, cut_A, cut_B, L_A_m, corroborated, not_corroborated and
+  seen.
+- **The symmetric table** records, for each unordered pair and each (a, b), both
+  directions and their difference.
+- S6 refuses to run on an edited tree.
+
+**What is not computed.** S6 computes no viewpoint weight. Every weight S5 computed
+lies in the 140 seen rows or on a map against itself, so on the 180 unseen rows the
+weight is unseen too, and a prediction about its mirror agreement at mixed cuts can
+still be registered.
+
+**P9. REGISTERED 8 Oct 2026.** Convergence, A held at an early cut: for every ordered
+pair and for each of A's cuts 60, 120 and 240, the not-corroborated share of A's walls
+at that cut is non-increasing as B's cut goes 60 → 120 → 240 → 1200. That is 60
+series of four values. A rise of any size at any step counts as a failure and is
+shown. With A fixed, the denominator is constant, so a rise is a rise in
+not-corroborated length. A series whose A walls have zero length is undefined and
+counts as a failure. In each series, the value with B at A's own cut was seen (S4's
+same-cut rows); the other three were not, and together they are the 180 unseen rows.
+The level is reported, not predicted.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -421,7 +471,9 @@ first thing a rerun of S5 should add.
   `b2maps_k3_cut1200_gated_extfix_robot3`, per-map counts in "Results: G3, P7,
   P8" in §9. Treatment still undecided, though `unweighable_B` was 0.0 on every
   cut1200 row, so nothing was lost to it there.
-- **O3.** A symmetric summary of A → B and B → A, and the series over cuts.
+- **O3.** form decided and P9 registered (v0.11). Open: whether the viewpoint
+  weight's mirror agreement holds at mixed cuts. On the 180 unseen rows that weight
+  is unseen; S6 does not compute it.
 - **O4.** Whether to report separately the unobserved length that parked robots
   shadow.
 - **O5.** The deep tail, unexplained. On A's own maps 4-10 % of crossings that meet
