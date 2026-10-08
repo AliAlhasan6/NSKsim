@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.11, draft)
+# SPEC — B2 divergence on walls (v0.12, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -12,8 +12,10 @@ existing field and no registered wording. v0.9 registers G3, P7 and P8 on the
 viewpoint weight, before any of W, w, w_null or an unweighable share was
 computed on a real map. v0.10 records the S5 results: G3, P7 and P8 all hold,
 and O1 is closed. v0.11 decides O3's symmetric form and the convergence series,
-and registers P9, before any row P9 tests was computed. No code is written until the
-stop-point questions in §11 are answered.
+and registers P9, before any row P9 tests was computed. v0.12 records the S6
+results — G4 holds, 820/820, and P9 fails, 40 of 60 series — and registers P10 on
+losses between B's cuts, before any gain or loss was computed. No code is written
+until the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -460,6 +462,94 @@ counts as a failure. In each series, the value with B at A's own cut was seen (S
 same-cut rows); the other three were not, and together they are the 180 unseen rows.
 The level is reported, not predicted.
 
+### S6 results
+
+Source: `experiments/logs/divergence/s6_cutmatrix_20261008T225604Z.json`, sha256
+`a3d584f310e509c33bcca09c2fe641d4914dd4f768146f10c1ebf340f58b2f13`. The file is not
+tracked — `experiments/logs/` is gitignored — so the hash stands in for it. Produced
+at HEAD `ce8dd6e`, the commit that added the stage, against a clean tree. Every
+number here was read from that file by script.
+
+**G4 — HOLD, 820/820.** Every stored seen value equals S6's exactly, with no
+tolerance: S4 420/420, S5 400/400. The comparisons name 140 distinct rows, which is
+every one of the 140 seen rows, so G4 gates the whole seen half of the matrix rather
+than a sample of it. S4 ran from an uncommitted script, so G4 is the first
+reproduction of S4's values from committed code.
+
+**P9 — FAIL, 40/60 series.** 20 of the 60 series rise at some step, over 21 failing
+steps in all. No series was undefined.
+
+| A | B | cut_A | B's step | at the earlier cut | at the later cut | rise | rise (m) |
+|---|---|---|---|---|---|---|---|
+| k0 | k1 | 60 | 60 → 120 | 0.024096 | 0.028112 | 0.004016 | 0.1000 |
+| k0 | k2 | 120 | 120 → 240 | 0.003610 | 0.007220 | 0.003610 | 0.2000 |
+| k0 | k3 | 120 | 240 → 1200 | 0.007220 | 0.009025 | 0.001805 | 0.1000 |
+| k0 | k4 | 60 | 120 → 240 | 0.012048 | 0.020080 | 0.008032 | 0.2000 |
+| k1 | k2 | 120 | 120 → 240 | 0.007286 | 0.009107 | 0.001821 | 0.1000 |
+| k1 | k2 | 120 | 240 → 1200 | 0.009107 | 0.010929 | 0.001821 | 0.1000 |
+| k1 | k2 | 240 | 240 → 1200 | 0.011403 | 0.017104 | 0.005701 | 0.5000 |
+| k1 | k3 | 120 | 240 → 1200 | 0.010929 | 0.012750 | 0.001821 | 0.1000 |
+| k1 | k4 | 60 | 120 → 240 | 0.004032 | 0.008065 | 0.004032 | 0.1000 |
+| k2 | k0 | 60 | 120 → 240 | 0.031088 | 0.033679 | 0.002591 | 0.1000 |
+| k2 | k0 | 120 | 240 → 1200 | 0.013889 | 0.015625 | 0.001736 | 0.1000 |
+| k2 | k1 | 60 | 120 → 240 | 0.028497 | 0.031088 | 0.002591 | 0.1000 |
+| k2 | k1 | 120 | 240 → 1200 | 0.012153 | 0.013889 | 0.001736 | 0.1000 |
+| k2 | k3 | 60 | 240 → 1200 | 0.028497 | 0.031088 | 0.002591 | 0.1000 |
+| k2 | k3 | 120 | 240 → 1200 | 0.015625 | 0.017361 | 0.001736 | 0.1000 |
+| k3 | k1 | 60 | 60 → 120 | 0.417062 | 0.419431 | 0.002370 | 0.1000 |
+| k3 | k2 | 60 | 60 → 120 | 0.417062 | 0.419431 | 0.002370 | 0.1000 |
+| k4 | k0 | 120 | 60 → 120 | 0.574394 | 0.576125 | 0.001730 | 0.1000 |
+| k4 | k1 | 60 | 60 → 120 | 0.430876 | 0.437788 | 0.006912 | 0.3000 |
+| k4 | k1 | 120 | 60 → 120 | 0.572664 | 0.577855 | 0.005190 | 0.3000 |
+| k4 | k2 | 120 | 60 → 120 | 0.576125 | 0.577855 | 0.001730 | 0.1000 |
+
+Every rise is a whole number of 0.1 m elements — 1, 2, 3 or 5 of them. The rise in
+metres divides by the element length to an integer within 1e-9 m on all 21 steps, and
+that integer equals the drop in the corroborated count between the two rows, which is
+exact integer arithmetic rather than a tolerance. Verified by script.
+
+**Not-corroborated share, min–max over the 20 ordered pairs.** A cell marked `*` was
+unseen before S6.
+
+| A's cut | B at 60 | B at 120 | B at 240 | B at 1200 |
+|---|---|---|---|---|
+| 60 | 0.0040–0.4401 | 0.0040–0.4378 `*` | 0.0081–0.4332 `*` | 0.0081–0.0576 `*` |
+| 120 | 0.3169–0.6217 `*` | 0.0036–0.5779 | 0.0072–0.4705 `*` | 0.0072–0.0174 `*` |
+| 240 | 0.4982–0.7540 `*` | 0.2999–0.6724 `*` | 0.0114–0.5416 | 0.0073–0.0323 `*` |
+| 1200 | 0.6805–0.8186 | 0.5081–0.5970 | 0.2587–0.3903 | 0.0054–0.0409 |
+
+The verdict stands as registered.
+
+## Gains and losses (P10)
+
+**Why.** P9 failed: 20 of its 60 series rise at some step. With A fixed, a rise in
+the not-corroborated share means at least one of A's elements corroborated by B at
+the earlier cut is not corroborated by B at the later cut. P3's 20 series held, but
+a step's net change can hide losses behind larger gains. P10 asks whether it did.
+
+**Definitions.** Take one series, A fixed at one cut and B's cut going
+60 → 120 → 240 → 1200, and one step from B's cut k to the next cut k'. An element of
+A is
+- a **gain** if B at k does not corroborate it and B at k' does;
+- a **loss** if B at k corroborates it and B at k' does not.
+
+**What is computed.** Stage S7 takes the 80 fixed-A series (P3's 20, with A at
+cut1200, and P9's 60). For each element of A, it computes the element's
+corroboration at every B cut, using the element masks that the measure itself
+computes, not a reimplementation. From those it counts gains and losses per step, as
+element counts and in metres.
+- **G5.** S7 recomputes the corroborated share of all 320 rows from its element masks
+  and requires each to equal S6's value exactly. On any difference it stops before
+  writing a verdict, and writes no gain or loss.
+- **Reported, not tested.** For each lost element, the across and along distances to
+  the nearest same-direction element of B at k'.
+- S7 computes no viewpoint weight and refuses to run on an edited tree.
+
+**P10. REGISTERED 9 Oct 2026.** Losses under P3's held series: in at least 10 of P3's
+20 series (A at cut1200), at least one step contains at least one loss. A loss of one
+element counts. The threshold is informed by P9's result, which showed net rises in
+20 of its 60 series. The size of the losses is reported, not predicted.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -483,6 +573,8 @@ The level is reported, not predicted.
   is a guard against it, not an explanation of it.
 - **O6.** S5's output records the distinct `(S_A, S_B)` pairs per row, so caution
   2 gets an exact count at the next rerun.
+- **O7. Losses.** Why B's later map fails to corroborate elements of A that its
+  earlier map corroborated. Open; P10 and S7's reported distances bear on it.
 
 ## 11. Stop points for Claude Code
 
