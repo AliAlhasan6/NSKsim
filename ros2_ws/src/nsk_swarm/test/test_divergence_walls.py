@@ -110,6 +110,47 @@ visibly not this.
                                                             and the Bresenham
                                                             cell set lacks it
 
+The M series is S6, the cut matrix. Its rows were written before the stage was
+run, like the rest of this table, and nothing in them touches a real map.
+
+  M1   the seen flag over the 320 keys                       140 seen, 180
+                                                             unseen; seen iff
+                                                             cut_A 1200 or
+                                                             cut_A == cut_B
+  M2   P9 with equal steps everywhere                        holds, 60/60
+  M3   P9, one element more not corroborated at one step     fails; the rise is
+                                                             0.1 m, one
+                                                             element's length
+  M4   P9, a rise of 1e-12                                   fails; no
+                                                             tolerance
+  M5   P9, A's walls of zero length                          fails, undefined,
+                                                             no step named
+  M6   P9 with 60, 59 and 58 holding series                  holds only at 60
+                                                             of 60
+  M7   the symmetric table over a 320-row matrix             160 entries, every
+                                                             row used exactly
+                                                             once, X < Y
+  M8   the difference's sign                                 first minus
+                                                             second: 0.9 - 0.4
+  M9   G4, one stored seen value one ulp out                 exit 2; a fail
+                                                             file of seen rows,
+                                                             no unseen row
+                                                             written or printed,
+                                                             and C called 140
+                                                             times, once per
+                                                             seen row
+  M10  G4 holding on a synthetic corpus                      320 rows written,
+                                                             140 of them seen,
+                                                             160 symmetric
+                                                             entries, P9 60/60
+  M11  the P9 paragraph read from spec text                  one line; stops at
+                                                             the blank line; a
+                                                             list marker comes
+                                                             off
+  M12  --stage s6 on a dirty tree, with 533fa52 not an       refuses, exit 2,
+       ancestor, and with a spec that lacks P9               on each of the
+                                                             three
+
 WHAT THE FIXTURES ARE. `wall_grid` paints one row of OCCUPIED with FREE on one
 side and leaves the rest UNKNOWN, so the slab exposes exactly ONE face per
 column: an occupied-unknown boundary gives no element (Def 1, graph_walls
@@ -135,9 +176,12 @@ container, where a module-level import of any of those is a COLLECTION error
 that takes the whole nsk_swarm suite down.
 """
 
+import hashlib
 import importlib.util
+import json
 import math
 import os
+import re
 
 import numpy as np
 import pytest
@@ -879,6 +923,308 @@ def test_s5_stage_refuses_a_dirty_tree(monkeypatch):
                         if a[0] == 'status' else 'deadbeef')
     with pytest.raises(SystemExit) as e:
         dw.run_s5()
+    assert e.value.code == 2
+
+
+# ───────────── S6: the cut matrix, G4 and P9 (the M series) ──────────────────
+#
+# EVERY CASE HERE IS SYNTHETIC. The 180 unseen rows of the real matrix -- A at
+# 60, 120 or 240 with B at another cut -- must stay unseen until the stage is
+# run from a clean, committed tree, so nothing below loads a map, and the two
+# builders are the whole corpus these cases get.
+
+S6_WIDTHS = {60: 3, 120: 6, 240: 9, 1200: 12}
+
+
+def s6_sides(n_robots=dw.N_ROBOTS):
+    """A synthetic corpus: five robots by four cuts, on one wall that grows.
+
+    Robot k at cut c carries `S6_WIDTHS[c] + k` elements of the same wall from
+    x = 0, so B@cut_b corroborates A's first w(b) elements and nothing past
+    them: `not_corroborated` is `max(0, w_a - w_b) / w_a`, which falls as B's
+    cut grows and makes P9 hold on this corpus by construction. The widths
+    differ per robot so the two directions of a pair differ, which is what the
+    symmetric table needs to be more than a column of zeroes.
+
+    All five spawn at the origin: the frame change is tested by C3 and is not
+    what the matrix is about.
+    """
+    by_kc, spawn = {}, {}
+    for k in range(n_robots):
+        spawn[k] = (0.0, 0.0)
+        for c, w in S6_WIDTHS.items():
+            by_kc[(k, c)] = fake_side(
+                wall_grid(h=12, w=w + k),
+                f'b2maps_k{k}_cut{c}_gated_extfix_robot{k}')
+    return by_kc, spawn
+
+
+def p9_rows(values=None, lengths=None, flat=0.5, l_a=1.2):
+    """A 320-row matrix holding only what P9 and the symmetric table read.
+
+    `values[(A, B, cut_A)]` is that series' four not-corroborated shares in
+    CUTS order and `lengths[(A, B, cut_A)]` its L_A_m; anything unnamed gets a
+    flat series, which holds, on the 1.2 m twelve-element wall the rest of this
+    file uses. Built rather than measured, so a case can state the series it is
+    about and nothing else.
+    """
+    values, lengths = values or {}, lengths or {}
+    rows = {}
+    for key in dw.matrix_keys():
+        a, b, ca, cb = key
+        vals = values.get((a, b, ca))
+        nc = vals[dw.CUTS.index(cb)] if vals else flat
+        rows[key] = {'A': a, 'B': b, 'cut_A': ca, 'cut_B': cb,
+                     'not_corroborated': nc, 'corroborated': 1.0 - nc,
+                     'L_A_m': lengths.get((a, b, ca), l_a),
+                     'seen': dw.is_seen(ca, cb)}
+    return rows
+
+
+def cut_pairs_in(node):
+    """Every (cut_A, cut_B) a payload names, in either shape a row can take."""
+    found = []
+    if isinstance(node, dict):
+        if 'cut_A' in node and 'cut_B' in node:
+            found.append((node['cut_A'], node['cut_B']))
+        key = node.get('key')
+        if isinstance(key, list) and len(key) == 4:
+            found.append((key[2], key[3]))
+        for v in node.values():
+            found += cut_pairs_in(v)
+    elif isinstance(node, list):
+        for v in node:
+            found += cut_pairs_in(v)
+    return found
+
+
+def test_s6_seen_flag_counts_140_and_180():
+    """M1: `seen` is true exactly at cut_A 1200 or cut_A == cut_B."""
+    keys = dw.matrix_keys()
+    assert len(keys) == 320
+    seen = [k for k in keys if dw.is_seen(k[2], k[3])]
+    assert len(seen) == dw.N_SEEN == 140
+    assert len(keys) - len(seen) == dw.N_UNSEEN == 180
+    for (a, b, ca, cb) in keys:
+        assert dw.is_seen(ca, cb) is (ca == 1200 or ca == cb)
+    # the spec's two seen sets and the 20 rows they share
+    assert sum(1 for k in seen if k[2] == 1200) == 80
+    assert sum(1 for k in seen if k[2] == k[3]) == 80
+    assert sum(1 for k in seen if k[2] == 1200 and k[3] == 1200) == 20
+
+
+def test_s6_p9_equal_steps_hold():
+    """M2: non-increasing includes equal, so a flat series holds."""
+    out = dw.p9_verdict(p9_rows())
+    assert (out['holds'], out['n_holding'], out['of']) == (True, 60, 60)
+    assert out['failures'] == []
+
+
+def test_s6_p9_a_rise_of_one_element_fails():
+    """M3: one element more not corroborated is a rise, and it is 0.1 m of it.
+
+    With A fixed the denominator is constant, which is what makes the rise
+    convertible: 1/12 of a twelve-element 1.2 m wall is one element, 0.1 m.
+    """
+    out = dw.p9_verdict(p9_rows(values={(0, 1, 60): [4 / 12, 4 / 12,
+                                                     5 / 12, 5 / 12]}))
+    assert (out['holds'], out['n_holding']) == (False, 59)
+    assert len(out['failures']) == 1
+    f = out['failures'][0]
+    assert (f['A'], f['B'], f['cut_A'], f['step']) == (0, 1, 60,
+                                                       'cut120->cut240')
+    assert f['rise'] == pytest.approx(1 / 12)
+    assert f['rise_m'] == pytest.approx(RHO)
+
+
+def test_s6_p9_a_rise_of_1e_12_fails():
+    """M4: a rise of any size, with no tolerance at all."""
+    out = dw.p9_verdict(p9_rows(values={(2, 3, 240): [0.5, 0.5 + 1e-12,
+                                                      0.5 + 1e-12,
+                                                      0.5 + 1e-12]}))
+    assert (out['holds'], out['n_holding']) == (False, 59)
+    assert len(out['failures']) == 1
+    assert 0.0 < out['failures'][0]['rise'] < 1e-11
+
+
+def test_s6_p9_zero_length_a_walls_fail():
+    """M5: an undefined series is a failure, and names no step."""
+    out = dw.p9_verdict(p9_rows(lengths={(4, 0, 120): 0.0}))
+    assert (out['holds'], out['n_holding']) == (False, 59)
+    f = out['failures'][0]
+    assert (f['A'], f['B'], f['cut_A']) == (4, 0, 120)
+    assert f['step'] is None and f['rise'] is None and f['reason']
+    assert next(s for s in out['series']
+                if (s['A'], s['B'], s['cut_A']) == (4, 0, 120))['undefined']
+
+
+@pytest.mark.parametrize('n_bad', [0, 1, 2])
+def test_s6_p9_holds_only_at_60_of_60(n_bad):
+    """M6: P9 holds only if all 60 series hold -- 59 is a failed P9."""
+    bad = [(a, b, 60) for (a, b) in dw.ordered_pairs()][:n_bad]
+    out = dw.p9_verdict(p9_rows(values={s: [0.4, 0.5, 0.5, 0.5] for s in bad}))
+    assert out['of'] == 60
+    assert out['n_holding'] == 60 - n_bad
+    assert out['holds'] is (n_bad == 0)
+
+
+def test_s6_symmetric_table_uses_every_row_exactly_once():
+    """M7: 160 entries over the 10 unordered pairs, and all 320 rows consumed."""
+    rows = p9_rows()
+    entries = dw.symmetric_table(rows)
+    assert len(entries) == 160
+    used = []
+    for e in entries:
+        assert e['X'] < e['Y']
+        used += [(e['X'], e['Y'], e['cut_X'], e['cut_Y']),
+                 (e['Y'], e['X'], e['cut_Y'], e['cut_X'])]
+    assert len(used) == 320
+    assert len(set(used)) == 320
+    assert set(used) == set(rows)
+
+
+def test_s6_symmetric_difference_is_first_minus_second():
+    """M8: the difference is C(X@a -> Y@b) minus C(Y@b -> X@a), in that order."""
+    rows = p9_rows()
+    rows[(0, 1, 60, 120)]['corroborated'] = 0.9
+    rows[(1, 0, 120, 60)]['corroborated'] = 0.4
+    e = next(x for x in dw.symmetric_table(rows)
+             if (x['X'], x['Y'], x['cut_X'], x['cut_Y']) == (0, 1, 60, 120))
+    assert (e['C_X_to_Y'], e['C_Y_to_X']) == (0.9, 0.4)
+    assert e['difference'] == pytest.approx(0.5)
+
+
+def test_s6_g4_one_ulp_stops_the_stage_before_any_unseen_row(tmp_path, capsys,
+                                                             monkeypatch):
+    """M9: G4 fails on one ulp, and no unseen row is computed, written or printed.
+
+    The last part is the one that matters, so it is proved rather than argued:
+    a spy on `shares` -- the C function -- counts 140 calls, one per seen row
+    and not one more, and a spy on `s6_row` shows every key it was asked for
+    was a seen one. The fail file and the terminal are then checked for an
+    unseen (cut_A, cut_B) anywhere in them.
+    """
+    by_kc, spawn = s6_sides()
+    seen = [k for k in dw.matrix_keys() if dw.is_seen(k[2], k[3])]
+    rows = dw.cut_matrix(by_kc, spawn, seen)          # before the spies
+    comparisons = [{'source': 's4', 'path': f'same_cut[{i}].corroborated',
+                    'key': k, 'field': 'corroborated',
+                    'stored': rows[k]['corroborated']}
+                   for i, k in enumerate(seen)]
+    was = comparisons[7]['stored']
+    comparisons[7]['stored'] = math.nextafter(was, math.inf)
+    assert comparisons[7]['stored'] != was
+
+    keys_asked, c_calls = [], []
+    real_row, real_shares = dw.s6_row, dw.shares
+    monkeypatch.setattr(dw, 's6_row', lambda b, s, key: (
+        keys_asked.append(key), real_row(b, s, key))[1])
+    monkeypatch.setattr(dw, 'shares', lambda res: (
+        c_calls.append(1), real_shares(res))[1])
+
+    with pytest.raises(SystemExit) as e:
+        dw.s6_matrix(by_kc, spawn, comparisons,
+                     {'stage': 's6', 'head': 'synthetic'}, tmp_path)
+    assert e.value.code == 2
+
+    assert len(keys_asked) == dw.N_SEEN
+    assert all(dw.is_seen(k[2], k[3]) for k in keys_asked)
+    assert len(c_calls) == dw.N_SEEN           # C ran on the seen rows only
+
+    assert not list(tmp_path.glob('s6_cutmatrix_*.json'))
+    written = list(tmp_path.glob('s6_g4_fail_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert 'rows' not in payload and 'P9' not in payload
+    assert len(payload['seen_rows']) == dw.N_SEEN
+    assert all(r['seen'] for r in payload['seen_rows'])
+    assert payload['G4']['n_equal'] == dw.N_SEEN - 1
+    pairs = cut_pairs_in(payload)
+    assert pairs and all(dw.is_seen(ca, cb) for ca, cb in pairs)
+
+    out = capsys.readouterr().out
+    assert 'G4: FAIL' in out
+    assert 'cut_A \\ cut_B' not in out         # the 4x4 table never printed
+    assert 'P9' not in out
+    printed = re.findall(r'cut_A (\d+) cut_B (\d+)', out)
+    assert printed and all(dw.is_seen(int(ca), int(cb)) for ca, cb in printed)
+
+
+def test_s6_g4_holding_lets_the_whole_matrix_through(tmp_path):
+    """M10: with G4 equal, all 320 rows are computed and written."""
+    by_kc, spawn = s6_sides()
+    seen = [k for k in dw.matrix_keys() if dw.is_seen(k[2], k[3])]
+    rows = dw.cut_matrix(by_kc, spawn, seen)
+    comparisons = [{'source': 's4', 'path': f'same_cut[{i}].{f}', 'key': k,
+                    'field': f, 'stored': rows[k][f]}
+                   for i, k in enumerate(seen)
+                   for f in ('L_A_m', 'corroborated', 'not_corroborated')]
+    out = dw.s6_matrix(by_kc, spawn, comparisons,
+                       {'stage': 's6', 'head': 'synthetic'}, tmp_path)
+
+    assert out['G4']['all_equal'] and out['G4']['n'] == 3 * dw.N_SEEN
+    assert (out['n_rows'], out['n_seen'], out['n_unseen']) == (320, 140, 180)
+    assert len(out['symmetric']) == 160
+    assert (out['P9']['holds'], out['P9']['n_holding'], out['P9']['of']) == (
+        True, 60, 60)
+    written = list(tmp_path.glob('s6_cutmatrix_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert len(payload['rows']) == 320
+    assert sum(1 for r in payload['rows'] if r['seen']) == 140
+    assert out['written']['path'] == str(written[0])
+    assert out['written']['sha256'] == hashlib.sha256(
+        written[0].read_bytes()).hexdigest()
+
+
+def test_s6_reads_the_p9_paragraph_from_the_spec_text():
+    """M11: header to blank line, unwrapped, with a list marker taken off."""
+    text = ('## 9. Pre-registrations\n\n'
+            '**P9. REGISTERED 8 Oct 2026.** Convergence, A held at an early\n'
+            'cut: the share is non-increasing.\n'
+            '\n'
+            'A later paragraph that is not P9.\n')
+    assert dw.spec_paragraph(text, dw.P9_HEADER) == (
+        '**P9. REGISTERED 8 Oct 2026.** Convergence, A held at an early cut: '
+        'the share is non-increasing.')
+    assert dw.spec_paragraph('- **P3. REGISTERED.** one\n  two\n\n',
+                             '**P3. REGISTERED') == (
+        '**P3. REGISTERED.** one two')
+    with pytest.raises(SystemExit) as e:
+        dw.spec_paragraph('no prediction here\n', dw.P9_HEADER)
+    assert e.value.code == 2
+
+
+def test_s6_refuses_a_dirty_tree(monkeypatch):
+    """M12a: a result file must not name a commit it was not produced by."""
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/divergence_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s6()
+    assert e.value.code == 2
+
+
+def test_s6_refuses_when_the_registration_is_not_an_ancestor(monkeypatch):
+    """M12b: P9 must be registered in history behind the code that tests it."""
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] in ('status', 'merge-base') else 'deadbeef'))
+    with pytest.raises(SystemExit) as e:
+        dw.run_s6()
+    assert e.value.code == 2
+
+
+def test_s6_refuses_when_the_spec_at_head_lacks_p9(monkeypatch):
+    """M12c: ancestry is not enough -- the spec at HEAD must carry the header."""
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return '## 9\n\n- **P3. REGISTERED 6 Oct 2026.** something\n'
+        return 'c0ffee'                       # merge-base == rev-parse
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s6()
     assert e.value.code == 2
 
 

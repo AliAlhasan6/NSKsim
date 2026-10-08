@@ -1318,12 +1318,518 @@ def _write_s5(payload: dict, out_dir: Path) -> dict:
     return payload
 
 
+# ── S6: the cut matrix, G4 and P9 (spec v0.11, "Symmetric summary and
+#    convergence series (O3)") ────────────────────────────────────────────────
+
+SPEC_REL = 'docs/specs/SPEC_b2_divergence_walls.md'
+S6_REGISTRATION = '533fa52'        # the commit that registered P9 (spec v0.11)
+P9_HEADER = '**P9. REGISTERED'
+P9_GATE_TEXT = 'P9. REGISTERED'
+S4_RESULT = 's4_predictions_20261005T230035Z.json'
+S5_RESULT = 's5_viewpoint_20261006T212758Z.json'
+FULL_CUT = 1200                    # the cut at which A's wall set is final
+P9_A_CUTS = (60, 120, 240)         # P9's three early A cuts
+N_ROBOTS = 5
+N_SEEN, N_UNSEEN = 140, 180        # of the 320-row matrix; both are asserted
+
+
+def ordered_pairs(n_robots: int = N_ROBOTS) -> list[tuple[int, int]]:
+    """The 20 ordered pairs (A, B) of distinct robots, in S5's order."""
+    return [(a, b) for a in range(n_robots) for b in range(n_robots) if a != b]
+
+
+def is_seen(cut_a: int, cut_b: int) -> bool:
+    """Was this row's C computed before S6? Spec v0.11, "Rows already seen".
+
+    Seen exactly when A sits at cut1200 -- P3's 80 rows, S4 -- or when the two
+    cuts are equal -- the same-cut series, S4's other 80, the two sets sharing
+    the 20 rows where both maps are at cut1200. Everything else is one of the
+    180 rows no result file in `experiments/logs/divergence/` holds, and the
+    reason this stage computes the seen rows first and gates on them.
+    """
+    return cut_a == FULL_CUT or cut_a == cut_b
+
+
+def matrix_keys(cuts: tuple = CUTS, n_robots: int = N_ROBOTS) -> list[tuple]:
+    """The 320 keys of the cut matrix: (A, B, cut_A, cut_B), A != B."""
+    return [(a, b, ca, cb) for (a, b) in ordered_pairs(n_robots)
+            for ca in cuts for cb in cuts]
+
+
+def s6_row(by_kc: dict, spawn: dict, key: tuple) -> dict:
+    """One cut-matrix row: C of A@cut_A against B@cut_B, and nothing else.
+
+    THE C FUNCTION IS `shares`, UNCHANGED -- the same function S4's P3 and
+    same-cut rows and S5's reported rows were measured with, which is what
+    makes G4 an equality rather than a comparison of two implementations. The
+    row around it is `pair_row`'s frame change with the same arguments: B's
+    face elements translated into A's frame, A's own elements classified, no
+    rays (t2 is off, so `classify` never reads them).
+
+    NO VIEWPOINT WEIGHT. `hist_a` and `hist_b` are left at None, as spec v0.11
+    "What is not computed" requires, so `classify` takes the `corroborate`
+    branch rather than `corroborate_matches`. The corroboration mask is the
+    same either way -- `classify` says so, and
+    `test_o1_the_mask_is_the_same_with_and_without_matching` holds it -- so G4
+    can still compare against S5, which passed histograms.
+
+    `key` is the whole key, so a caller (or a test's spy) sees which row is
+    being computed before any C exists for it.
+    """
+    ka, kb, cut_a, cut_b = key
+    a, b = by_kc[(ka, cut_a)], by_kc[(kb, cut_b)]
+
+    keep_b = b['seg_of'] >= 0
+    bx, by = to_frame_a(b['el']['x'], b['el']['y'], spawn[kb], spawn[ka])
+    el_b = dict(face_elements_only(b['el'], b['seg_of']))
+    el_b['x'], el_b['y'] = bx[keep_b], by[keep_b]
+    el_b['seg'] = b['seg_of'][keep_b]
+
+    res = classify(a['el'], a['seg_of'], el_b, None, a['rho'], a['origin'],
+                   a['shape'])
+    sh = shares(res)
+    return {
+        'A': ka, 'B': kb, 'cut_A': cut_a, 'cut_B': cut_b,
+        'A_stem': a['stem'], 'B_stem': b['stem'],
+        'L_A_m': sh['L_A'],
+        'corroborated': sh['corroborated'],
+        'not_corroborated': sh['not_corroborated'],
+        'n_corroborated': sh['n_corroborated'],
+        'n_elements': sh['n_elements'],
+        'seen': is_seen(cut_a, cut_b),
+    }
+
+
+def cut_matrix(by_kc: dict, spawn: dict, keys) -> dict:
+    """The rows for `keys`, keyed by key. Computes exactly what it is asked for."""
+    return {k: s6_row(by_kc, spawn, k) for k in keys}
+
+
+def s4_comparisons(s4: dict) -> list[dict]:
+    """Every stored value of S4's that S6 recomputes, with its matrix row.
+
+    THE ORDER OF `not_corroborated_by_B_cut` is the registered one: P3 is
+    stated over B's cut going "60 -> 120 -> 240 -> 1200", which is `CUTS`.
+    S4's own code is not in history -- no commit in this repository contains
+    the script that wrote `s4_predictions_20261005T230035Z.json` -- so the
+    order cannot be read off it, and the spec is the authority. The order is
+    not inferred from the values. It is also cross-checked for free: S5's
+    `reported.A_cut1200_by_B_cut` carries `cut_B` explicitly on the same 80
+    rows, so a wrong order here would fail G4 on P3's entries alone and leave
+    S5's untouched.
+
+    P4's `max_dist_m` and `share_within_eps` are not here: they measure
+    corroborated length against `knowledge_world.sdf`, and S6 reads no truth.
+    `n_corroborated` is, because it is the corroborated count whose ratio is C.
+    """
+    out = []
+    for i, row in enumerate(s4['P3']):
+        vals = row['not_corroborated_by_B_cut']
+        if len(vals) != len(CUTS):
+            die(f'S4 P3[{i}] holds {len(vals)} values, not {len(CUTS)}; the '
+                "series is B's cut over CUTS and cannot be matched to rows")
+        for j, v in enumerate(vals):
+            out.append({'source': 's4',
+                        'path': f'P3[{i}].not_corroborated_by_B_cut[{j}]',
+                        'key': (row['A'], row['B'], FULL_CUT, CUTS[j]),
+                        'field': 'not_corroborated', 'stored': v})
+    # P6: A and B both at cut1200, all 20 rows. The four with A = k0 are the
+    # ones P6 labels seen and does not test; they are stored values all the
+    # same, so G4 compares them.
+    for i, row in enumerate(s4['P6']):
+        out.append({'source': 's4', 'path': f'P6[{i}].corroborated',
+                    'key': (row['A'], row['B'], FULL_CUT, FULL_CUT),
+                    'field': 'corroborated', 'stored': row['corroborated']})
+    for i, row in enumerate(s4['same_cut']):
+        c = row['cut']
+        for field in ('L_A_m', 'corroborated', 'not_corroborated'):
+            out.append({'source': 's4', 'path': f'same_cut[{i}].{field}',
+                        'key': (row['A'], row['B'], c, c),
+                        'field': field, 'stored': row[field]})
+    for i, row in enumerate(s4['P4']):
+        c = row['cut']
+        out.append({'source': 's4', 'path': f'P4[{i}].n_corroborated',
+                    'key': (row['A'], row['B'], c, c),
+                    'field': 'n_corroborated', 'stored': row['n_corroborated']})
+    return out
+
+
+def s5_comparisons(s5: dict) -> list[dict]:
+    """Every stored C of S5's that S6 recomputes, with its matrix row.
+
+    P7's AND P8's CUTS COME FROM THEIR REGISTERED WORDING, not from a field in
+    the file: P7 is "A and B both at cut1200", and P8 is "A at cut1200" with B
+    at cut1200 against B at cut60, so `P8.rows[i].reported_B60` is the
+    (A@1200, B@60) row and P8's B-at-cut1200 column is P7's cached row, already
+    compared above. The two `reported` series do carry `cut_A` and `cut_B`, and
+    those are used as stored.
+
+    G3's rows are each map against ITSELF. The cut matrix has A != B, so they
+    are not rows of it and are not G4's to compare. The weight fields -- W,
+    w_mean, the percentiles, the unweighable shares -- are not here either:
+    S6 computes no viewpoint weight.
+    """
+    out = []
+    for i, row in enumerate(s5['P7']['rows']):
+        for field in ('corroborated', 'n_corroborated'):
+            out.append({'source': 's5',
+                        'path': f'P7.rows[{i}].reported.{field}',
+                        'key': (row['A'], row['B'], FULL_CUT, FULL_CUT),
+                        'field': field, 'stored': row['reported'][field]})
+    for i, row in enumerate(s5['P8']['rows']):
+        for field in ('corroborated', 'n_corroborated'):
+            out.append({'source': 's5',
+                        'path': f'P8.rows[{i}].reported_B60.{field}',
+                        'key': (row['A'], row['B'], FULL_CUT, 60),
+                        'field': field, 'stored': row['reported_B60'][field]})
+    for name in ('A_cut1200_by_B_cut', 'same_cut'):
+        for i, row in enumerate(s5['reported'][name]):
+            for field in ('corroborated', 'n_corroborated'):
+                out.append({'source': 's5',
+                            'path': f'reported.{name}[{i}].{field}',
+                            'key': (row['A'], row['B'], row['cut_A'],
+                                    row['cut_B']),
+                            'field': field, 'stored': row[field]})
+    return out
+
+
+def g4_compare(comparisons: list[dict], rows: dict) -> dict:
+    """G4: every stored seen value must equal S6's, exactly (`==`, no tolerance).
+
+    `rows` holds the SEEN rows and nothing else, so a comparison that names a
+    row outside them is a bug in the extractors and stops the stage here,
+    before any unseen row exists.
+    """
+    out = []
+    for c in comparisons:
+        if c['key'] not in rows:
+            die(f'G4: {c["source"]} {c["path"]} names row {c["key"]}, which is '
+                'not among the seen rows; G4 compares seen rows only')
+        got = rows[c['key']][c['field']]
+        rec = dict(c)
+        rec['computed'] = got
+        rec['equal'] = bool(got == c['stored'])
+        out.append(rec)
+
+    by_source: dict[str, dict] = {}
+    for rec in out:
+        s = by_source.setdefault(rec['source'], {'n': 0, 'n_equal': 0})
+        s['n'] += 1
+        s['n_equal'] += int(rec['equal'])
+    diffs = [r for r in out if not r['equal']]
+    return {'comparisons': out, 'by_source': by_source, 'n': len(out),
+            'n_equal': len(out) - len(diffs), 'all_equal': not diffs,
+            'differing': diffs}
+
+
+def p9_verdict(rows: dict, cuts: tuple = CUTS, a_cuts: tuple = P9_A_CUTS,
+               n_robots: int = N_ROBOTS) -> dict:
+    """P9, exactly as registered at spec v0.11.
+
+    60 series: 20 ordered pairs by A's cuts 60, 120 and 240, each the
+    not-corroborated share of A's walls at that cut as B's cut goes
+    60 -> 120 -> 240 -> 1200. A RISE OF ANY SIZE AT ANY STEP IS A FAILURE and
+    is shown, so the step test is `>` with no tolerance. With A fixed the
+    denominator is constant, which is asserted rather than assumed and is what
+    makes `rise * L_A_m` a rise in metres. A series whose A walls have zero
+    length is undefined and counts as a failure. P9 holds only if all 60 hold.
+    """
+    series, failures = [], []
+    for (a, b) in ordered_pairs(n_robots):
+        for ca in a_cuts:
+            keys = [(a, b, ca, cb) for cb in cuts]
+            vals = [rows[k]['not_corroborated'] for k in keys]
+            lengths = {rows[k]['L_A_m'] for k in keys}
+            assert len(lengths) == 1, (a, b, ca, lengths)
+            l_a = lengths.pop()
+            rec = {'A': a, 'B': b, 'cut_A': ca, 'L_A_m': l_a,
+                   'not_corroborated_by_B_cut': vals, 'B_cuts': list(cuts),
+                   'rises': [], 'undefined': False, 'holds': True}
+            if l_a == 0.0:
+                fail = {'A': a, 'B': b, 'cut_A': ca, 'L_A_m': l_a,
+                        'step': None, 'from_cut_B': None, 'to_cut_B': None,
+                        'from': None, 'to': None, 'rise': None, 'rise_m': None,
+                        'reason': "A's walls have zero length, so the series "
+                                  'is undefined'}
+                rec.update(undefined=True, holds=False)
+                failures.append(fail)
+            else:
+                for i in range(len(cuts) - 1):
+                    if vals[i + 1] > vals[i]:          # a rise, no tolerance
+                        r = vals[i + 1] - vals[i]
+                        fail = {'A': a, 'B': b, 'cut_A': ca, 'L_A_m': l_a,
+                                'step': f'cut{cuts[i]}->cut{cuts[i + 1]}',
+                                'from_cut_B': cuts[i], 'to_cut_B': cuts[i + 1],
+                                'from': vals[i], 'to': vals[i + 1],
+                                'rise': r, 'rise_m': r * l_a, 'reason': None}
+                        rec['rises'].append(fail)
+                        failures.append(fail)
+                rec['holds'] = not rec['rises']
+            series.append(rec)
+
+    n_hold = sum(1 for s in series if s['holds'])
+    return {'series': series, 'of': len(series), 'n_holding': n_hold,
+            'holds': n_hold == len(series), 'failures': failures}
+
+
+def symmetric_table(rows: dict, cuts: tuple = CUTS,
+                    n_robots: int = N_ROBOTS) -> list[dict]:
+    """O3's symmetric form: both directions of each unordered pair, side by side.
+
+    For each unordered pair {X, Y} with X < Y and each of the 16 (a, b), the
+    two directions X@a -> Y@b and Y@b -> X@a with their difference, FIRST MINUS
+    SECOND. No mean and no minimum: when one map is much smaller the two
+    directions measure different things, so the pair of numbers is the summary.
+
+    160 entries, and every one of the 320 rows is used exactly once -- a row
+    with A < B is some entry's first direction and one with A > B is some
+    entry's second. That is asserted, not asserted-looking.
+    """
+    entries, used = [], []
+    for x in range(n_robots):
+        for y in range(x + 1, n_robots):
+            for a in cuts:
+                for b in cuts:
+                    kf, kr = (x, y, a, b), (y, x, b, a)
+                    cf, cr = rows[kf]['corroborated'], rows[kr]['corroborated']
+                    entries.append({
+                        'X': x, 'Y': y, 'cut_X': a, 'cut_Y': b,
+                        'C_X_to_Y': cf, 'C_Y_to_X': cr,
+                        'difference': cf - cr,
+                        'seen_X_to_Y': rows[kf]['seen'],
+                        'seen_Y_to_X': rows[kr]['seen']})
+                    used += [kf, kr]
+    assert len(entries) == len(cuts) ** 2 * n_robots * (n_robots - 1) // 2
+    assert len(used) == len(set(used)) == len(rows), (
+        len(used), len(set(used)), len(rows))
+    return entries
+
+
+def _sha256(path: Path) -> str:
+    import hashlib                                          # noqa: PLC0415
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _is_ancestor(rev: str) -> bool:
+    """Is `rev` an ancestor of HEAD? Stdout only, so `_git` is enough.
+
+    `merge-base rev HEAD` is rev's own commit exactly when rev is an ancestor.
+    An empty answer -- no git, no such rev -- is not an ancestry claim and
+    reads as False.
+    """
+    base = _git('merge-base', rev, 'HEAD')
+    full = _git('rev-parse', f'{rev}^{{commit}}')
+    return bool(base) and bool(full) and base == full
+
+
+def spec_paragraph(text: str, header: str) -> str:
+    """The paragraph starting at `header`, unwrapped to one line.
+
+    Read by script from the spec, never retyped: a registered wording quoted
+    by hand is a wording that can drift from the one that was registered. The
+    paragraph runs from its header line to the first blank line; a list marker
+    and the continuation indent come off, and the lines join with one space,
+    which is the shape S4 stored P3, P4 and P6 in.
+    """
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.lstrip().lstrip('- ').startswith(header):
+            start = i
+            break
+    if start is None:
+        die(f'the spec carries no paragraph starting {header!r}')
+    out = []
+    for ln in lines[start:]:
+        s = ln.strip()
+        if not s:
+            break
+        out.append(s.removeprefix('- ') if not out else s)
+    return ' '.join(out)
+
+
+def _write_s6(payload: dict, out_dir: Path, prefix: str) -> tuple[Path, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    path = out_dir / f'{prefix}_{stamp}.json'
+    if path.exists():
+        die(f'{path} exists; this tool never overwrites a result')
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    sha = _sha256(path)
+    print(f'written, overwriting nothing: {path}')
+    print(f'sha256 {sha}')
+    return path, sha
+
+
+def _print_cut_table(rows: dict, cuts: tuple = CUTS) -> None:
+    """not_corroborated, min-max over the 20 ordered pairs, per (cut_A, cut_B)."""
+    label = 'cut_A \\ cut_B'
+    print(f'\nnot_corroborated, min-max over the {len(ordered_pairs())} '
+          'ordered pairs   (* = unseen before this run)')
+    print(f'{label:<16}' + ''.join(f'{f"cut_B {c}":>18}' for c in cuts))
+    for ca in cuts:
+        cells = []
+        for cb in cuts:
+            v = [r['not_corroborated'] for r in rows.values()
+                 if r['cut_A'] == ca and r['cut_B'] == cb]
+            mark = '' if is_seen(ca, cb) else '*'
+            cells.append(f'{min(v):.4f}-{max(v):.4f}{mark}' if v else '-')
+        print(f'{f"cut_A {ca}":<16}' + ''.join(f'{c:>18}' for c in cells))
+
+
+def s6_matrix(by_kc: dict, spawn: dict, comparisons: list[dict], meta: dict,
+              out_dir: Path = OUT_DIR_DEFAULT, t0: float | None = None,
+              cuts: tuple = CUTS, n_robots: int = N_ROBOTS) -> dict:
+    """The 320-row matrix, in the order that keeps the 180 unseen rows unseen.
+
+    THE SEEN ROWS FIRST, THEN G4, AND ONLY THEN THE UNSEEN ONES. If G4 fails
+    the stage writes a file of seen rows and stops at exit 2: no unseen row is
+    computed, written or printed, because none has been computed yet. The
+    guard is the order of the code, not a filter applied afterwards.
+
+    Reads no file and resolves no spawn -- `run_s6` is this function plus the
+    corpus I/O -- which is what lets the whole pipeline, G4's refusal
+    included, be exercised on hand-built sides.
+    """
+    t0 = time.monotonic() if t0 is None else t0
+    keys = matrix_keys(cuts, n_robots)
+    seen = [k for k in keys if is_seen(k[2], k[3])]
+    unseen = [k for k in keys if not is_seen(k[2], k[3])]
+    assert len(seen) == N_SEEN, len(seen)
+    assert len(unseen) == N_UNSEEN, len(unseen)
+
+    rows = cut_matrix(by_kc, spawn, seen)
+    g4 = g4_compare(comparisons, rows)
+    srcs = ', '.join(f'{s} {v["n_equal"]}/{v["n"]}'
+                     for s, v in sorted(g4['by_source'].items()))
+    print(f'G4: {"HOLD" if g4["all_equal"] else "FAIL"}  '
+          f'{g4["n_equal"]}/{g4["n"]} stored seen values equal  ({srcs})')
+
+    if not g4['all_equal']:
+        for rec in g4['differing']:
+            a, b, ca, cb = rec['key']
+            print(f'  {rec["source"]} {rec["path"]}: A=k{a} B=k{b} '
+                  f'cut_A {ca} cut_B {cb}  {rec["field"]}  '
+                  f'stored {rec["stored"]!r}  S6 {rec["computed"]!r}')
+        fail = dict(meta)
+        fail.update({'stage': 's6_g4_fail', 'seconds': time.monotonic() - t0,
+                     'G4': g4, 'seen_rows': [rows[k] for k in seen]})
+        assert all(r['seen'] for r in fail['seen_rows'])
+        path, _ = _write_s6(fail, out_dir, 's6_g4_fail')
+        die(f'G4 failed on {len(g4["differing"])} of {g4["n"]} stored seen '
+            'values; the 180 unseen rows were not computed, written or '
+            f'printed. {path}')
+
+    rows.update(cut_matrix(by_kc, spawn, unseen))
+    assert len(rows) == N_SEEN + N_UNSEEN, len(rows)
+
+    p9 = p9_verdict(rows, cuts, P9_A_CUTS, n_robots)
+    sym = symmetric_table(rows, cuts, n_robots)
+
+    print(f'P9: {"HOLD" if p9["holds"] else "FAIL"}  {p9["n_holding"]}/'
+          f'{p9["of"]} series non-increasing')
+    for f in p9['failures']:
+        if f['reason']:
+            print(f'  A=k{f["A"]} B=k{f["B"]} cut_A {f["cut_A"]}: '
+                  f'{f["reason"]}')
+        else:
+            print(f'  A=k{f["A"]} B=k{f["B"]} cut_A {f["cut_A"]}  '
+                  f'{f["step"]}  {f["from"]:.6f} -> {f["to"]:.6f}  '
+                  f'rise {f["rise"]:.6g} = {f["rise_m"]:.4g} m '
+                  f'of {f["L_A_m"]:.1f} m')
+    _print_cut_table(rows, cuts)
+
+    payload = dict(meta)
+    payload.update({'seconds': time.monotonic() - t0, 'n_rows': len(rows),
+                    'n_seen': len(seen), 'n_unseen': len(unseen),
+                    'rows': [rows[k] for k in keys], 'G4': g4, 'P9': p9,
+                    'symmetric': sym})
+    path, sha = _write_s6(payload, out_dir, 's6_cutmatrix')
+    out = dict(payload)
+    out['written'] = {'path': str(path), 'sha256': sha}
+    return out
+
+
+def run_s6(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+           ) -> dict:
+    """S6: the cut matrix, G4 against S4 and S5, then P9. Spec v0.11, O3.
+
+    The gates run in this order and each one before anything it could mislead:
+
+    1. REFUSES ON AN EDITED TREE, before a map is loaded. A registered
+       prediction evaluated against code that is not in history is not
+       evidence about that code. Tracked changes stop it; untracked files do
+       not -- `.vscode/` has sat there for weeks -- and both counts are
+       recorded.
+    2. REGISTRATION BEFORE RESULT: `533fa52`, the commit that registered P9,
+       must be an ancestor of HEAD, and the spec at HEAD must carry
+       "P9. REGISTERED". A verdict on a prediction that is not in history
+       behind this code is not a verdict.
+    3. The P9 paragraph is read from the spec AT HEAD by script and stored
+       verbatim, never retyped.
+    """
+    import fit_world_transform as fwt                       # noqa: PLC0415
+    import robot_divergence as rd                           # noqa: PLC0415
+
+    t0 = time.monotonic()
+
+    porcelain = _git('status', '--porcelain').splitlines()
+    dirty = [ln for ln in porcelain if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    if not _is_ancestor(S6_REGISTRATION):
+        die(f'{S6_REGISTRATION} registered P9 and is not an ancestor of HEAD '
+            f'{head[:7] or "(unknown)"}; the registration must be in history '
+            'behind the code that tests it')
+    spec_text = _git('show', f'HEAD:{SPEC_REL}')
+    if P9_GATE_TEXT not in spec_text:
+        die(f'the spec at HEAD carries no "{P9_GATE_TEXT}"; S6 evaluates a '
+            'registered prediction or it does not run')
+    p9_text = spec_paragraph(spec_text, P9_HEADER)
+    spec_rev = _git('log', '-1', '--format=%h', '--', SPEC_REL)
+
+    s4_path, s5_path = out_dir / S4_RESULT, out_dir / S5_RESULT
+    for p in (s4_path, s5_path):
+        if not p.is_file():
+            die(f'{p} is missing; G4 has nothing to compare the seen rows to')
+    s4 = json.loads(s4_path.read_text())
+    s5 = json.loads(s5_path.read_text())
+    comparisons = s4_comparisons(s4) + s5_comparisons(s5)
+
+    stems = corpus_stems(variant)
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    by_kc = {}
+    for s in stems:
+        k, c = gw._k_and_cut(s, 'S6 needs the robot and the cut')
+        by_kc[(k, c)] = load_side(s)
+
+    meta = {'stage': 's6', 'head': head, 'spec_rev': spec_rev,
+            'tree_dirty': bool(dirty),
+            'untracked': sum(1 for ln in porcelain if ln.startswith('??')),
+            'variant': variant, 't2': False,
+            'spec': 'SPEC_b2_divergence_walls v0.11, O3/G4/P9',
+            'predictions_verbatim': {'P9': p9_text},
+            'sources': {'s4': {'file': s4_path.name,
+                               'sha256': _sha256(s4_path),
+                               'head': s4.get('head')},
+                        's5': {'file': s5_path.name,
+                               'sha256': _sha256(s5_path),
+                               'head': s5.get('head')}},
+            'note': 'no viewpoint weight and no truth: S6 computes C only'}
+    return s6_matrix(by_kc, spawn, comparisons, meta, out_dir, t0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--stage', choices=('g2', 's5'), default=None,
+    ap.add_argument('--stage', choices=('g2', 's5', 's6'), default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
                          'the segment guard on the 20 maps; s5 evaluates G3, '
-                         'P7 and P8 on the viewpoint weight')
+                         'P7 and P8 on the viewpoint weight; s6 computes the '
+                         '320-row cut matrix, gates it on S4 and S5 with G4, '
+                         'and tests P9')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -1341,6 +1847,9 @@ def main() -> int:
         return 0
     if args.stage == 's5':
         run_s5(args.out_dir)
+        return 0
+    if args.stage == 's6':
+        run_s6(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')
