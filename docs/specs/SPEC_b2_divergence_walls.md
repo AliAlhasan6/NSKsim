@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.13, draft)
+# SPEC — B2 divergence on walls (v0.14, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -17,7 +17,10 @@ results — G4 holds, 820/820, and P9 fails, 40 of 60 series — and registers P
 losses between B's cuts, before any gain or loss was computed. v0.13 records the
 S7 results — G5 holds and P10 holds, 20 of 20 series losing an element — and
 registers P11 on the cell states behind those losses, before any cell state at
-B's later cut was read for a lost element. No code is written until the
+B's later cut was read for a lost element. v0.14 records the S8 results — G6
+holds and P11 fails, 21 of 213 wall cells freed — and registers P12 on whether
+the 132 unchanged losses are segmentation or geometry, before any segment
+assignment was read for an unchanged element. No code is written until the
 stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
@@ -671,6 +674,101 @@ behind them. The split among the other three classes (off grid, front cell
 closed, unchanged) is reported, not predicted; off-grid elements still count
 against P11.
 
+### S8 results
+
+Source: `experiments/logs/divergence/s8_cellstates_20261009T010602Z.json`, sha256
+`f71f4597d3e050417d65d092295b9ccf1ec0337bbf54af39868418da9c6c31c4`. The file is not
+tracked — `experiments/logs/` is gitignored — so the hash stands in for it. Produced
+at HEAD `e81de80`, the commit that added the stage, against a clean tree. Every
+number here was read from that file by script.
+
+**G6 — HOLD.** S8's lost-element set equals S7's exactly, 213/213, and for every one
+of the 213/213 b's wall cell is occupied and its front cell free in B's grid at k,
+read by position the same way the k' states are read.
+
+**P11 — FAIL, 21 of 213** wall cells freed, 107 required.
+
+**The four classes by S7's distance bin.** Off-grid elements count against P11, and
+are in the denominator.
+
+| class | within eps across | beyond eps across | none within 1 m | total |
+|---|---|---|---|---|
+| off grid | 0 | 0 | 31 | 31 |
+| wall cell freed | 15 | 1 | 5 | 21 |
+| front cell closed | 11 | 2 | 16 | 29 |
+| unchanged | 76 | 2 | 54 | 132 |
+| **total** | 102 | 5 | 106 | 213 |
+
+**Wall cells freed: 21.** At k' the wall cell is 12 free, 9 unknown. **Unchanged:
+132.** **Off grid: 31.**
+
+Three facts about the 31 off-grid elements, each verified by script: every one is off
+the grid by its **front** cell, never its wall cell; every one is at step **cut60 →
+cut120**; and every one has **B = k0** or **B = k1**.
+
+**Lattice offsets** over all 15 steps of all five B maps, in cells: |x| from 0.0000
+to 0.4138, |y| from 0.0000 to 0.3699. Zero would mean the two lattices coincide at
+that step.
+
+The verdict stands as registered.
+
+Erratum to the v0.13 commit message (9 Oct 2026; no registered wording changes).
+Its off-grid proxy is given as 6 of 213 lost elements outside B's image box at k',
+with a worst margin of 3.3 cm. That box was the ROS reading, `[origin,
+origin + n*res]`; under the Karto span this project uses, cell i covering
+`[origin + (i − 0.5)*res, origin + (i + 0.5)*res)`, it is 7 of 213 and 2.44 cm. The
+spec stated neither figure, so no registered text changes. S8 then measured the
+class directly: 31 off grid, all by the front cell.
+
+Erratum to the v0.13 commit message (9 Oct 2026; no registered wording changes). It
+gives the lattice offsets between B's cuts as up to 0.175 cells, which came from the
+YAML origins alone. S8 measured them over all 15 steps: up to 0.4138 cells in x and
+0.3699 in y. The spec stated no figure, so no registered text changes.
+
+## Unchanged losses: segmentation or geometry (P12)
+
+**Why.** S8 found 132 lost elements whose two cells around b hold their states at
+k'. So B's grid at k' still has a face element between those two cells, in b's
+direction. T1 compares A's elements only with B's elements that are assigned to a
+wall segment. An unchanged element is therefore lost in one of two ways: its face
+element at k' is not assigned to a segment, or it is assigned but lies outside T1's
+tolerances from A's element. On a continuous wall line whose elements are all
+assigned, some element lies within half a cell along of A's element, so a geometric
+loss along the wall also needs a neighbouring element of that line to be missing or
+unassigned. A lattice shift across the wall can, on its own, carry the face beyond
+eps.
+
+**Definitions.** For an unchanged lost element e of A at step k → k', let e' be B's
+face element at k' whose wall cell and front cell are the two cells S8 read at k'.
+Each unchanged element falls in one class:
+- **segmentation**: e' is not assigned to a wall segment at k';
+- **geometry, across**: e' is assigned and lies beyond eps across from e;
+- **geometry, along**: e' is assigned, lies within eps across from e, and lies beyond
+  rho/2 along.
+Distances are measured in the common frame, as T1 measures them.
+
+**What is computed.** Stage S9 takes S8's 132 unchanged elements
+(`s8_cellstates_20261009T010602Z.json`). For each, it finds e' among B's face
+elements at k', as `graph_walls` produces them, reads e''s segment assignment, and
+computes e''s across and along distances from e.
+- **G7.** S9 requires:
+  - its set of unchanged elements to equal S8's exactly;
+  - e' to exist for every one, in b's direction;
+  - no e' to be both assigned and within both of T1's tolerances from e, since that
+    would contradict S7's mask.
+
+  On any failure it stops before writing a verdict.
+- **Reported, not tested.** The three classes split by S7's distance bin, and, for
+  geometric losses, the lattice offset of their step.
+- S9 refuses to run on an edited tree.
+
+**P12. REGISTERED 9 Oct 2026.** Segmentation, not geometry: of the 78 unchanged
+elements outside S7's "none within 1 m" bin, at least half fall in segmentation. The
+54 unchanged elements in that bin are segmentation by construction, because S7's
+nearest-element search covers only B's assigned elements. They are reported,
+labelled seen, and not part of the test. The rest of the split is reported, not
+predicted.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -694,9 +792,10 @@ against P11.
   is a guard against it, not an explanation of it.
 - **O6.** S5's output records the distinct `(S_A, S_B)` pairs per row, so caution
   2 gets an exact count at the next rerun.
-- **O7. Losses.** P10 held (S7): every P3 series has a loss. Open: why B's later
-  map fails to corroborate elements its earlier map corroborated. P11 tests one
-  cause.
+- **O7. Losses.** P10 held (S7); P11 failed (S8): 21 of 213 wall cells were freed,
+  and 132 of the 213 lost elements have both of b's cells unchanged at k'. The 31
+  off-grid elements are all at step cut60 → cut120, with B = k0 or k1. Open: P12
+  tests segmentation for the unchanged class.
 
 ## 11. Stop points for Claude Code
 
