@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.12, draft)
+# SPEC — B2 divergence on walls (v0.13, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -14,8 +14,11 @@ computed on a real map. v0.10 records the S5 results: G3, P7 and P8 all hold,
 and O1 is closed. v0.11 decides O3's symmetric form and the convergence series,
 and registers P9, before any row P9 tests was computed. v0.12 records the S6
 results — G4 holds, 820/820, and P9 fails, 40 of 60 series — and registers P10 on
-losses between B's cuts, before any gain or loss was computed. No code is written
-until the stop-point questions in §11 are answered.
+losses between B's cuts, before any gain or loss was computed. v0.13 records the
+S7 results — G5 holds and P10 holds, 20 of 20 series losing an element — and
+registers P11 on the cell states behind those losses, before any cell state at
+B's later cut was read for a lost element. No code is written until the
+stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -550,6 +553,124 @@ element counts and in metres.
 element counts. The threshold is informed by P9's result, which showed net rises in
 20 of its 60 series. The size of the losses is reported, not predicted.
 
+### S7 results
+
+Source: `experiments/logs/divergence/s7_gainloss_20261009T000606Z.json`, sha256
+`b8b7cb6c4dc57e8df48ea9baa975dc2e85b8eddbeed7e75c71fe52a271461c21`. The file is not
+tracked — `experiments/logs/` is gitignored — so the hash stands in for it. Produced
+at HEAD `1cef039`, the commit that added the stage, against a clean tree. Every
+number here was read from that file by script.
+
+**G5 — HOLD.** The corroborated share recomputed from each element mask equals S6's
+exactly on all 320/320 rows, and losses minus gains equals S6's rise in elements on
+all 21/21 of S6's failing P9 steps.
+
+**P10 — HOLD, 20 of 20 series** with at least one loss, 10 required. Every one of
+P3's series loses at least one element at some step.
+
+**P3's 20 series, A at cut1200.** Gains and losses in elements, per step.
+
+| A | B | B: cut60 → cut120 | B: cut120 → cut240 | B: cut240 → cut1200 |
+|---|---|---|---|---|
+| k0 | k1 | +299 / −2 | +323 / −0 | +427 / −1 |
+| k0 | k2 | +193 / −1 | +390 / −0 | +341 / −7 |
+| k0 | k3 | +224 / −0 | +324 / −0 | +337 / −2 |
+| k0 | k4 | +161 / −2 | +254 / −3 | +472 / −0 |
+| k1 | k0 | +308 / −2 | +405 / −0 | +338 / −1 |
+| k1 | k2 | +194 / −1 | +386 / −1 | +337 / −4 |
+| k1 | k3 | +224 / −0 | +326 / −0 | +329 / −3 |
+| k1 | k4 | +160 / −2 | +254 / −2 | +472 / −0 |
+| k2 | k0 | +308 / −3 | +400 / −1 | +343 / −0 |
+| k2 | k1 | +299 / −2 | +320 / −1 | +425 / −1 |
+| k2 | k3 | +224 / −0 | +323 / −0 | +333 / −2 |
+| k2 | k4 | +161 / −1 | +252 / −4 | +470 / −1 |
+| k3 | k0 | +307 / −2 | +403 / −0 | +345 / −0 |
+| k3 | k1 | +298 / −2 | +321 / −0 | +428 / −0 |
+| k3 | k2 | +193 / −1 | +389 / −0 | +343 / −7 |
+| k3 | k4 | +161 / −2 | +254 / −3 | +470 / −0 |
+| k4 | k0 | +308 / −2 | +404 / −0 | +338 / −0 |
+| k4 | k1 | +299 / −2 | +322 / −0 | +427 / −0 |
+| k4 | k2 | +193 / −1 | +386 / −0 | +337 / −4 |
+| k4 | k3 | +224 / −0 | +324 / −0 | +329 / −2 |
+
+**P9's 60 series, by A's cut.** Totals over the 20 ordered pairs.
+
+| A's cut | gains | losses | series with a loss |
+|---|---|---|---|
+| 60 | 1902 | 31 | 17/20 |
+| 120 | 6181 | 41 | 17/20 |
+| 240 | 12341 | 63 | 20/20 |
+
+**Lost elements: 213** — 78 in P3's series and 135 in P9's. They fall into three bins
+by how far the nearest same-direction element of B at k' lies from the lost element,
+across and along the face, in the common frame T1 works in. Distance is Euclidean, as
+the stage measures it, and the bound is 1 m. The bins are disjoint and cover all 213.
+
+| bin | count |
+|---|---|
+| within eps across (0.1707 m), beyond rho/2 along (0.0500 m) | 102 |
+| beyond eps across, within 1 m | 5 |
+| none within 1 m | 106 |
+
+Quartiles within bins 1 and 2, in metres.
+
+| bin | axis | Q1 | median | Q3 |
+|---|---|---|---|---|
+| 1: within eps across | across | 0.0029 | 0.0066 | 0.0156 |
+| 1: within eps across | along | 0.0944 | 0.0992 | 0.1036 |
+| 2: beyond eps across | across | 0.1850 | 0.2961 | 0.2983 |
+| 2: beyond eps across | along | 0.0004 | 0.0006 | 0.0056 |
+
+Every lost element has a same-direction element of B at k' somewhere — 0 do not — and
+none has one inside both of T1's tolerances at k' (0), which is the self-check: an
+element inside both would have been corroborated.
+
+The verdict stands as registered.
+
+## Cell states under losses (P11)
+
+**Why.** S7 found 213 lost elements: each was corroborated by B at cut k and not at
+the next cut k'. B's maps are deterministic replays, so B's map at k' integrates
+every scan its map at k integrated, and more. In Karto, a cell's state rests on its
+share of hits among the rays that reach it, so a cell occupied at k can be free at k'
+once later rays pass through it. B's grid origins also differ between cuts by
+fractions of a cell, so a wall cell can be freed by the lattice moving as well as by
+later rays. P11 tests the state, not which cause freed it.
+
+**Definitions.** For a lost element e of A at step k → k', let b be the element of B
+at k that corroborates e, chosen as `corroborate_matches` chooses: nearest across,
+then nearest along, then lowest B segment id. Element b separates two cells of B's
+grid at k: its wall cell (occupied) and its front cell (free). Each cell is named by
+its centre's position in B's map frame, which is the same at every cut of B. Its
+state at k' is the state of the cell of B's grid at k' that contains that position,
+found by position, never by index, with the classification `graph_walls` uses to
+build face elements. Each lost element falls in one class:
+- **off grid**: either cell's position lies outside B's grid at k';
+- **wall cell freed**: on grid, and b's wall cell is not occupied at k';
+- **front cell closed**: on grid, b's wall cell is still occupied at k' and its front
+  cell is not free;
+- **unchanged**: on grid, and both cells hold their states at k'.
+
+**What is computed.** Stage S8 takes every lost element in S7's result file
+(`s7_gainloss_20261009T000606Z.json`) and computes b, its two cells, their states at
+k', and the class.
+- **G6.** S8 requires its set of lost elements to equal S7's exactly, and, for every
+  one, b's wall cell to be occupied and its front cell free in B's grid at k, read the
+  same way. On any difference it stops before writing a verdict, and reads no grid at
+  k'.
+- **Reported, not tested.** The four classes split by S7's distance bins; for wall
+  cells freed, whether the cell is free or unknown at k'; every unchanged element,
+  listed; and for every step, the offset between B's lattices at k and k', in cells.
+- S8 refuses to run on an edited tree.
+
+**P11. REGISTERED 9 Oct 2026.** Wall cells freed: in at least half of the 213 lost
+elements, b's wall cell lies on B's grid at k' and is not occupied there; off-grid
+elements count against P11. The threshold is informed by Karto's ratio rule and by
+the depth diagnostic, which found wall cells crossed by many rays that hit just
+behind them. The split among the other three classes (off grid, front cell
+closed, unchanged) is reported, not predicted; off-grid elements still count
+against P11.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -561,9 +682,9 @@ element counts. The threshold is informed by P9's result, which showed net rises
   `b2maps_k3_cut1200_gated_extfix_robot3`, per-map counts in "Results: G3, P7,
   P8" in §9. Treatment still undecided, though `unweighable_B` was 0.0 on every
   cut1200 row, so nothing was lost to it there.
-- **O3.** form decided and P9 registered (v0.11). Open: whether the viewpoint
-  weight's mirror agreement holds at mixed cuts. On the 180 unseen rows that weight
-  is unseen; S6 does not compute it.
+- **O3.** Form decided; P9 registered (v0.11) and failed 40/60 (S6, v0.12). Open:
+  whether the viewpoint weight's mirror agreement holds at mixed cuts. On the 180
+  rows unseen before S6, the weight is still unseen.
 - **O4.** Whether to report separately the unobserved length that parked robots
   shadow.
 - **O5.** The deep tail, unexplained. On A's own maps 4-10 % of crossings that meet
@@ -573,8 +694,9 @@ element counts. The threshold is informed by P9's result, which showed net rises
   is a guard against it, not an explanation of it.
 - **O6.** S5's output records the distinct `(S_A, S_B)` pairs per row, so caution
   2 gets an exact count at the next rerun.
-- **O7. Losses.** Why B's later map fails to corroborate elements of A that its
-  earlier map corroborated. Open; P10 and S7's reported distances bear on it.
+- **O7. Losses.** P10 held (S7): every P3 series has a loss. Open: why B's later
+  map fails to corroborate elements its earlier map corroborated. P11 tests one
+  cause.
 
 ## 11. Stop points for Claude Code
 
