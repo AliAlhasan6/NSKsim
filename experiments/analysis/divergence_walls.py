@@ -50,7 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'analysis'))
 
 import graph_walls as gw                                      # noqa: E402
-from trinary_map import CELL_CENTRE_OFFSET                    # noqa: E402
+from trinary_map import CELL_CENTRE_OFFSET, cell_index        # noqa: E402
 
 OUT_DIR_DEFAULT = gw.LOGS_DIR / 'divergence'
 
@@ -2363,15 +2363,546 @@ def run_s7(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
     return s7_gainloss(by_kc, spawn, s6, meta, out_dir, t0)
 
 
+# ── S8: cell states under losses, G6 and P11 (spec v0.13, "Cell states under
+#    losses (P11)") ────────────────────────────────────────────────────────────
+
+S8_REGISTRATION = 'df7ae16'        # the commit that registered P11 (spec v0.13)
+P11_HEADER = '**P11. REGISTERED'
+P11_GATE_TEXT = 'P11. REGISTERED'
+S7_RESULT = 's7_gainloss_20261009T000606Z.json'
+S7_SHA256 = ('b8b7cb6c4dc57e8df48ea9baa975dc2e85b8eddbeed7e75c71fe52a271461c'
+             '21')
+N_LOST = 213                       # P11's denominator, stated in the wording
+
+# P11's four classes, in the spec's order. The order is the classification:
+# off grid is decided first, so a freed wall cell that is off the grid is never
+# counted as freed.
+OFF_GRID = 'off_grid'
+WALL_FREED = 'wall_cell_freed'
+FRONT_CLOSED = 'front_cell_closed'
+UNCHANGED = 'unchanged'
+P11_CLASSES = (OFF_GRID, WALL_FREED, FRONT_CLOSED, UNCHANGED)
+
+# S7's three distance bins, the v0.13 "S7 results" definitions
+BIN_WITHIN_EPS = 'within_eps_across'
+BIN_BEYOND_EPS = 'beyond_eps_across'
+BIN_FAR = 'none_within_1m'
+BIN_WITHIN_T1 = 'within_t1'        # cannot occur; counted, never dropped
+S7_BINS = (BIN_WITHIN_EPS, BIN_BEYOND_EPS, BIN_FAR)
+
+
+def cell_centres_of(el: dict, i: int, rho: float) -> tuple:
+    """Element `i`'s two cells, as centres in its own map frame.
+
+    `face_elements` places an element half a cell from the OCCUPIED cell's
+    centre towards the free neighbour: `x = cell_centre(ox, c) + 0.5*dcol*rho`
+    and `y = cell_centre(oy, r) + 0.5*drow*rho`, the occupied cell being
+    `(r, c)` and the free one `(r + drow, c + dcol)`. DIRS makes the normal the
+    same pair on all four directions -- `(nx, ny) == (dcol, drow)` -- so both
+    centres are the midpoint stepped half a cell along the element's own
+    normal, with no per-direction case:
+
+        wall cell  = (x - rho/2 * nx,  y - rho/2 * ny)    occupied at k
+        front cell = (x + rho/2 * nx,  y + rho/2 * ny)    free at k
+
+    Returns `(wall_centre, front_centre)`.
+    """
+    half = 0.5 * rho
+    x, y = float(el['x'][i]), float(el['y'][i])
+    nx, ny = float(el['nx'][i]), float(el['ny'][i])
+    return ((x - half * nx, y - half * ny), (x + half * nx, y + half * ny))
+
+
+def state_at(side: dict, pos: tuple) -> dict:
+    """The state of the cell of `side`'s grid that CONTAINS `pos`.
+
+    By position, never by index, as the spec requires: `trinary_map.cell_index`
+    is this project's one position-to-index conversion -- the inverse of
+    `cell_centre`, carrying the origin, the resolution and Karto's
+    `CELL_CENTRE_OFFSET` -- and `trinary_map.sample` makes the same two calls
+    internally. The grid is bottom-up (`load_grid`'s convention A), so the row
+    index grows with y and the PGM row order is already undone.
+
+    OFF THE GRID THE STATE IS None, NOT UNKNOWN. `sample` fills
+    outside-the-map with UNKNOWN, which is right for a resample and wrong here:
+    P11's first class turns on telling those two apart, so the bounds test is
+    explicit and `sample` is not used for the lookup.
+
+    `side` is a whole loaded side rather than a grid, so a caller -- or a
+    test's spy -- sees WHICH map is being read before any state comes back.
+    """
+    grid, origin, rho = side['grid'], side['origin'], side['rho']
+    h, w = grid.shape
+    col = int(cell_index(pos[0], origin[0], rho))
+    row = int(cell_index(pos[1], origin[1], rho))
+    on = (0 <= row < h) and (0 <= col < w)
+    return {'map': side['stem'], 'row': row, 'col': col, 'on_grid': on,
+            'state': (int(grid[row, col]) if on else None)}
+
+
+def state_name(state) -> str | None:
+    """`occupied` / `free` / `unknown`, or None off the grid."""
+    return None if state is None else {gw.OCC: 'occupied', gw.FREE: 'free',
+                                       gw.UNKNOWN: 'unknown'}.get(state,
+                                                                  'other')
+
+
+def classify_cells(wall_kp: dict, front_kp: dict) -> str:
+    """P11's four classes, decided in the spec's order."""
+    if not (wall_kp['on_grid'] and front_kp['on_grid']):
+        return OFF_GRID
+    if wall_kp['state'] != gw.OCC:
+        return WALL_FREED
+    if front_kp['state'] != gw.FREE:
+        return FRONT_CLOSED
+    return UNCHANGED
+
+
+def s7_distance_bin(rec: dict, eps: float, half: float,
+                    limit: float = NEAREST_LIMIT_M) -> str:
+    """Which of S7's three distance bins a lost element sits in.
+
+    The v0.13 "S7 results" definitions, with the 1 m cut outermost so the bins
+    are disjoint. An element inside both of T1's tolerances would have been
+    corroborated and cannot occur; it gets its own label rather than being
+    folded into a bin it does not belong to.
+    """
+    if rec['dist_m'] is None or rec['dist_m'] > limit:
+        return BIN_FAR
+    if rec['across_m'] <= eps and rec['along_m'] > half:
+        return BIN_WITHIN_EPS
+    if rec['across_m'] > eps:
+        return BIN_BEYOND_EPS
+    return BIN_WITHIN_T1
+
+
+def lattice_offsets(by_kc: dict, cuts: tuple = CUTS,
+                    n_robots: int = N_ROBOTS) -> list[dict]:
+    """How far B's two lattices sit apart at each step, in cells, x and y.
+
+    The fractional part of `(origin_k' - origin_k) / resolution`, mapped to
+    [-0.5, 0.5). Zero means the two lattices coincide, so a cell centre at k is
+    a cell centre at k'; anything else means it is not, which is the whole
+    reason a state is read by position and never by index. Reported, not
+    tested: it says how much of any freeing the lattice alone could account
+    for.
+    """
+    out = []
+    for k in range(n_robots):
+        for i in range(len(cuts) - 1):
+            lo, hi = by_kc[(k, cuts[i])], by_kc[(k, cuts[i + 1])]
+            row = {'B': k, 'from_cut': cuts[i], 'to_cut': cuts[i + 1],
+                   'step': f'cut{cuts[i]}->cut{cuts[i + 1]}',
+                   'resolution': hi['rho']}
+            for ax, name in ((0, 'x'), (1, 'y')):
+                d = (hi['origin'][ax] - lo['origin'][ax]) / hi['rho']
+                frac = d - math.floor(d)
+                row[f'offset_{name}_cells'] = float(
+                    frac - 1.0 if frac >= 0.5 else frac)
+            out.append(row)
+    return out
+
+
+def b_matches(by_kc: dict, spawn: dict, keys) -> dict:
+    """`corroborate_matches` on each row a lost element came from.
+
+    S7's records name the nearest B element at k', never the element b at k
+    that corroborated e, so b is recovered by recomputing the match with
+    `corroborate_matches`, unchanged. One call per distinct
+    (A, B, cut_A, k) row rather than one per element.
+
+    IT NEEDS NO BEARING HISTOGRAM: its arguments are the two element lists,
+    eps and rho. It does read `el_b['seg']`, which `s6_classify` sets, and that
+    is what makes its tie-break "lowest B segment id" as the spec states
+    rather than lowest array index.
+
+    `match` indexes the FACE-ONLY subset `s6_classify` passes to it, so
+    `face_to_full` maps it back to B's own element arrays. B's own-frame
+    coordinates are then read straight from there, never by inverting the
+    frame translation, which would round-trip through two floats for nothing.
+    """
+    out = {}
+    for key in keys:
+        res, el_b, a, b = s6_classify(by_kc, spawn, key)
+        hit, match = corroborate_matches(a['el'], el_b, res['eps'], a['rho'])
+        # the mask corroborate_matches produces has to be the mask the measure
+        # used, or b is not the element that corroborated e
+        assert np.array_equal(hit, res['corroborated']), key
+        out[key] = {'match': match,
+                    'face_to_full': np.nonzero(b['seg_of'] >= 0)[0],
+                    'b_side': b, 'eps': res['eps']}
+    return out
+
+
+def g6_lost_set(recomputed: list, stored: list,
+                n_expected: int = N_LOST) -> dict:
+    """G6 part 1: S8's lost-element set must equal S7's exactly.
+
+    The identity is (A, B, cut_A, step, element index). Duplicates would make
+    a set comparison lie about the counts, so they are rejected rather than
+    silently collapsed.
+    """
+    def key(r):
+        return (r['A'], r['B'], r['cut_A'], r['step'], r['element'])
+
+    mine, theirs = [key(r) for r in recomputed], [key(r) for r in stored]
+    assert len(set(mine)) == len(mine), 'S8 produced a duplicate lost element'
+    assert len(set(theirs)) == len(theirs), 'S7 holds a duplicate lost element'
+    only_s8 = sorted(set(mine) - set(theirs))
+    only_s7 = sorted(set(theirs) - set(mine))
+    return {'n_recomputed': len(mine), 'n_stored': len(theirs),
+            'n_expected': n_expected,
+            'n_common': len(set(mine) & set(theirs)),
+            'only_in_s8': [list(k) for k in only_s8],
+            'only_in_s7': [list(k) for k in only_s7],
+            'equal': set(mine) == set(theirs) and len(mine) == n_expected}
+
+
+def g6_states_at_k(by_kc: dict, matches: dict, stored: list) -> dict:
+    """G6 part 2: b's wall cell occupied and its front cell free, in B at k.
+
+    Read the same way the k' states will be read, which is the point: if the
+    lookup were wrong it would be wrong here, on cells whose states the measure
+    already asserts, rather than silently wrong at k' where nothing is known
+    yet. Opens no grid at k'.
+    """
+    rows, n_ok = [], 0
+    for rec in stored:
+        key = (rec['A'], rec['B'], rec['cut_A'], rec['from_cut_B'])
+        m = matches[key]
+        j = int(m['match'][rec['element']])
+        assert j >= 0, (key, rec['element'])
+        b_full = int(m['face_to_full'][j])
+        side_k = m['b_side']
+        wall, front = cell_centres_of(side_k['el'], b_full, side_k['rho'])
+        s_wall, s_front = state_at(side_k, wall), state_at(side_k, front)
+        ok = (s_wall['on_grid'] and s_front['on_grid']
+              and s_wall['state'] == gw.OCC and s_front['state'] == gw.FREE)
+        n_ok += int(ok)
+        rows.append({
+            'A': rec['A'], 'B': rec['B'], 'cut_A': rec['cut_A'],
+            'step': rec['step'], 'element': rec['element'],
+            'b_index': b_full, 'b_dir': int(side_k['el']['dir'][b_full]),
+            'wall_cell': list(wall), 'front_cell': list(front),
+            'wall_at_k': state_name(s_wall['state']),
+            'front_at_k': state_name(s_front['state']),
+            'wall_rc_at_k': [s_wall['row'], s_wall['col']],
+            'front_rc_at_k': [s_front['row'], s_front['col']],
+            'map_at_k': side_k['stem'], 'equal': bool(ok)})
+    diffs = [r for r in rows if not r['equal']]
+    return {'rows': rows, 'n': len(rows), 'n_ok': n_ok,
+            'all_ok': not diffs, 'differing': diffs}
+
+
+def p11_verdict(records: list, n_expected: int = N_LOST) -> dict:
+    """P11, exactly as registered at spec v0.13.
+
+    Wall cells freed in at least half of the 213 lost elements, so the test is
+    `2 * n_freed >= 213`. OFF-GRID ELEMENTS STAY IN THE DENOMINATOR -- they
+    count against P11, as the wording says twice -- so the denominator is
+    asserted to be the full set rather than the on-grid subset.
+    """
+    assert len(records) == n_expected, len(records)
+    by_class = {c: sum(1 for r in records if r['class'] == c)
+                for c in P11_CLASSES}
+    assert sum(by_class.values()) == n_expected, by_class
+    freed = by_class[WALL_FREED]
+    return {'of': n_expected, 'n_freed': freed,
+            'min_required': -(-n_expected // 2),
+            'holds': 2 * freed >= n_expected,
+            'by_class': by_class}
+
+
+def _no_kp_state_in(payload: dict, by_kc: dict) -> None:
+    """Assert a G6 fail payload holds nothing from k'. The fail guard.
+
+    A MAP CANNOT BE IDENTIFIED BY ITS STEM ALONE: B at cut240 is the k' map of
+    the cut120 -> cut240 step and the k map of cut240 -> cut1200, so the same
+    stem appears legitimately as a k read. The invariant that does hold is per
+    row -- every state in the payload was read at THAT row's own k -- plus the
+    absence of any k' field, which is where a k' state could hide.
+    """
+    banned = ('_kp', 'class', 'off_grid_cell')
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                assert not any(w in str(k) for w in banned), \
+                    f'{path}.{k} is a k\' field'
+                walk(v, f'{path}.{k}')
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f'{path}[{i}]')
+
+    walk(payload, '$')
+    block = (payload.get('G6') or {}).get('states_at_k') or {}
+    for r in block.get('rows', []):
+        want = by_kc[(r['B'], _from_cut(r['step']))]['stem']
+        assert r['map_at_k'] == want, (r['map_at_k'], want)
+
+
+def _write_s8(payload: dict, out_dir: Path, prefix: str) -> tuple[Path, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    path = out_dir / f'{prefix}_{stamp}.json'
+    if path.exists():
+        die(f'{path} exists; this tool never overwrites a result')
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    sha = _sha256(path)
+    print(f'written, overwriting nothing: {path}')
+    print(f'sha256 {sha}')
+    return path, sha
+
+
+def _print_s8(records: list, p11: dict, bins: dict, offsets: list) -> None:
+    """The classes by distance bin, the freed split, the lists, the offsets."""
+    print(f'\nclasses by S7 distance bin{"":<6}'
+          + ''.join(b.rjust(22) for b in S7_BINS) + 'total'.rjust(8))
+    for c in P11_CLASSES:
+        cells = [str(bins.get((c, b), 0)) for b in S7_BINS]
+        total = sum(bins.get((c, b), 0) for b in S7_BINS)
+        print(f'  {c:<30}' + ''.join(v.rjust(22) for v in cells)
+              + str(total).rjust(8))
+    extra = {k: v for k, v in bins.items() if k[1] not in S7_BINS}
+    if extra:
+        print(f'  outside the three bins: {extra}')
+
+    freed = [r for r in records if r['class'] == WALL_FREED]
+    split = {n: sum(1 for r in freed if r['wall_at_kp'] == n)
+             for n in sorted({r['wall_at_kp'] for r in freed})}
+    print(f'\nwall cells freed: {len(freed)}   by state at k\': {split}')
+
+    for label, cls in (('unchanged', UNCHANGED), ('off grid', OFF_GRID)):
+        sel = [r for r in records if r['class'] == cls]
+        print(f'\n{label}: {len(sel)}')
+        for r in sel:
+            tail = (f'wall {r["wall_at_kp"]}, front {r["front_at_kp"]}'
+                    if cls == UNCHANGED else
+                    f'off by {r["off_grid_cell"]}')
+            print(f'  A=k{r["A"]} B=k{r["B"]} cut_A {r["cut_A"]} {r["step"]}'
+                  f'  element {r["element"]}  b {r["b_index"]}  {tail}')
+
+    ax = [abs(o['offset_x_cells']) for o in offsets]
+    ay = [abs(o['offset_y_cells']) for o in offsets]
+    print(f'\nlattice offsets over {len(offsets)} steps, in cells: '
+          f'|x| {min(ax):.4f} to {max(ax):.4f}, '
+          f'|y| {min(ay):.4f} to {max(ay):.4f}')
+
+
+def s8_cellstates(by_kc: dict, spawn: dict, s7: dict, meta: dict,
+                  out_dir: Path = OUT_DIR_DEFAULT, t0: float | None = None,
+                  cuts: tuple = CUTS, n_robots: int = N_ROBOTS,
+                  n_expected: int = N_LOST) -> dict:
+    """The order that keeps the k' states unseen behind G6.
+
+    G6's two parts run on the lost-element set and on B's grids AT K, and only
+    when both hold does anything open a grid at k'. On a failure the stage
+    writes the G6 comparisons and stops at exit 2, having opened no k' grid --
+    the guard is the order of the code, and it is checked against the payload
+    before the file is written.
+
+    Reads no file and resolves no spawn; `run_s8` is this function plus the
+    corpus I/O, so the whole pipeline runs on hand-built sides.
+    """
+    t0 = time.monotonic() if t0 is None else t0
+    stored = s7['lost_elements']
+    rho = s7['rho_m']
+    eps, half = gw.EPS_FACTOR * rho, 0.5 * rho
+
+    # ── G6 part 1: the lost-element set, recomputed with S7's own code ───────
+    masks = {k: s7_mask(by_kc, spawn, k) for k in matrix_keys(cuts, n_robots)}
+    series = [gain_loss_series(masks, a, b, ca, cuts)
+              for (a, b, ca) in series_keys(cuts, n_robots)]
+    recomputed = lost_elements(masks, series, cuts)
+    g6a = g6_lost_set(recomputed, stored, n_expected)
+
+    # ── G6 part 2: b, its two cells, and their states in B's grid AT K ──────
+    keys_k = sorted({(r['A'], r['B'], r['cut_A'], r['from_cut_B'])
+                     for r in stored})
+    g6b = None
+    if g6a['equal']:
+        matches = b_matches(by_kc, spawn, keys_k)
+        g6b = g6_states_at_k(by_kc, matches, stored)
+
+    ok = g6a['equal'] and g6b is not None and g6b['all_ok']
+    print(f'G6: lost set {g6a["n_common"]}/{g6a["n_expected"]} common'
+          + ('' if g6b is None else
+             f', states at k {g6b["n_ok"]}/{g6b["n"]} as required')
+          + f'  {"HOLD" if ok else "FAIL"}')
+    if not ok:
+        if not g6a['equal']:
+            print(f'  only in S8: {g6a["only_in_s8"][:10]}')
+            print(f'  only in S7: {g6a["only_in_s7"][:10]}')
+        else:
+            for r in g6b['differing'][:20]:
+                print(f'  A=k{r["A"]} B=k{r["B"]} cut_A {r["cut_A"]} '
+                      f'{r["step"]} element {r["element"]}: wall '
+                      f'{r["wall_at_k"]}, front {r["front_at_k"]}')
+        fail = dict(meta)
+        fail.update({'stage': 's8_g6_fail', 'seconds': time.monotonic() - t0,
+                     'G6': {'lost_set': g6a, 'states_at_k': g6b}})
+        _no_kp_state_in(fail, by_kc)
+        path, _ = _write_s8(fail, out_dir, 's8_g6_fail')
+        die('G6 failed; no grid at k\' was opened, and no cell state at k\' '
+            f'was computed, written or printed. {path}')
+
+    # ── the k' states, and the class ────────────────────────────────────────
+    records = []
+    for row in g6b['rows']:
+        side_kp = by_kc[(row['B'], _to_cut(row['step']))]
+        wall = tuple(row['wall_cell'])
+        front = tuple(row['front_cell'])
+        s_wall, s_front = state_at(side_kp, wall), state_at(side_kp, front)
+        cls = classify_cells(s_wall, s_front)
+        off = None
+        if cls == OFF_GRID:
+            off = ('both' if not (s_wall['on_grid'] or s_front['on_grid'])
+                   else 'wall' if not s_wall['on_grid'] else 'front')
+        rec = dict(row)
+        rec.pop('equal', None)
+        rec.update({'map_at_kp': side_kp['stem'],
+                    'wall_at_kp': state_name(s_wall['state']),
+                    'front_at_kp': state_name(s_front['state']),
+                    'wall_rc_at_kp': [s_wall['row'], s_wall['col']],
+                    'front_rc_at_kp': [s_front['row'], s_front['col']],
+                    'wall_on_grid_at_kp': s_wall['on_grid'],
+                    'front_on_grid_at_kp': s_front['on_grid'],
+                    'class': cls, 'off_grid_cell': off})
+        records.append(rec)
+
+    p11 = p11_verdict(records, n_expected)
+    print(f'P11: {"HOLD" if p11["holds"] else "FAIL"}  {p11["n_freed"]}/'
+          f'{p11["of"]} wall cells freed, {p11["min_required"]} required')
+
+    # ── reported, not tested ────────────────────────────────────────────────
+    bin_of = {(r['A'], r['B'], r['cut_A'], r['step'], r['element']):
+              s7_distance_bin(r, eps, half) for r in stored}
+    for r in records:
+        r['s7_bin'] = bin_of[(r['A'], r['B'], r['cut_A'], r['step'],
+                              r['element'])]
+    table = {}
+    for r in records:
+        table[(r['class'], r['s7_bin'])] = table.get(
+            (r['class'], r['s7_bin']), 0) + 1
+    offsets = lattice_offsets(by_kc, cuts, n_robots)
+    _print_s8(records, p11, table, offsets)
+
+    payload = dict(meta)
+    payload.update({
+        'seconds': time.monotonic() - t0, 'rho_m': rho, 'eps_m': eps,
+        'n_lost': len(records),
+        'G6': {'lost_set': g6a, 'states_at_k': g6b,
+               'all_ok': g6a['equal'] and g6b['all_ok']},
+        'elements': records,
+        'reported': {
+            'class_by_bin': [{'class': c, 's7_bin': b, 'n': n}
+                             for (c, b), n in sorted(table.items())],
+            'wall_freed_by_state': {
+                n: sum(1 for r in records
+                       if r['class'] == WALL_FREED and r['wall_at_kp'] == n)
+                for n in sorted({r['wall_at_kp'] for r in records
+                                 if r['class'] == WALL_FREED})},
+            'unchanged': [r for r in records if r['class'] == UNCHANGED],
+            'off_grid': [r for r in records if r['class'] == OFF_GRID],
+            'lattice_offsets': offsets},
+        'P11': p11})
+    path, sha = _write_s8(payload, out_dir, 's8_cellstates')
+    out = dict(payload)
+    out['written'] = {'path': str(path), 'sha256': sha}
+    return out
+
+
+def _from_cut(step: str) -> int:
+    """k out of a step label, which is how S7 writes the pair."""
+    return int(step.split('->')[0].removeprefix('cut'))
+
+
+def _to_cut(step: str) -> int:
+    """k' out of a step label, which is how S7 writes the pair."""
+    return int(step.split('->')[1].removeprefix('cut'))
+
+
+def run_s8(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+           ) -> dict:
+    """S8: cell states under losses, G6 against S7, then P11. Spec v0.13.
+
+    The gates, in this order and each before anything it could mislead:
+
+    1. REFUSES ON AN EDITED TREE, before a map is loaded, as S5 to S7 do.
+    2. REGISTRATION BEFORE RESULT: `df7ae16`, the commit that registered P11,
+       must be an ancestor of HEAD, and the spec at HEAD must carry
+       "P11. REGISTERED".
+    3. The P11 paragraph is read from the spec AT HEAD by script and stored
+       verbatim, never retyped.
+    4. THE S7 FILE IS PINNED BY HASH. G6 is an equality against S7's 213 lost
+       elements, so the file is named and its sha256 required; any other S7 run
+       is a different set and G6 would be comparing against the wrong one.
+    """
+    import fit_world_transform as fwt                       # noqa: PLC0415
+    import robot_divergence as rd                           # noqa: PLC0415
+
+    t0 = time.monotonic()
+
+    porcelain = _git('status', '--porcelain').splitlines()
+    dirty = [ln for ln in porcelain if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    if not _is_ancestor(S8_REGISTRATION):
+        die(f'{S8_REGISTRATION} registered P11 and is not an ancestor of HEAD '
+            f'{head[:7] or "(unknown)"}; the registration must be in history '
+            'behind the code that tests it')
+    spec_text = _git('show', f'HEAD:{SPEC_REL}')
+    if P11_GATE_TEXT not in spec_text:
+        die(f'the spec at HEAD carries no "{P11_GATE_TEXT}"; S8 evaluates a '
+            'registered prediction or it does not run')
+    p11_text = spec_paragraph(spec_text, P11_HEADER)
+    spec_rev = _git('log', '-1', '--format=%h', '--', SPEC_REL)
+
+    s7_path = out_dir / S7_RESULT
+    if not s7_path.is_file():
+        die(f'{s7_path} is missing; G6 compares S8\'s lost elements against it')
+    s7_sha = _sha256(s7_path)
+    if s7_sha != S7_SHA256:
+        die(f'{s7_path.name} has sha256 {s7_sha}, not the {S7_SHA256} G6 is '
+            'stated against; that is a different S7 run')
+    s7 = json.loads(s7_path.read_text())
+
+    stems = corpus_stems(variant)
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    by_kc = {}
+    for s in stems:
+        k, c = gw._k_and_cut(s, 'S8 needs the robot and the cut')
+        by_kc[(k, c)] = load_side(s)
+
+    meta = {'stage': 's8', 'head': head, 'spec_rev': spec_rev,
+            'tree_dirty': bool(dirty),
+            'untracked': sum(1 for ln in porcelain if ln.startswith('??')),
+            'variant': variant, 't2': False,
+            'spec': 'SPEC_b2_divergence_walls v0.13, G6/P11',
+            'predictions_verbatim': {'P11': p11_text},
+            'cell_centre': CELL_CENTRE_OFFSET,
+            'sources': {'s7': {'file': s7_path.name, 'sha256': s7_sha,
+                               'head': s7.get('head')}},
+            'note': 'no viewpoint weight and no truth: S8 reads cell states by '
+                    'position on the grids the measure itself builds'}
+    return s8_cellstates(by_kc, spawn, s7, meta, out_dir, t0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--stage', choices=('g2', 's5', 's6', 's7'), default=None,
+    ap.add_argument('--stage', choices=('g2', 's5', 's6', 's7', 's8'),
+                    default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
                          'the segment guard on the 20 maps; s5 evaluates G3, '
                          'P7 and P8 on the viewpoint weight; s6 computes the '
                          '320-row cut matrix, gates it on S4 and S5 with G4, '
                          'and tests P9; s7 counts gains and losses per step, '
-                         'gates them on S6 with G5, and tests P10')
+                         'gates them on S6 with G5, and tests P10; s8 reads '
+                         "the cell states behind the losses, gates them on S7 "
+                         'with G6, and tests P11')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -2395,6 +2926,9 @@ def main() -> int:
         return 0
     if args.stage == 's7':
         run_s7(args.out_dir)
+        return 0
+    if args.stage == 's8':
+        run_s8(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')

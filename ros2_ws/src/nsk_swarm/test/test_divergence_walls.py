@@ -196,6 +196,45 @@ run, and nothing in them touches a real map.
                                                              and no lost-element
                                                              record
 
+The C series is S8, the cell states under losses. Written before the stage ran,
+and no real grid is read at a lost element's cells anywhere in this file.
+
+  C1   the two cell centres, all four directions             always the
+                                                             occupied cell and
+                                                             its free neighbour
+  C2   a whole slab, sub-cell origin                         every element lands
+                                                             wall OCC, front
+                                                             FREE
+  C3   the lookup, off-lattice origin and bottom-up rows     the containing
+                                                             cell, anywhere
+                                                             inside it
+  C4   both sides of all four edges                          lower inclusive,
+                                                             upper exclusive;
+                                                             off grid gives None
+                                                             and never UNKNOWN
+  C5   the four classes and their order                      off grid first and
+                                                             it wins; freed to
+                                                             free and to
+                                                             unknown; front
+                                                             closed; unchanged
+  C6   P11 at 0, 105, 106, 107 and 213 of 213                holds only from
+                                                             107; off grid stays
+                                                             in the denominator
+  C7   the lattice offset in cells                           [-0.5, 0.5); a
+                                                             whole cell reads 0
+  C8   G6 holding, end to end                                freed (both
+                                                             states), front
+                                                             closed and off grid
+                                                             all reached; a file
+  C9   a lost set short by one                               exit 2, and NO grid
+                                                             opened at all
+  C10  a wrong wall state at k                               exit 2; two reads
+                                                             per element, each
+                                                             on its own k map,
+                                                             and no k' read
+  C11  --stage s8 on a dirty tree, without df7ae16, with     refuses, exit 2, on
+       a spec lacking P11, and on a wrong S7 sha256           each of the four
+
 WHAT THE FIXTURES ARE. `wall_grid` paints one row of OCCUPIED with FREE on one
 side and leaves the rest UNKNOWN, so the slab exposes exactly ONE face per
 column: an occupied-unknown boundary gives no element (Def 1, graph_walls
@@ -221,6 +260,7 @@ container, where a module-level import of any of those is a COLLECTION error
 that takes the whole nsk_swarm suite down.
 """
 
+import collections
 import hashlib
 import importlib.util
 import json
@@ -1744,6 +1784,454 @@ def test_s7_refuses_a_wrong_s6_sha256(tmp_path, monkeypatch):
     (tmp_path / dw.S6_RESULT).write_text('{"rows": [], "P9": {"failures": []}}')
     with pytest.raises(SystemExit) as e:
         dw.run_s7(tmp_path)
+    assert e.value.code == 2
+
+
+# ────────── S8: cell states under losses, G6 and P11 (the C series) ─────────
+#
+# SYNTHETIC GRIDS ONLY. No real grid is read at a lost element's cells here or
+# anywhere else in this file.
+
+from trinary_map import cell_index as _cell_index           # noqa: E402
+
+
+def wall_row_grid(spec, w_total=S7_GRID_W, h=12, wall_row=6):
+    """One row of cells painted from `spec`, with FREE above the wall row.
+
+    `spec` maps a column to its state in `wall_row`; columns not named stay
+    UNKNOWN. A column that is OCC with FREE below it in grid terms -- which is
+    row `wall_row - 1`, since the grid is bottom-up -- yields one element with
+    dir '-y', exactly as `wall_grid` does.
+    """
+    g = blank(h, w_total)
+    g[:wall_row, :] = FREE
+    for col, state in spec.items():
+        g[wall_row, col] = state
+    return g
+
+
+def run_of(lo, hi, **kw):
+    """`wall_row_grid` for one OCC run from `lo` to `hi` inclusive."""
+    return wall_row_grid({c: OCC for c in range(lo, hi + 1)}, **kw)
+
+
+def sided(grid, stem, origin=ORIGIN):
+    """A side with its own origin, which is what a lattice shift needs."""
+    s = side(grid, origin=origin)
+    return {'stem': stem, 'el': s['el'], 'seg_of': s['seg_of'], 'grid': grid,
+            'rho': s['rho'], 'origin': origin, 'shape': grid.shape,
+            'segments': [{'p0': [0.0, 0.55], 'p1': [1.1, 0.55]}]}
+
+
+def st(state, on_grid=True, row=0, col=0):
+    """A `state_at` result, built by hand."""
+    return {'map': 'synthetic', 'row': row, 'col': col, 'on_grid': on_grid,
+            'state': state if on_grid else None}
+
+
+def test_s8_cell_centres_for_all_four_directions():
+    """C1: the wall and front centres are the midpoint stepped by its normal.
+
+    One occupied cell ringed by free cells fires all four passes of DIRS, so
+    this covers every direction at once, and the two centres are checked by
+    landing them back on the cells they must name.
+    """
+    rho, origin = RHO, (0.37, -0.21)        # a deliberately awkward origin
+    g = np.full((7, 7), FREE, dtype=np.uint8)
+    g[3, 3] = OCC
+    el = gw.face_elements(g, rho, origin)
+    assert el['n'] == 4
+    seen = {}
+    for i in range(el['n']):
+        wall, front = dw.cell_centres_of(el, i, rho)
+        wr = int(_cell_index(wall[1], origin[1], rho))
+        wc = int(_cell_index(wall[0], origin[0], rho))
+        fr = int(_cell_index(front[1], origin[1], rho))
+        fc = int(_cell_index(front[0], origin[0], rho))
+        drow, dcol = gw.DIRS[int(el['dir'][i])][:2]
+        assert (wr, wc) == (3, 3)                    # always the occupied cell
+        assert (fr, fc) == (3 + drow, 3 + dcol)      # always the free neighbour
+        assert g[wr, wc] == OCC and g[fr, fc] == FREE
+        seen[gw.DIRS[int(el['dir'][i])][4]] = (wall, front)
+    assert set(seen) == {'+x', '-x', '+y', '-y'}
+    # DIRS makes the normal the same pair as (dcol, drow), which is why one
+    # formula covers all four
+    for d in gw.DIRS:
+        assert (d[2], d[3]) == (float(d[1]), float(d[0]))
+
+
+def test_s8_cell_centres_round_trip_a_whole_synthetic_wall():
+    """C2: every element of a slab lands wall=OCC, front=FREE, sub-cell origin."""
+    rho, origin = RHO, (0.37, -0.21)
+    g = blank(20, 20, FREE)
+    g[10, 2:15] = OCC
+    el = gw.face_elements(g, rho, origin)
+    assert el['n'] > 20
+    for i in range(el['n']):
+        wall, front = dw.cell_centres_of(el, i, rho)
+        wr = int(_cell_index(wall[1], origin[1], rho))
+        wc = int(_cell_index(wall[0], origin[0], rho))
+        fr = int(_cell_index(front[1], origin[1], rho))
+        fc = int(_cell_index(front[0], origin[0], rho))
+        assert g[wr, wc] == OCC
+        assert g[fr, fc] == FREE
+
+
+def test_s8_state_at_reads_by_position_through_the_row_order():
+    """C3: the lookup carries the origin, the resolution and the bottom-up order.
+
+    The grid `load_grid` hands on is bottom-up, so row grows with y. A map
+    whose origin is not on a whole cell is the case that would catch an
+    index-based shortcut, so the origin here is deliberately off-lattice.
+    """
+    origin = (0.37, -0.21)
+    g = blank(6, 5, FREE)
+    g[0, 0] = OCC                       # minimum y, minimum x
+    g[5, 4] = UNK                       # maximum y, maximum x
+    s = sided(g, 'synthetic', origin=origin)
+    # cell (0, 0)'s centre is the origin itself under CELL_CENTRE_OFFSET 0.0
+    assert dw.state_at(s, origin)['state'] == OCC
+    assert dw.state_at(s, origin)['on_grid'] is True
+    assert dw.state_at(s, (origin[0], origin[1]))['row'] == 0
+    top = (origin[0] + 4 * RHO, origin[1] + 5 * RHO)
+    assert dw.state_at(s, top) == {'map': 'synthetic', 'row': 5, 'col': 4,
+                                   'on_grid': True, 'state': UNK}
+    # anywhere inside a cell reads that cell, not just its centre
+    for dx in (-0.049, 0.0, 0.049):
+        for dy in (-0.049, 0.0, 0.049):
+            assert dw.state_at(s, (origin[0] + dx,
+                                   origin[1] + dy))['state'] == OCC
+    assert dw.state_name(OCC) == 'occupied'
+    assert dw.state_name(FREE) == 'free'
+    assert dw.state_name(UNK) == 'unknown'
+    assert dw.state_name(None) is None
+
+
+def test_s8_off_grid_on_both_sides_of_every_edge():
+    """C4: cell i spans [origin + (i-0.5)rho, origin + (i+0.5)rho).
+
+    So the grid covers [origin - rho/2, origin + (n - 0.5)rho) on each axis:
+    the lower edge is inclusive and the upper exclusive, which is `cell_index`
+    flooring. Each edge is probed just inside and just outside.
+    """
+    origin = (0.37, -0.21)
+    h, w = 6, 5
+    s = sided(blank(h, w, FREE), 'synthetic', origin=origin)
+    half = 0.5 * RHO
+    x_lo, x_hi = origin[0] - half, origin[0] + (w - 0.5) * RHO
+    y_lo, y_hi = origin[1] - half, origin[1] + (h - 0.5) * RHO
+    inside = 1e-6
+
+    assert dw.state_at(s, (x_lo + inside, origin[1]))['on_grid'] is True
+    assert dw.state_at(s, (x_lo - inside, origin[1]))['on_grid'] is False
+    assert dw.state_at(s, (x_hi - inside, origin[1]))['on_grid'] is True
+    assert dw.state_at(s, (x_hi + inside, origin[1]))['on_grid'] is False
+    assert dw.state_at(s, (origin[0], y_lo + inside))['on_grid'] is True
+    assert dw.state_at(s, (origin[0], y_lo - inside))['on_grid'] is False
+    assert dw.state_at(s, (origin[0], y_hi - inside))['on_grid'] is True
+    assert dw.state_at(s, (origin[0], y_hi + inside))['on_grid'] is False
+    # off the grid the state is None, never UNKNOWN -- P11's first class turns
+    # on telling those two apart
+    assert dw.state_at(s, (x_lo - 1.0, origin[1]))['state'] is None
+
+
+def test_s8_classification_order_and_every_class():
+    """C5: the four classes in the spec's order, each reached.
+
+    Off grid is decided FIRST, so a wall cell that is both off the grid and
+    not occupied is off grid and is never counted as freed -- which matters,
+    because off-grid elements count against P11.
+    """
+    # off grid, by the wall cell and by the front cell, and both
+    assert dw.classify_cells(st(None, on_grid=False), st(FREE)) == dw.OFF_GRID
+    assert dw.classify_cells(st(OCC), st(None, on_grid=False)) == dw.OFF_GRID
+    assert dw.classify_cells(st(None, on_grid=False),
+                             st(None, on_grid=False)) == dw.OFF_GRID
+    # and off grid wins over everything else
+    for front in (st(FREE), st(OCC), st(UNK)):
+        assert dw.classify_cells(st(None, on_grid=False),
+                                 front) == dw.OFF_GRID
+
+    assert dw.classify_cells(st(FREE), st(FREE)) == dw.WALL_FREED
+    assert dw.classify_cells(st(UNK), st(FREE)) == dw.WALL_FREED
+    assert dw.classify_cells(st(FREE), st(OCC)) == dw.WALL_FREED   # freed wins
+    assert dw.classify_cells(st(OCC), st(OCC)) == dw.FRONT_CLOSED
+    assert dw.classify_cells(st(OCC), st(UNK)) == dw.FRONT_CLOSED
+    assert dw.classify_cells(st(OCC), st(FREE)) == dw.UNCHANGED
+    assert dw.P11_CLASSES == (dw.OFF_GRID, dw.WALL_FREED, dw.FRONT_CLOSED,
+                              dw.UNCHANGED)
+
+
+@pytest.mark.parametrize('n_freed,expected', [
+    (0, False), (105, False), (106, False), (107, True), (213, True)])
+def test_s8_p11_threshold_is_107_of_213(n_freed, expected):
+    """C6: at least half of 213 is 107, so 106 fails. Off grid stays in."""
+    records = ([{'class': dw.WALL_FREED}] * n_freed
+               + [{'class': dw.OFF_GRID}] * (213 - n_freed))
+    out = dw.p11_verdict(records)
+    assert (out['of'], out['min_required']) == (213, 107)
+    assert out['n_freed'] == n_freed
+    assert out['holds'] is expected
+    # the denominator is the whole set, off-grid elements included
+    assert sum(out['by_class'].values()) == 213
+
+
+def test_s8_p11_denominator_is_asserted():
+    """C6b: a set that is not 213 long is a bug, not a smaller denominator."""
+    with pytest.raises(AssertionError):
+        dw.p11_verdict([{'class': dw.WALL_FREED}] * 212)
+
+
+def test_s8_lattice_offsets_map_to_half_open_half_cell():
+    """C7: the fractional origin difference in cells, mapped to [-0.5, 0.5)."""
+    by_kc = {}
+    for k, shifts in enumerate(([0.0, 0.0, 0.0, 0.0], [0.0, 0.03, -0.07, 0.4])):
+        for c, s in zip(dw.CUTS, shifts):
+            by_kc[(k, c)] = sided(run_of(0, 5), f'k{k}_cut{c}',
+                                  origin=(s, 0.0))
+    out = dw.lattice_offsets(by_kc, dw.CUTS, n_robots=2)
+    assert len(out) == 2 * (len(dw.CUTS) - 1)
+    flat = {(o['B'], o['step']): (o['offset_x_cells'], o['offset_y_cells'])
+            for o in out}
+    # k0 never moves
+    for step in ('cut60->cut120', 'cut120->cut240', 'cut240->cut1200'):
+        assert flat[(0, step)] == pytest.approx((0.0, 0.0))
+    # k1: +0.03 m is +0.3 cells; -0.10 m is a whole cell, so 0.0; +0.47 m is
+    # 4.7 cells, whose fractional part 0.7 maps to -0.3
+    assert flat[(1, 'cut60->cut120')][0] == pytest.approx(0.3)
+    assert flat[(1, 'cut120->cut240')][0] == pytest.approx(0.0)
+    assert flat[(1, 'cut240->cut1200')][0] == pytest.approx(-0.3)
+    for v in flat.values():
+        assert -0.5 <= v[0] < 0.5 and -0.5 <= v[1] < 0.5
+
+
+# ── the end-to-end synthetic corpus ─────────────────────────────────────────
+#
+# Two robots, four cuts. A (k0) carries a 13-column wall at every cut, so its
+# element set never moves. B (k1) is painted per cut to put a loss in each
+# class that a shared lattice can reach:
+#
+#   cut60   OCC 0..5                    A's 0..5 corroborated
+#   cut120  OCC 0..5                    unchanged, so no loss on this step
+#   cut240  col 0 FREE, col 1 UNKNOWN,  cols 0 and 1 lost: wall cell freed, to
+#           OCC 2..9, row5 col3 UNKNOWN free and to unknown. Col 3 lost: its
+#                                       wall cell is still OCC and its front
+#                                       cell is now UNKNOWN -> front closed
+#   cut1200 OCC 2..9, origin +0.9 m     a 9-cell shift, so A's columns run off
+#                                       B's grid -> off grid
+#
+# "Unchanged" is NOT reachable here, and the reason is worth stating: the
+# looked-up cell being OCC with a FREE front means B HAS a face there, within
+# half a cell along of b, so A's element would be corroborated and would not be
+# a loss at all. It needs A's and B's lattices offset so that b sits near T1's
+# along limit, which this corpus does not do. C5 covers the class directly.
+
+def s8_sides():
+    """The corpus above, as a `by_kc` and a spawn table."""
+    spec240 = {0: FREE, 1: UNK}
+    spec240.update({c: OCC for c in range(2, 10)})
+    g240 = wall_row_grid(spec240)
+    g240[5, 3] = UNK                      # close col 3's front cell
+    grids = {60: (run_of(0, 5), (0.0, 0.0)),
+             120: (run_of(0, 5), (0.0, 0.0)),
+             240: (g240, (0.0, 0.0)),
+             1200: (run_of(2, 9), (0.9, 0.0))}
+    by_kc, spawn = {}, {0: (0.0, 0.0), 1: (0.0, 0.0)}
+    for c in dw.CUTS:
+        by_kc[(0, c)] = sided(run_of(0, 12), f'A_k0_cut{c}')
+        g, o = grids[c]
+        by_kc[(1, c)] = sided(g, f'B_k1_cut{c}', origin=o)
+    return by_kc, spawn
+
+
+def s8_fake_s7(by_kc, spawn, n_robots=2):
+    """An S7 payload for the synthetic corpus, built with S7's own code."""
+    keys = dw.matrix_keys(dw.CUTS, n_robots)
+    masks = {k: dw.s7_mask(by_kc, spawn, k) for k in keys}
+    series = [dw.gain_loss_series(masks, a, b, ca, dw.CUTS)
+              for (a, b, ca) in dw.series_keys(dw.CUTS, n_robots)]
+    lost = dw.lost_elements(masks, series, dw.CUTS)
+    return {'lost_elements': lost, 'rho_m': RHO, 'series': series}
+
+
+def test_s8_g6_holding_reaches_three_classes_end_to_end(tmp_path):
+    """C8: the whole pipeline on the corpus above, and the classes it reaches."""
+    by_kc, spawn = s8_sides()
+    s7 = s8_fake_s7(by_kc, spawn)
+    n = len(s7['lost_elements'])
+    assert n > 0
+    out = dw.s8_cellstates(by_kc, spawn, s7,
+                           {'stage': 's8', 'head': 'synthetic'}, tmp_path,
+                           n_robots=2, n_expected=n)
+    assert out['G6']['all_ok']
+    assert out['G6']['lost_set']['equal']
+    assert out['G6']['states_at_k']['n_ok'] == n
+    assert out['n_lost'] == n
+    classes = {r['class'] for r in out['elements']}
+    assert dw.WALL_FREED in classes
+    assert dw.FRONT_CLOSED in classes
+    assert dw.OFF_GRID in classes
+    # a freed wall cell is reached both as free and as unknown
+    freed = {r['wall_at_kp'] for r in out['elements']
+             if r['class'] == dw.WALL_FREED}
+    assert {'free', 'unknown'} <= freed
+    # off grid records which cell left
+    for r in out['elements']:
+        if r['class'] == dw.OFF_GRID:
+            assert r['off_grid_cell'] in ('wall', 'front', 'both')
+        else:
+            assert r['off_grid_cell'] is None
+        assert r['wall_at_k'] == 'occupied' and r['front_at_k'] == 'free'
+        assert r['s7_bin'] in dw.S7_BINS or r['s7_bin'] == dw.BIN_WITHIN_T1
+    assert out['P11']['of'] == n
+    written = list(tmp_path.glob('s8_cellstates_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert len(payload['elements']) == n
+    assert len(payload['reported']['lattice_offsets']) == 2 * 3
+    assert out['written']['sha256'] == hashlib.sha256(
+        written[0].read_bytes()).hexdigest()
+
+
+def _s8_spy(monkeypatch):
+    """A spy on the grid reader: which maps were read, in order."""
+    seen = []
+    real = dw.state_at
+
+    def spy(side, pos):
+        seen.append(side['stem'])
+        return real(side, pos)
+
+    monkeypatch.setattr(dw, 'state_at', spy)
+    return seen
+
+
+def _expected_k_reads(by_kc, s7):
+    """Exactly which map each state read must come from, and how many times.
+
+    A map CANNOT be ruled out by its stem alone: B at cut240 is the k' map of
+    the cut120 -> cut240 step and the k map of cut240 -> cut1200, so banning
+    the stem would ban a legitimate k read. What pins the claim is the count:
+    two reads per lost element -- its wall cell and its front cell -- each on
+    THAT element's own k map, and nothing else. Any k' read at all breaks it.
+    """
+    want = collections.Counter()
+    for r in s7['lost_elements']:
+        want[by_kc[(r['B'], r['from_cut_B'])]['stem']] += 2
+    return want
+
+
+def test_s8_g6_a_lost_set_short_by_one_stops_the_stage(tmp_path, capsys,
+                                                       monkeypatch):
+    """C9: G6 part 1 fails, and no grid is opened at all -- not even at k."""
+    by_kc, spawn = s8_sides()
+    s7 = s8_fake_s7(by_kc, spawn)
+    n = len(s7['lost_elements'])
+    dropped = s7['lost_elements'].pop()
+    seen = _s8_spy(monkeypatch)
+
+    with pytest.raises(SystemExit) as e:
+        dw.s8_cellstates(by_kc, spawn, s7,
+                         {'stage': 's8', 'head': 'synthetic'}, tmp_path,
+                         n_robots=2, n_expected=n)
+    assert e.value.code == 2
+    assert seen == []                        # part 1 fails before any lookup
+    payload = _assert_s8_fail_file(tmp_path, capsys, by_kc, s7, dropped)
+    assert payload['G6']['states_at_k'] is None
+    assert payload['G6']['lost_set']['only_in_s8']
+
+
+def test_s8_g6_a_wrong_state_at_k_stops_the_stage(tmp_path, capsys,
+                                                  monkeypatch):
+    """C10: G6 part 2 fails, and no grid at k' is opened.
+
+    The wall cell of one lost element's b is repainted free in B's grid AT K,
+    so the measure's own precondition -- b separates an occupied cell from a
+    free one -- no longer holds and the stage must stop before looking at k'.
+    """
+    by_kc, spawn = s8_sides()
+    s7 = s8_fake_s7(by_kc, spawn)
+    n = len(s7['lost_elements'])
+    rec = s7['lost_elements'][0]
+    # b is at k, so repaint B's grid at k under the whole wall row
+    by_kc[(rec['B'], rec['from_cut_B'])]['grid'][6, :] = FREE
+
+    seen = _s8_spy(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        dw.s8_cellstates(by_kc, spawn, s7,
+                         {'stage': 's8', 'head': 'synthetic'}, tmp_path,
+                         n_robots=2, n_expected=n)
+    assert e.value.code == 2
+    assert seen, 'part 2 reads B at k, which is the point of it'
+    assert collections.Counter(seen) == _expected_k_reads(by_kc, s7)
+    payload = _assert_s8_fail_file(tmp_path, capsys, by_kc, s7, None)
+    assert payload['G6']['states_at_k'] is not None
+    assert payload['G6']['states_at_k']['differing']
+
+
+def _assert_s8_fail_file(tmp_path, capsys, by_kc, s7, _dropped):
+    """The fail file holds the G6 comparisons and names no k' map."""
+    assert not list(tmp_path.glob('s8_cellstates_*.json'))
+    written = list(tmp_path.glob('s8_g6_fail_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert set(payload) >= {'G6', 'stage', 'seconds'}
+    assert 'elements' not in payload and 'P11' not in payload
+    assert 'reported' not in payload
+    out = capsys.readouterr().out
+    assert 'G6' in out and 'FAIL' in out
+    for word in ('P11', 'wall cells freed', 'classes by S7 distance bin',
+                 'lattice offsets'):
+        assert word not in out
+    return payload
+
+
+def test_s8_refuses_a_dirty_tree(monkeypatch):
+    """C11a: a result file must not name a commit it was not produced by."""
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/divergence_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s8()
+    assert e.value.code == 2
+
+
+def test_s8_refuses_when_the_registration_is_not_an_ancestor(monkeypatch):
+    """C11b: P11 must be registered in history behind the code that tests it."""
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] in ('status', 'merge-base') else 'deadbeef'))
+    with pytest.raises(SystemExit) as e:
+        dw.run_s8()
+    assert e.value.code == 2
+
+
+def test_s8_refuses_when_the_spec_at_head_lacks_p11(monkeypatch):
+    """C11c: ancestry is not enough; the spec at HEAD must carry the header."""
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return '## 9\n\n**P10. REGISTERED 9 Oct 2026.** something\n'
+        return 'c0ffee'
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s8()
+    assert e.value.code == 2
+
+
+def test_s8_refuses_a_wrong_s7_sha256(tmp_path, monkeypatch):
+    """C11d: G6 is an equality against ONE S7 run, so that run is pinned."""
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return ('## Cell states under losses (P11)\n\n'
+                    '**P11. REGISTERED 9 Oct 2026.** Wall cells freed.\n')
+        return 'c0ffee'
+    monkeypatch.setattr(dw, '_git', fake)
+    (tmp_path / dw.S7_RESULT).write_text('{"lost_elements": [], "rho_m": 0.1}')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s8(tmp_path)
     assert e.value.code == 2
 
 
