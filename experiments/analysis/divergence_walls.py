@@ -1967,6 +1967,20 @@ def gain_loss_series(masks: dict, a: int, b: int, cut_a: int,
     }
 
 
+def within_t1_tolerances(across_m: float, along_m: float, eps: float,
+                         rho: float) -> bool:
+    """Are these two distances inside T1's tolerances? Stated once, here.
+
+    `across <= eps` and `along <= rho/2`, both INCLUSIVE with T1's own 1e-9 m
+    slack, which is `corroborate`'s comparison and nothing else. S7's
+    `within_t1` flag and S9's geometry classes both go through this, so the
+    boundary cannot drift between the stage that found a loss and the stage
+    that explains it.
+    """
+    return bool(across_m <= eps + T1_TOL_M
+                and along_m <= 0.5 * rho + T1_TOL_M)
+
+
 def nearest_same_dir(el_a: dict, i: int, el_b: dict) -> dict | None:
     """The nearest same-direction element of B to A's element `i`.
 
@@ -1986,8 +2000,18 @@ def nearest_same_dir(el_a: dict, i: int, el_b: dict) -> dict | None:
     T1 buckets B on an eps lattice and looks only at the 3x3 block around A's
     own bucket, which is sound because both its tolerances are at most eps. A
     LOST ELEMENT MAY HAVE NO B ELEMENT WITHIN EPS AT ALL -- that is the case
-    this report exists for -- so this scans every same-direction element of B
-    instead of the block. Returns None when B has none in that direction.
+    this report exists for -- so this scans the whole of `el_b` instead of the
+    block.
+
+    WHAT `el_b` CONTAINS IS THE CALLER'S CHOICE, and it decides what a result
+    means. In S7 the caller is `lost_elements`, which passes the `el_b` that
+    `s6_classify` built: `face_elements_only(b['el'], b['seg_of'])`, which is
+    B's elements ASSIGNED TO A WALL SEGMENT and no others. So S7's "none within
+    1 m" means no assigned same-direction element within a metre, not no
+    element at all -- which is what P12's carve-out rests on. Handed B's full
+    arrays instead, the same call would answer a different question.
+
+    Returns None when `el_b` holds no element in that direction.
     """
     sel = np.nonzero(el_b['dir'] == int(el_a['dir'][i]))[0]
     if sel.size == 0:
@@ -2041,9 +2065,9 @@ def lost_elements(masks: dict, series: list, cuts: tuple = CUTS) -> list[dict]:
                                across_m=near['across_m'],
                                along_m=near['along_m'],
                                dist_m=near['dist_m'],
-                               within_t1=bool(
-                                   near['across_m'] <= eps + T1_TOL_M
-                                   and near['along_m'] <= half + T1_TOL_M))
+                               within_t1=within_t1_tolerances(
+                                   near['across_m'], near['along_m'],
+                                   eps, m_kp['rho']))
                 out.append(rec)
     return out
 
@@ -2891,9 +2915,464 @@ def run_s8(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
     return s8_cellstates(by_kc, spawn, s7, meta, out_dir, t0)
 
 
+# ── S9: segmentation or geometry, G7 and P12 (spec v0.14, "Unchanged losses:
+#    segmentation or geometry (P12)") ─────────────────────────────────────────
+
+S9_REGISTRATION = '4698880'        # the commit that registered P12 (spec v0.14)
+P12_HEADER = '**P12. REGISTERED'
+P12_GATE_TEXT = 'P12. REGISTERED'
+S8_RESULT = 's8_cellstates_20261009T010602Z.json'
+S8_SHA256 = ('f71f4597d3e050417d65d092295b9ccf1ec0337bbf54af39868418da9c6c31c'
+             '4')
+N_UNCHANGED = 132                  # S8's unchanged class
+N_P12_TESTED = 78                  # those outside S7's "none within 1 m" bin
+N_P12_SEEN = 54                    # the carve-out, segmentation by construction
+
+# P12's three classes, in the spec's order
+SEGMENTATION = 'segmentation'
+GEOM_ACROSS = 'geometry_across'
+GEOM_ALONG = 'geometry_along'
+P12_CLASSES = (SEGMENTATION, GEOM_ACROSS, GEOM_ALONG)
+
+
+def find_e_prime(el: dict, wall_rc: tuple, dir_b: int) -> int | None:
+    """B's face element at k' on the far side of `wall_rc`, in direction `dir_b`.
+
+    BY CELL INDICES, because the element arrays carry them: `face_elements`
+    builds each direction from `occ & shifted_view(free, drow, dcol)` and keeps
+    `row` and `col` of the OCCUPIED cell, so `(row, col, dir)` names an element
+    uniquely -- one pass of DIRS yields at most one element per occupied cell.
+    No float comparison is needed, and none is used.
+
+    `wall_rc` is the (row, col) of the cell of B's grid at k' that contains b's
+    wall-cell centre, which is what S8 recorded as `wall_rc_at_kp`. B's FULL
+    arrays are searched, not `face_elements_only`'s subset: whether e' is
+    assigned is the question, so it cannot be the filter.
+
+    Returns None when that cell pair carries no element at all, or none in b's
+    direction -- the two cases G7 part 2 refuses.
+    """
+    hit = np.nonzero((el['row'] == wall_rc[0]) & (el['col'] == wall_rc[1])
+                     & (el['dir'] == dir_b))[0]
+    if hit.size == 0:
+        return None
+    assert hit.size == 1, (wall_rc, dir_b, hit)      # (row, col, dir) is a key
+    return int(hit[0])
+
+
+def e_prime_distances(a_side: dict, i: int, b_side: dict, j: int,
+                      spawn_a, spawn_b) -> dict | None:
+    """e''s across and along distances from A's element `i`, as T1 measures them.
+
+    S9 COMPUTES NO DISTANCE OF ITS OWN. `nearest_same_dir` is handed a
+    candidate set holding e' alone, so the nearest of that set is e' and the
+    two projections come back from the same code S7 measured with -- `|d.n|`
+    and `|d.t|` on A's own normal and tangent. The frame change is
+    `to_frame_a`, the same one `s6_classify` applies, so the comparison happens
+    in the common frame T1 works in.
+
+    Returns None when e' is not in A's element's direction, which is
+    `nearest_same_dir`'s own answer to that case and which G7 part 2 refuses.
+    """
+    bx, by = to_frame_a(b_side['el']['x'][j:j + 1], b_side['el']['y'][j:j + 1],
+                        spawn_b, spawn_a)
+    one = {'n': 1, 'x': bx, 'y': by,
+           'nx': b_side['el']['nx'][j:j + 1],
+           'ny': b_side['el']['ny'][j:j + 1],
+           'dir': b_side['el']['dir'][j:j + 1]}
+    return nearest_same_dir(a_side['el'], i, one)
+
+
+def classify_unchanged(assigned: bool, across_m: float, along_m: float,
+                       eps: float, rho: float) -> str:
+    """P12's three classes, decided in the spec's order.
+
+    Segmentation first -- an unassigned e' is never weighed geometrically,
+    because T1 would not have looked at it either. Then across, then along,
+    with both boundaries `within_t1_tolerances`' own, so eps and rho/2 are
+    inclusive to 1e-9 m exactly as T1 has them.
+    """
+    if not assigned:
+        return SEGMENTATION
+    if across_m > eps + T1_TOL_M:
+        return GEOM_ACROSS
+    return GEOM_ALONG
+
+
+def g7_unchanged_set(recomputed: list, stored: list,
+                     n_expected: int = N_UNCHANGED) -> dict:
+    """G7 part 1: S9's unchanged set and its cell states must equal S8's.
+
+    STRICTER THAN THE SPEC, which asks only that "its set of unchanged
+    elements equal S8's exactly". The four cell states go in too -- wall and
+    front, at k and at k' -- because the class S9 explains is defined by them:
+    an unchanged element whose states S9 reads differently is not the element
+    S8 classified, and the set alone would not notice.
+    """
+    def key(r):
+        return (r['A'], r['B'], r['cut_A'], r['step'], r['element'])
+
+    mine = {key(r): r for r in recomputed}
+    theirs = {key(r): r for r in stored}
+    assert len(mine) == len(recomputed), 'S9 produced a duplicate'
+    assert len(theirs) == len(stored), 'S8 holds a duplicate'
+
+    fields = ('wall_at_k', 'front_at_k', 'wall_at_kp', 'front_at_kp',
+              'b_index', 'b_dir', 'wall_rc_at_kp', 'front_rc_at_kp')
+    rows, n_ok = [], 0
+    for k in sorted(mine.keys() & theirs.keys()):
+        diff = {f: [mine[k].get(f), theirs[k].get(f)] for f in fields
+                if mine[k].get(f) != theirs[k].get(f)}
+        n_ok += not diff
+        if diff:
+            rows.append({'key': list(k), 'differing_fields': diff})
+    return {'n_recomputed': len(mine), 'n_stored': len(theirs),
+            'n_expected': n_expected,
+            'n_common': len(mine.keys() & theirs.keys()),
+            'n_states_equal': n_ok,
+            'only_in_s9': [list(k) for k in sorted(mine.keys() - theirs.keys())],
+            'only_in_s8': [list(k) for k in sorted(theirs.keys() - mine.keys())],
+            'differing_states': rows,
+            'equal': (mine.keys() == theirs.keys() and not rows
+                      and len(mine) == n_expected)}
+
+
+def p12_verdict(records: list, n_tested: int = N_P12_TESTED,
+                n_seen: int = N_P12_SEEN) -> dict:
+    """P12, exactly as registered at spec v0.14.
+
+    Of the unchanged elements OUTSIDE S7's "none within 1 m" bin, at least half
+    fall in segmentation, so the test is `2 * n >= 78`, which is 39. The 54 in
+    that bin are segmentation by construction -- S7's nearest-element search
+    covers only B's assigned elements -- and are reported, labelled seen, and
+    kept out of both the numerator and the denominator.
+    """
+    seen = [r for r in records if r['s7_bin'] == BIN_FAR]
+    tested = [r for r in records if r['s7_bin'] != BIN_FAR]
+    assert len(tested) == n_tested, len(tested)
+    assert len(seen) == n_seen, len(seen)
+    n_seg = sum(1 for r in tested if r['class'] == SEGMENTATION)
+    return {
+        'of': len(tested), 'min_required': -(-n_tested // 2),
+        'n_segmentation': n_seg, 'holds': 2 * n_seg >= n_tested,
+        'by_class': {c: sum(1 for r in tested if r['class'] == c)
+                     for c in P12_CLASSES},
+        'seen': {'of': len(seen), 'bin': BIN_FAR,
+                 'n_segmentation': sum(1 for r in seen
+                                       if r['class'] == SEGMENTATION),
+                 'by_class': {c: sum(1 for r in seen if r['class'] == c)
+                              for c in P12_CLASSES},
+                 'note': 'segmentation by construction: S7 searched only B\'s '
+                         'assigned elements, so these are reported, not tested'}}
+
+
+def _no_verdict_in(payload: dict) -> None:
+    """Assert a G7 fail payload carries no class count and no verdict.
+
+    EXACT KEY NAMES, not substrings: G7's own part names say whether each gate
+    held, and `4_carve_out_is_segmentation` is a gate verdict, not a count of
+    the segmentation class. A substring ban cannot tell those apart, so the
+    banned set is the keys a classification or a verdict would actually come
+    under, plus the two blocks that only exist once the stage got that far.
+    """
+    banned = {'P12', 'class', 'by_class', 'n_segmentation', 'elements',
+              'reported', 'e_prime_class', 'verdict'}
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                assert str(k) not in banned, \
+                    f'{path}.{k} is a class count or a verdict'
+                walk(v, f'{path}.{k}')
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f'{path}[{i}]')
+
+    walk(payload, '$')
+
+
+def _write_s9(payload: dict, out_dir: Path, prefix: str) -> tuple[Path, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    path = out_dir / f'{prefix}_{stamp}.json'
+    if path.exists():
+        die(f'{path} exists; this tool never overwrites a result')
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    sha = _sha256(path)
+    print(f'written, overwriting nothing: {path}')
+    print(f'sha256 {sha}')
+    return path, sha
+
+
+def _print_s9(records: list, p12: dict, offsets: dict) -> None:
+    """The 3 x 3 table, then every geometry element with its lattice offset."""
+    bins = S7_BINS
+    print(f'\nclasses by S7 distance bin{"":<4}'
+          + ''.join(b.rjust(22) for b in bins) + 'total'.rjust(8))
+    for c in P12_CLASSES:
+        cells = [sum(1 for r in records
+                     if r['class'] == c and r['s7_bin'] == b) for b in bins]
+        print(f'  {c:<28}' + ''.join(str(v).rjust(22) for v in cells)
+              + str(sum(cells)).rjust(8))
+    print(f'  {"total":<28}'
+          + ''.join(str(sum(1 for r in records if r['s7_bin'] == b)).rjust(22)
+                    for b in bins) + str(len(records)).rjust(8))
+
+    geom = [r for r in records if r['class'] != SEGMENTATION]
+    print(f'\ngeometry elements: {len(geom)}')
+    for r in geom:
+        off = offsets.get((r['B'], r['step']), {})
+        print(f'  A=k{r["A"]} B=k{r["B"]} cut_A {r["cut_A"]} {r["step"]}'
+              f'  element {r["element"]}  e\' {r["e_prime"]}'
+              f'  across {r["across_m"]:.4f} m  along {r["along_m"]:.4f} m'
+              f'  {r["class"]}'
+              f'  lattice ({off.get("offset_x_cells", float("nan")):+.4f}, '
+              f'{off.get("offset_y_cells", float("nan")):+.4f}) cells')
+
+
+def s9_segmentation(by_kc: dict, spawn: dict, s8: dict, meta: dict,
+                    out_dir: Path = OUT_DIR_DEFAULT, t0: float | None = None,
+                    cuts: tuple = CUTS, n_robots: int = N_ROBOTS,
+                    n_unchanged: int = N_UNCHANGED,
+                    n_tested: int = N_P12_TESTED,
+                    n_seen: int = N_P12_SEEN) -> dict:
+    """The order that keeps e' unseen behind G7's four parts.
+
+    Nothing is classified and no verdict is reached until all four hold. On a
+    failure the stage writes the G7 comparisons and the elements that failed,
+    and stops at exit 2, having written no class count -- which is checked
+    against the payload before the file goes out.
+
+    Reads no file and resolves no spawn; `run_s9` is this function plus the
+    corpus I/O, so the whole pipeline runs on hand-built sides.
+    """
+    t0 = time.monotonic() if t0 is None else t0
+    stored = [r for r in s8['elements'] if r['class'] == UNCHANGED]
+    rho = s8['rho_m']
+    eps = gw.EPS_FACTOR * rho
+    offsets = {(o['B'], o['step']): o
+               for o in s8['reported']['lattice_offsets']}
+
+    # ── G7 part 1: S8's classification, recomputed with S8's own code ───────
+    masks = {k: s7_mask(by_kc, spawn, k) for k in matrix_keys(cuts, n_robots)}
+    series = [gain_loss_series(masks, a, b, ca, cuts)
+              for (a, b, ca) in series_keys(cuts, n_robots)]
+    lost = lost_elements(masks, series, cuts)
+    keys_k = sorted({(r['A'], r['B'], r['cut_A'], r['from_cut_B'])
+                     for r in lost})
+    matches = b_matches(by_kc, spawn, keys_k)
+    at_k = g6_states_at_k(by_kc, matches, lost)
+    recomputed = []
+    for row in at_k['rows']:
+        side_kp = by_kc[(row['B'], _to_cut(row['step']))]
+        s_wall = state_at(side_kp, tuple(row['wall_cell']))
+        s_front = state_at(side_kp, tuple(row['front_cell']))
+        if classify_cells(s_wall, s_front) != UNCHANGED:
+            continue
+        rec = dict(row)
+        rec.pop('equal', None)
+        rec.update({'wall_at_kp': state_name(s_wall['state']),
+                    'front_at_kp': state_name(s_front['state']),
+                    'wall_rc_at_kp': [s_wall['row'], s_wall['col']],
+                    'front_rc_at_kp': [s_front['row'], s_front['col']]})
+        recomputed.append(rec)
+    g7a = g7_unchanged_set(recomputed, stored, n_unchanged)
+
+    # ── G7 parts 2 and 3: e', its direction, its assignment, its distances ──
+    rows, missing, wrong_dir, contradicting, carve_fail = [], [], [], [], []
+    if g7a['equal']:
+        by_key = {(r['A'], r['B'], r['cut_A'], r['step'], r['element']): r
+                  for r in recomputed}
+        for s in stored:
+            k = (s['A'], s['B'], s['cut_A'], s['step'], s['element'])
+            mine = by_key[k]
+            a_side = by_kc[(s['A'], s['cut_A'])]
+            b_side = by_kc[(s['B'], _to_cut(s['step']))]
+            j = find_e_prime(b_side['el'], tuple(mine['wall_rc_at_kp']),
+                             s['b_dir'])
+            if j is None:
+                missing.append({'key': list(k),
+                                'wall_rc_at_kp': mine['wall_rc_at_kp'],
+                                'b_dir': s['b_dir']})
+                continue
+            near = e_prime_distances(a_side, s['element'], b_side, j,
+                                     spawn[s['A']], spawn[s['B']])
+            if near is None:
+                wrong_dir.append({'key': list(k), 'e_prime': j})
+                continue
+            assigned = bool(b_side['seg_of'][j] >= 0)
+            inside = within_t1_tolerances(near['across_m'], near['along_m'],
+                                          eps, rho)
+            if assigned and inside:
+                contradicting.append({
+                    'key': list(k), 'e_prime': j,
+                    'across_m': near['across_m'],
+                    'along_m': near['along_m']})
+            row = {'A': s['A'], 'B': s['B'], 'cut_A': s['cut_A'],
+                   'step': s['step'], 'element': s['element'],
+                   'b_index': s['b_index'], 'b_dir': s['b_dir'],
+                   'e_prime': j, 'e_prime_seg': int(b_side['seg_of'][j]),
+                   'assigned': assigned,
+                   'across_m': near['across_m'], 'along_m': near['along_m'],
+                   'within_t1': inside, 's7_bin': s['s7_bin'],
+                   'map_at_kp': b_side['stem']}
+            rows.append(row)
+        # ── G7 part 4 ───────────────────────────────────────────────────────
+        # STRICTER THAN THE SPEC. The spec calls the 54 "none within 1 m"
+        # elements segmentation BY CONSTRUCTION and carves them out; it does
+        # not ask anyone to check it. This checks it: S7 searched only B's
+        # assigned elements, so an assigned e' within a metre of e would have
+        # been found, and any assigned e' here means that reasoning is wrong.
+        carve_fail = [{'key': [r['A'], r['B'], r['cut_A'], r['step'],
+                               r['element']], 'e_prime': r['e_prime'],
+                       'e_prime_seg': r['e_prime_seg'],
+                       'across_m': r['across_m'], 'along_m': r['along_m']}
+                      for r in rows if r['s7_bin'] == BIN_FAR and r['assigned']]
+
+    g7 = {'unchanged_set': g7a,
+          'n_e_prime_found': len(rows),
+          'missing_e_prime': missing, 'wrong_direction': wrong_dir,
+          'assigned_and_within_t1': contradicting,
+          'carve_out_assigned': carve_fail,
+          'parts': {'1_set_and_states': g7a['equal'],
+                    '2_e_prime_exists': not (missing or wrong_dir),
+                    '3_none_assigned_and_within_t1': not contradicting,
+                    '4_carve_out_is_segmentation': not carve_fail}}
+    g7['all_ok'] = all(g7['parts'].values())
+    print('G7: ' + '  '.join(
+        f'part {n.split("_")[0]} {"HOLD" if ok else "FAIL"}'
+        for n, ok in g7['parts'].items())
+        + f'   {"HOLD" if g7["all_ok"] else "FAIL"}')
+
+    if not g7['all_ok']:
+        for label, bad in (('only in S9', g7a['only_in_s9']),
+                           ('only in S8', g7a['only_in_s8']),
+                           ('states differ', g7a['differing_states'][:10]),
+                           ('no e\'', missing[:10]),
+                           ('wrong direction', wrong_dir[:10]),
+                           ('assigned and within T1', contradicting[:10]),
+                           ('carve-out assigned', carve_fail[:10])):
+            if bad:
+                print(f'  {label}: {bad}')
+        fail = dict(meta)
+        fail.update({'stage': 's9_g7_fail', 'seconds': time.monotonic() - t0,
+                     'G7': g7})
+        _no_verdict_in(fail)
+        path, _ = _write_s9(fail, out_dir, 's9_g7_fail')
+        die('G7 failed; no class count and no verdict were computed, written '
+            f'or printed. {path}')
+
+    # ── the classes, and the verdict ────────────────────────────────────────
+    for r in rows:
+        r['class'] = classify_unchanged(r['assigned'], r['across_m'],
+                                        r['along_m'], eps, rho)
+    p12 = p12_verdict(rows, n_tested, n_seen)
+    print(f'P12: {"HOLD" if p12["holds"] else "FAIL"}  '
+          f'{p12["n_segmentation"]}/{p12["of"]} segmentation, '
+          f'{p12["min_required"]} required')
+    print(f'carve-out (S7\'s "{BIN_FAR}", reported not tested): '
+          f'{p12["seen"]["n_segmentation"]}/{p12["seen"]["of"]} '
+          'in segmentation')
+    _print_s9(rows, p12, offsets)
+
+    payload = dict(meta)
+    payload.update({
+        'seconds': time.monotonic() - t0, 'rho_m': rho, 'eps_m': eps,
+        'n_unchanged': len(rows), 'G7': g7, 'elements': rows,
+        'reported': {
+            'class_by_bin': [
+                {'class': c, 's7_bin': b,
+                 'n': sum(1 for r in rows
+                          if r['class'] == c and r['s7_bin'] == b)}
+                for c in P12_CLASSES for b in S7_BINS],
+            'geometry': [
+                {**{k: r[k] for k in ('A', 'B', 'cut_A', 'step', 'element',
+                                      'e_prime', 'across_m', 'along_m',
+                                      'class', 's7_bin')},
+                 'lattice_offset': offsets.get((r['B'], r['step']))}
+                for r in rows if r['class'] != SEGMENTATION],
+            'lattice_offsets': s8['reported']['lattice_offsets']},
+        'P12': p12})
+    path, sha = _write_s9(payload, out_dir, 's9_segmentation')
+    out = dict(payload)
+    out['written'] = {'path': str(path), 'sha256': sha}
+    return out
+
+
+def run_s9(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+           ) -> dict:
+    """S9: segmentation or geometry, G7 against S8, then P12. Spec v0.14.
+
+    The gates, in this order and each before anything it could mislead:
+
+    1. REFUSES ON AN EDITED TREE, before a map is loaded, as S5 to S8 do.
+    2. REGISTRATION BEFORE RESULT: `4698880`, the commit that registered P12,
+       must be an ancestor of HEAD, and the spec at HEAD must carry
+       "P12. REGISTERED".
+    3. The P12 paragraph is read from the spec AT HEAD by script and stored
+       verbatim, never retyped.
+    4. THE S8 FILE IS PINNED BY HASH. G7 is an equality against S8's 132
+       unchanged elements and their four cell states, so the file is named and
+       its sha256 required.
+    """
+    import fit_world_transform as fwt                       # noqa: PLC0415
+    import robot_divergence as rd                           # noqa: PLC0415
+
+    t0 = time.monotonic()
+
+    porcelain = _git('status', '--porcelain').splitlines()
+    dirty = [ln for ln in porcelain if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    if not _is_ancestor(S9_REGISTRATION):
+        die(f'{S9_REGISTRATION} registered P12 and is not an ancestor of HEAD '
+            f'{head[:7] or "(unknown)"}; the registration must be in history '
+            'behind the code that tests it')
+    spec_text = _git('show', f'HEAD:{SPEC_REL}')
+    if P12_GATE_TEXT not in spec_text:
+        die(f'the spec at HEAD carries no "{P12_GATE_TEXT}"; S9 evaluates a '
+            'registered prediction or it does not run')
+    p12_text = spec_paragraph(spec_text, P12_HEADER)
+    spec_rev = _git('log', '-1', '--format=%h', '--', SPEC_REL)
+
+    s8_path = out_dir / S8_RESULT
+    if not s8_path.is_file():
+        die(f'{s8_path} is missing; G7 compares S9\'s unchanged elements '
+            'against it')
+    s8_sha = _sha256(s8_path)
+    if s8_sha != S8_SHA256:
+        die(f'{s8_path.name} has sha256 {s8_sha}, not the {S8_SHA256} G7 is '
+            'stated against; that is a different S8 run')
+    s8 = json.loads(s8_path.read_text())
+
+    stems = corpus_stems(variant)
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    by_kc = {}
+    for s in stems:
+        k, c = gw._k_and_cut(s, 'S9 needs the robot and the cut')
+        by_kc[(k, c)] = load_side(s)
+
+    meta = {'stage': 's9', 'head': head, 'spec_rev': spec_rev,
+            'tree_dirty': bool(dirty),
+            'untracked': sum(1 for ln in porcelain if ln.startswith('??')),
+            'variant': variant, 't2': False,
+            'spec': 'SPEC_b2_divergence_walls v0.14, G7/P12',
+            'predictions_verbatim': {'P12': p12_text},
+            'sources': {'s8': {'file': s8_path.name, 'sha256': s8_sha,
+                               'head': s8.get('head')}},
+            'note': "e' is found by cell indices in B's full element arrays at "
+                    "k'; its distances come from nearest_same_dir on a "
+                    "one-element set, so S9 computes no distance of its own"}
+    return s9_segmentation(by_kc, spawn, s8, meta, out_dir, t0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--stage', choices=('g2', 's5', 's6', 's7', 's8'),
+    ap.add_argument('--stage',
+                    choices=('g2', 's5', 's6', 's7', 's8', 's9'),
                     default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
                          'the segment guard on the 20 maps; s5 evaluates G3, '
@@ -2902,7 +3381,9 @@ def main() -> int:
                          'and tests P9; s7 counts gains and losses per step, '
                          'gates them on S6 with G5, and tests P10; s8 reads '
                          "the cell states behind the losses, gates them on S7 "
-                         'with G6, and tests P11')
+                         'with G6, and tests P11; s9 sorts the unchanged '
+                         'losses into segmentation or geometry, gates them on '
+                         'S8 with G7, and tests P12')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -2929,6 +3410,9 @@ def main() -> int:
         return 0
     if args.stage == 's8':
         run_s8(args.out_dir)
+        return 0
+    if args.stage == 's9':
+        run_s9(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')

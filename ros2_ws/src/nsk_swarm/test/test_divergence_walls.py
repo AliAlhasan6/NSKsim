@@ -235,6 +235,49 @@ and no real grid is read at a lost element's cells anywhere in this file.
   C11  --stage s8 on a dirty tree, without df7ae16, with     refuses, exit 2, on
        a spec lacking P11, and on a wrong S7 sha256           each of the four
 
+The Q series is S9, segmentation or geometry. Q, not P, because P3 to P12 are
+the predictions. Written before the stage ran; no segment assignment and no e'
+distance is read on a real map anywhere in this file.
+
+  Q1   e' by (row, col, dir), all four directions            the element of
+                                                             that cell pair
+  Q2   a sub-cell lattice offset at k', walked across a      e' found at every
+       whole cell                                             offset
+  Q3   a cell with no element, and the wrong direction       None for each
+  Q4   seg_of against the full array and the subset          the two indexings
+                                                             differ; only the
+                                                             full read sees an
+                                                             unassigned e'
+  Q5   the three classes and their order                     segmentation
+                                                             first, then
+                                                             across, then along
+  Q6   the boundaries at eps and rho/2                       inclusive to 1e-9,
+                                                             T1's own, through
+                                                             one predicate
+  Q7   P12 at 0, 38, 39 and 78 of 78                         holds only from
+                                                             39; the 54 seen
+                                                             stay out of both
+                                                             numerator and
+                                                             denominator
+  Q8   G7 holding, end to end                                56 unchanged, all
+                                                             segmentation, both
+                                                             tested bins, a file
+  Q9   an unchanged set short by one                         part 1 fails
+  Q10  a cell state S9 reads differently from S8             part 1 fails --
+                                                             stricter than the
+                                                             spec
+  Q11  no e', and an e' in the wrong direction               part 2 fails
+  Q12  an e' assigned and inside T1                          part 3 fails
+  Q13  a carve-out element whose e' is assigned              part 4 fails --
+                                                             stricter than the
+                                                             spec
+  Q14  --stage s9 on a dirty tree, without 4698880, with     refuses, exit 2,
+       a spec lacking P12, and on a wrong S8 sha256           on each of the
+                                                             four
+  Q15  the nearest_same_dir docstring                        names the caller's
+                                                             set; behaviour
+                                                             unchanged
+
 WHAT THE FIXTURES ARE. `wall_grid` paints one row of OCCUPIED with FREE on one
 side and leaves the rest UNKNOWN, so the slab exposes exactly ONE face per
 column: an occupied-unknown boundary gives no element (Def 1, graph_walls
@@ -2233,6 +2276,554 @@ def test_s8_refuses_a_wrong_s7_sha256(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as e:
         dw.run_s8(tmp_path)
     assert e.value.code == 2
+
+
+# ───────── S9: segmentation or geometry, G7 and P12 (the Q series) ──────────
+#
+# SYNTHETIC ONLY. No segment assignment and no e' distance is read on a real
+# map here or anywhere else in this file.
+
+def seg_side(grid, stem, assign, origin=ORIGIN):
+    """A side whose elements are assigned by a predicate on (row, col, dir).
+
+    `fake_side` assigns every element and `unassigned_side` names indices;
+    neither is much use when the question IS which elements carry a segment, so
+    this takes `assign(row, col, dir) -> bool` and builds `seg_of` from it.
+    Segment 0 for the assigned, -1 for the rest, which is what
+    `face_elements_only` and S9 both read.
+    """
+    el = gw.face_elements(grid, RHO, origin)
+    seg_of = np.full(el['n'], -1, dtype=np.int64)
+    for i in range(el['n']):
+        if assign(int(el['row'][i]), int(el['col'][i]), int(el['dir'][i])):
+            seg_of[i] = 0
+    return {'stem': stem, 'el': el, 'seg_of': seg_of, 'grid': grid,
+            'rho': RHO, 'origin': origin, 'shape': grid.shape,
+            'segments': [{'p0': [0.0, 0.55], 'p1': [1.1, 0.55]}]}
+
+
+def two_runs(lo_hi_by_row, w_total=S7_GRID_W, h=12):
+    """FREE below each occupied run, so every run exposes one '-y' face line."""
+    g = blank(h, w_total)
+    g[:max(lo_hi_by_row) + 1, :] = FREE
+    for row, (lo, hi) in lo_hi_by_row.items():
+        g[row, lo:hi + 1] = OCC
+    return g
+
+
+def test_s9_find_e_prime_for_all_four_directions():
+    """Q1: e' is named by (row, col, dir), which the element arrays carry."""
+    rho, origin = RHO, (0.37, -0.21)
+    g = np.full((9, 9), FREE, dtype=np.uint8)
+    g[4, 4] = OCC
+    el = gw.face_elements(g, rho, origin)
+    assert el['n'] == 4
+    for i in range(el['n']):
+        d = int(el['dir'][i])
+        j = dw.find_e_prime(el, (4, 4), d)
+        assert j == i
+        # and the front cell it implies is the free neighbour
+        drow, dcol = gw.DIRS[d][:2]
+        assert g[4 + drow, 4 + dcol] == FREE
+    # the triple really is a key: two occupied cells do not collide
+    g[4, 6] = OCC
+    el2 = gw.face_elements(g, rho, origin)
+    seen = {(int(el2['row'][i]), int(el2['col'][i]), int(el2['dir'][i]))
+            for i in range(el2['n'])}
+    assert len(seen) == el2['n']
+
+
+def test_s9_find_e_prime_under_a_sub_cell_lattice_offset():
+    """Q2: the k' cell is found by position, so a shifted origin still lands.
+
+    b's wall-cell centre comes from k's lattice; the cell that CONTAINS it at
+    k' is a different index when the origins differ by part of a cell, and e'
+    is the element of that cell. This walks the offset across a whole cell.
+    """
+    g = two_runs({6: (0, 12)})
+    for shift in (0.0, 0.01, 0.04, 0.06, 0.09):
+        side_k = seg_side(g, 'k', lambda r, c, d: True, origin=(0.0, 0.0))
+        side_kp = seg_side(g, 'kp', lambda r, c, d: True,
+                           origin=(shift, 0.0))
+        i = int(np.nonzero(side_k['el']['col'] == 5)[0][0])
+        wall, _front = dw.cell_centres_of(side_k['el'], i, RHO)
+        rc = dw.state_at(side_kp, wall)
+        j = dw.find_e_prime(side_kp['el'], (rc['row'], rc['col']),
+                            int(side_k['el']['dir'][i]))
+        assert j is not None, shift
+        # the element found is the one whose own wall cell is that cell
+        assert int(side_kp['el']['row'][j]) == rc['row']
+        assert int(side_kp['el']['col'][j]) == rc['col']
+
+
+def test_s9_find_e_prime_fails_cleanly():
+    """Q3: None when the cell pair carries no element, or none in b's direction."""
+    g = two_runs({6: (0, 12)})
+    s = seg_side(g, 'kp', lambda r, c, d: True)
+    row6 = int(np.nonzero(s['el']['col'] == 3)[0][0])
+    d = int(s['el']['dir'][row6])
+    assert dw.find_e_prime(s['el'], (6, 3), d) is not None
+    # a cell with no element at all
+    assert dw.find_e_prime(s['el'], (0, 0), d) is None
+    # the right cell, the wrong direction
+    other = next(k for k in range(4) if k != d)
+    assert dw.find_e_prime(s['el'], (6, 3), other) is None
+
+
+def test_s9_assignment_indexes_the_full_array_not_the_subset():
+    """Q4: seg_of is parallel to the FULL element array.
+
+    `extract_with_elements` builds `seg_of = np.full(el['n'], -1)` off
+    `face_elements`, so index i of `seg_of` is index i of the full arrays --
+    which is why `seg_of[e'] >= 0` is e''s assignment. Reading it off
+    `face_elements_only`'s subset would silently name a different element, and
+    this is the case that would catch that.
+    """
+    g = two_runs({2: (0, 12), 6: (0, 12)})
+    s = seg_side(g, 'kp', lambda r, c, d: r == 2)      # only row 2 assigned
+    full, sub = s['el'], dw.face_elements_only(s['el'], s['seg_of'])
+    assert sub['n'] < full['n']
+    for i in range(full['n']):
+        assert bool(s['seg_of'][i] >= 0) == (int(full['row'][i]) == 2)
+    # the two indexings are NOT the same map: the subset skips the unassigned,
+    # so beyond the first gap a subset index names a different element
+    assigned = np.nonzero(s['seg_of'] >= 0)[0]
+    assert not np.array_equal(assigned, np.arange(assigned.size))
+    for sub_i, full_i in enumerate(assigned):
+        assert sub['x'][sub_i] == full['x'][full_i]
+    # a row-6 element exists in the full array and is unassigned; it has no
+    # index at all in the subset, so only the full-array read can see it
+    j = dw.find_e_prime(full, (6, 4), 3)
+    assert j is not None
+    assert s['seg_of'][j] < 0
+    assert j not in set(assigned.tolist())
+
+
+@pytest.mark.parametrize('across,along,assigned,expected', [
+    (0.0, 0.0, False, dw.SEGMENTATION),          # unassigned wins outright
+    (9.9, 9.9, False, dw.SEGMENTATION),
+    (0.5, 0.0, True, dw.GEOM_ACROSS),
+    (0.0, 0.5, True, dw.GEOM_ALONG),
+])
+def test_s9_classification_order(across, along, assigned, expected):
+    """Q5: segmentation first, then across, then along."""
+    assert dw.classify_unchanged(assigned, across, along, EPS, RHO) == expected
+
+
+def test_s9_classification_boundaries_are_t1s_own():
+    """Q6: eps and rho/2 inclusive to 1e-9 m, exactly as T1 has them.
+
+    `within_t1_tolerances` is the one statement of that boundary and both S7's
+    `within_t1` flag and these classes go through it, so eps can be at the
+    limit here without the two stages disagreeing about which side it is on.
+    """
+    tol = dw.T1_TOL_M
+    # across: at eps and at eps + tol it is NOT beyond; past that it is
+    assert dw.classify_unchanged(True, EPS, 0.0, EPS, RHO) == dw.GEOM_ALONG
+    assert dw.classify_unchanged(True, EPS + tol, 0.0, EPS,
+                                 RHO) == dw.GEOM_ALONG
+    assert dw.classify_unchanged(True, EPS + 2 * tol, 0.0, EPS,
+                                 RHO) == dw.GEOM_ACROSS
+    # and the predicate agrees on both tolerances
+    half = 0.5 * RHO
+    assert dw.within_t1_tolerances(EPS, half, EPS, RHO)
+    assert dw.within_t1_tolerances(EPS + tol, half + tol, EPS, RHO)
+    assert not dw.within_t1_tolerances(EPS + 2 * tol, half, EPS, RHO)
+    assert not dw.within_t1_tolerances(EPS, half + 2 * tol, EPS, RHO)
+
+
+@pytest.mark.parametrize('n_seg,expected', [
+    (0, False), (38, False), (39, True), (78, True)])
+def test_s9_p12_threshold_is_39_of_78(n_seg, expected):
+    """Q7: at least half of 78 is 39, so 38 fails. The 54 seen stay out."""
+    recs = ([{'class': dw.SEGMENTATION, 's7_bin': dw.BIN_WITHIN_EPS}] * n_seg
+            + [{'class': dw.GEOM_ACROSS, 's7_bin': dw.BIN_WITHIN_EPS}]
+            * (78 - n_seg)
+            + [{'class': dw.SEGMENTATION, 's7_bin': dw.BIN_FAR}] * 54)
+    out = dw.p12_verdict(recs)
+    assert (out['of'], out['min_required']) == (78, 39)
+    assert out['n_segmentation'] == n_seg
+    assert out['holds'] is expected
+    # the carve-out is reported beside the test, never inside it
+    assert out['seen']['of'] == 54
+    assert out['seen']['n_segmentation'] == 54
+    assert sum(out['by_class'].values()) == 78
+
+
+def test_s9_p12_denominators_are_asserted():
+    """Q7b: 78 tested and 54 seen are the registered numbers, not whatever came."""
+    with pytest.raises(AssertionError):
+        dw.p12_verdict([{'class': dw.SEGMENTATION,
+                         's7_bin': dw.BIN_WITHIN_EPS}] * 77
+                       + [{'class': dw.SEGMENTATION,
+                           's7_bin': dw.BIN_FAR}] * 54)
+
+
+# ── the end-to-end synthetic corpus ─────────────────────────────────────────
+#
+# Two robots, four cuts, and A's elements lost to SEGMENTATION, which is the
+# one class a corpus on a shared lattice can reach end to end:
+#
+#   A (k0), every cut   row 6 OCC cols 0..12, all assigned
+#   B (k1) at cut60     the same, all assigned -> A fully corroborated
+#   B (k1) at 120, 240  row 6 OCC and row 2 OCC, and ONLY row 2 assigned
+#   and 1200
+#
+# So at the 60 -> 120 step every one of A's 13 elements loses its only
+# corroborator; b's two cells still read occupied and free at k', so the loss
+# is UNCHANGED; and e' -- the row-6 element at that cell pair -- exists and is
+# unassigned, which is segmentation. The row-2 line is there to put the
+# elements in a TESTED bin: it is assigned and 0.40 m across, which is beyond
+# eps and inside a metre, so S7's bin is `beyond_eps_across`, not the carve-out.
+#
+# THE GEOMETRY CLASSES ARE NOT REACHABLE HERE, and the reason is structural. e'
+# is the element of the cell CONTAINING b's wall-cell centre, so its midpoint
+# sits within half a cell of b's in each axis; with b itself inside T1 at k,
+# e' lands within eps + rho across and rho along of e. Reaching a geometric
+# class therefore needs A's and B's lattices offset so that b sits near T1's
+# limit at k and the k' lattice carries e' just past it -- which the real
+# corpus can do and this one does not. P5 and P6 cover the classes directly.
+
+def s9_sides():
+    """The corpus above, as a `by_kc` and a spawn table."""
+    a_grid = two_runs({6: (0, 12)})
+    b_early = two_runs({6: (0, 12)})
+    b_late = two_runs({2: (0, 12), 6: (0, 12)})
+    by_kc, spawn = {}, {0: (0.0, 0.0), 1: (0.0, 0.0)}
+    for c in dw.CUTS:
+        by_kc[(0, c)] = seg_side(a_grid, f'A_k0_cut{c}', lambda r, c_, d: True)
+        if c == 60:
+            by_kc[(1, c)] = seg_side(b_early, f'B_k1_cut{c}',
+                                     lambda r, c_, d: True)
+        else:
+            by_kc[(1, c)] = seg_side(b_late, f'B_k1_cut{c}',
+                                     lambda r, c_, d: r == 2)
+    return by_kc, spawn
+
+
+def s9_fake_s8(by_kc, spawn, n_robots=2):
+    """An S8 payload for the synthetic corpus, built with S8's own code."""
+    keys = dw.matrix_keys(dw.CUTS, n_robots)
+    masks = {k: dw.s7_mask(by_kc, spawn, k) for k in keys}
+    series = [dw.gain_loss_series(masks, a, b, ca, dw.CUTS)
+              for (a, b, ca) in dw.series_keys(dw.CUTS, n_robots)]
+    lost = dw.lost_elements(masks, series, dw.CUTS)
+    keys_k = sorted({(r['A'], r['B'], r['cut_A'], r['from_cut_B'])
+                     for r in lost})
+    matches = dw.b_matches(by_kc, spawn, keys_k)
+    at_k = dw.g6_states_at_k(by_kc, matches, lost)
+    rho = next(iter(by_kc.values()))['rho']
+    eps = gw.EPS_FACTOR * rho
+    bin_of = {(r['A'], r['B'], r['cut_A'], r['step'], r['element']):
+              dw.s7_distance_bin(r, eps, 0.5 * rho) for r in lost}
+    out = []
+    for row in at_k['rows']:
+        side_kp = by_kc[(row['B'], dw._to_cut(row['step']))]
+        sw = dw.state_at(side_kp, tuple(row['wall_cell']))
+        sf = dw.state_at(side_kp, tuple(row['front_cell']))
+        rec = dict(row)
+        rec.pop('equal', None)
+        rec.update({'map_at_kp': side_kp['stem'],
+                    'wall_at_kp': dw.state_name(sw['state']),
+                    'front_at_kp': dw.state_name(sf['state']),
+                    'wall_rc_at_kp': [sw['row'], sw['col']],
+                    'front_rc_at_kp': [sf['row'], sf['col']],
+                    'wall_on_grid_at_kp': sw['on_grid'],
+                    'front_on_grid_at_kp': sf['on_grid'],
+                    'class': dw.classify_cells(sw, sf),
+                    'off_grid_cell': None,
+                    's7_bin': bin_of[(row['A'], row['B'], row['cut_A'],
+                                      row['step'], row['element'])]})
+        out.append(rec)
+    return {'elements': out, 'rho_m': rho,
+            'reported': {'lattice_offsets': dw.lattice_offsets(
+                by_kc, dw.CUTS, n_robots)}}
+
+
+def _s9_counts(s8):
+    """The unchanged set this corpus produced, and its tested/seen split."""
+    u = [r for r in s8['elements'] if r['class'] == dw.UNCHANGED]
+    seen = [r for r in u if r['s7_bin'] == dw.BIN_FAR]
+    return len(u), len(u) - len(seen), len(seen)
+
+
+def test_s9_g7_holding_classifies_every_unchanged_element(tmp_path):
+    """Q8: the whole pipeline, and the class the corpus is built to reach."""
+    by_kc, spawn = s9_sides()
+    s8 = s9_fake_s8(by_kc, spawn)
+    n_u, n_t, n_s = _s9_counts(s8)
+    assert n_u > 0 and n_t > 0
+    out = dw.s9_segmentation(by_kc, spawn, s8,
+                             {'stage': 's9', 'head': 'synthetic'}, tmp_path,
+                             n_robots=2, n_unchanged=n_u, n_tested=n_t,
+                             n_seen=n_s)
+    assert out['G7']['all_ok']
+    assert all(out['G7']['parts'].values())
+    assert out['n_unchanged'] == n_u
+    assert {r['class'] for r in out['elements']} == {dw.SEGMENTATION}
+    for r in out['elements']:
+        assert r['assigned'] is False
+        assert r['e_prime_seg'] == -1
+        assert r['s7_bin'] in (dw.BIN_WITHIN_EPS, dw.BIN_BEYOND_EPS)
+    # the corpus reaches both tested bins: the '-y' line's nearest assigned
+    # same-dir element is 0.40 m ACROSS, and the one '+x' element's is 0.40 m
+    # ALONG, so the two land in different bins
+    assert {r['s7_bin'] for r in out['elements']} == {dw.BIN_WITHIN_EPS,
+                                                     dw.BIN_BEYOND_EPS}
+    assert out['P12']['holds']
+    assert out['P12']['n_segmentation'] == n_t
+    written = list(tmp_path.glob('s9_segmentation_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert len(payload['elements']) == n_u
+    assert payload['reported']['geometry'] == []
+    assert out['written']['sha256'] == hashlib.sha256(
+        written[0].read_bytes()).hexdigest()
+
+
+def _assert_s9_fail_file(tmp_path, capsys):
+    """The fail file holds the G7 comparisons and no class count or verdict."""
+    assert not list(tmp_path.glob('s9_segmentation_*.json'))
+    written = list(tmp_path.glob('s9_g7_fail_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert set(payload) >= {'G7', 'stage', 'seconds'}
+    assert 'elements' not in payload and 'P12' not in payload
+    assert 'reported' not in payload
+    # no class count and no verdict anywhere, by exact key name
+    def keys_of(node):
+        if isinstance(node, dict):
+            return set(node) | set().union(*(keys_of(v) for v in node.values())
+                                           or [set()])
+        if isinstance(node, list):
+            return set().union(*(keys_of(v) for v in node) or [set()])
+        return set()
+    assert not (keys_of(payload) & {'P12', 'class', 'by_class',
+                                    'n_segmentation', 'elements', 'reported'})
+    out = capsys.readouterr().out
+    assert 'G7' in out and 'FAIL' in out
+    for word in ('P12', 'segmentation', 'geometry elements',
+                 'classes by S7 distance bin'):
+        assert word not in out
+    return payload
+
+
+def _s9_run_expecting_failure(by_kc, spawn, s8, tmp_path, counts=None):
+    n_u, n_t, n_s = counts or _s9_counts(s8)
+    with pytest.raises(SystemExit) as e:
+        dw.s9_segmentation(by_kc, spawn, s8,
+                           {'stage': 's9', 'head': 'synthetic'}, tmp_path,
+                           n_robots=2, n_unchanged=n_u, n_tested=n_t,
+                           n_seen=n_s)
+    assert e.value.code == 2
+
+
+def test_s9_g7_part1_an_unchanged_set_short_by_one(tmp_path, capsys):
+    """Q9: part 1 fails on a set that differs by one element."""
+    by_kc, spawn = s9_sides()
+    s8 = s9_fake_s8(by_kc, spawn)
+    counts = _s9_counts(s8)
+    dropped = next(i for i, r in enumerate(s8['elements'])
+                   if r['class'] == dw.UNCHANGED)
+    s8['elements'] = [r for i, r in enumerate(s8['elements'])
+                      if i != dropped]
+    _s9_run_expecting_failure(by_kc, spawn, s8, tmp_path, counts)
+    payload = _assert_s9_fail_file(tmp_path, capsys)
+    assert payload['G7']['parts']['1_set_and_states'] is False
+    assert payload['G7']['unchanged_set']['only_in_s9']
+
+
+def test_s9_g7_part1_a_differing_cell_state(tmp_path, capsys):
+    """Q10: part 1 also fails on a state S9 reads differently from S8.
+
+    Stricter than the spec, which asks only that the SETS agree. An unchanged
+    element whose states S9 reads differently is not the element S8
+    classified, and the set alone would not notice.
+    """
+    by_kc, spawn = s9_sides()
+    s8 = s9_fake_s8(by_kc, spawn)
+    counts = _s9_counts(s8)
+    for r in s8['elements']:
+        if r['class'] == dw.UNCHANGED:
+            r['front_at_kp'] = 'unknown'          # S9 will read 'free'
+            break
+    _s9_run_expecting_failure(by_kc, spawn, s8, tmp_path, counts)
+    payload = _assert_s9_fail_file(tmp_path, capsys)
+    assert payload['G7']['unchanged_set']['differing_states']
+
+
+@pytest.mark.parametrize('part,patch', [
+    ('2_e_prime_exists', 'find_e_prime'),
+    ('2_e_prime_exists', 'e_prime_distances'),
+])
+def test_s9_g7_part2_a_missing_or_misdirected_e_prime(part, patch, tmp_path,
+                                                      capsys, monkeypatch):
+    """Q11: no e', and an e' in the wrong direction, both stop the stage.
+
+    DRIVEN BY PATCHING, and deliberately so: on a consistent corpus neither
+    case can arise -- an unchanged element's cells ARE an occupied/free pair,
+    so the element is there, in b's direction. Part 2 is a consistency check
+    between S8 and `graph_walls`, and the only way to exercise its handling is
+    to make the finder answer as it would if that consistency broke.
+    """
+    by_kc, spawn = s9_sides()
+    s8 = s9_fake_s8(by_kc, spawn)
+    counts = _s9_counts(s8)
+    calls = {'n': 0}
+    real = getattr(dw, patch)
+
+    def once(*a, **k):
+        calls['n'] += 1
+        return None if calls['n'] == 1 else real(*a, **k)
+
+    monkeypatch.setattr(dw, patch, once)
+    _s9_run_expecting_failure(by_kc, spawn, s8, tmp_path, counts)
+    payload = _assert_s9_fail_file(tmp_path, capsys)
+    assert payload['G7']['parts'][part] is False
+    assert payload['G7']['missing_e_prime'] or payload['G7']['wrong_direction']
+
+
+def _point_e_prime_at_an_assigned_element(monkeypatch, by_kc, inside=False):
+    """Make the finder name an ASSIGNED element at k', optionally inside T1.
+
+    The corpus cannot be mutated into this shape: assigning e' at k' would
+    make T1 corroborate the element, so it would not be a loss and part 1
+    would fail first on a different unchanged set. Patching the finder is the
+    only way in, and it is the honest one -- parts 3 and 4 are cross-stage
+    consistency checks that a CONSISTENT corpus cannot reach.
+    """
+    first = {'done': False}
+    real_find, real_dist = dw.find_e_prime, dw.e_prime_distances
+
+    def find(el, wall_rc, dir_b):
+        if not first['done']:
+            hit = np.nonzero(el['dir'] == dir_b)[0]
+            for j in hit:                       # the assigned row-2 line
+                if int(el['row'][j]) == 2:
+                    first['done'] = True
+                    return int(j)
+        return real_find(el, wall_rc, dir_b)
+
+    def dist(a_side, i, b_side, j, sa, sb):
+        out = real_dist(a_side, i, b_side, j, sa, sb)
+        if inside and out is not None and int(b_side['el']['row'][j]) == 2:
+            out = dict(out, across_m=0.0, along_m=0.0, dist_m=0.0)
+        return out
+
+    monkeypatch.setattr(dw, 'find_e_prime', find)
+    monkeypatch.setattr(dw, 'e_prime_distances', dist)
+
+
+def test_s9_g7_part3_an_e_prime_assigned_and_within_t1(tmp_path, capsys,
+                                                       monkeypatch):
+    """Q12: an e' both assigned and inside T1 contradicts S7's mask.
+
+    If such an e' existed T1 would have corroborated the element and it would
+    not be a loss at all, so part 3 is what would catch S7 and S9 disagreeing.
+    """
+    by_kc, spawn = s9_sides()
+    s8 = s9_fake_s8(by_kc, spawn)
+    counts = _s9_counts(s8)
+    _point_e_prime_at_an_assigned_element(monkeypatch, by_kc, inside=True)
+    _s9_run_expecting_failure(by_kc, spawn, s8, tmp_path, counts)
+    payload = _assert_s9_fail_file(tmp_path, capsys)
+    assert payload['G7']['parts']['3_none_assigned_and_within_t1'] is False
+    assert payload['G7']['assigned_and_within_t1']
+
+
+def test_s9_g7_part4_a_carve_out_element_that_is_assigned(tmp_path, capsys,
+                                                          monkeypatch):
+    """Q13: part 4, which is stricter than the spec, and is checked not assumed.
+
+    The spec calls the "none within 1 m" elements segmentation BY
+    CONSTRUCTION. Part 4 checks it. Driven by relabelling one element's bin to
+    the carve-out while its e' reads assigned-but-outside-T1, which is the
+    shape a broken carve-out would take.
+    """
+    by_kc, spawn = s9_sides()
+    s8 = s9_fake_s8(by_kc, spawn)
+    n_u, n_t, n_s = _s9_counts(s8)
+    target = next(r for r in s8['elements'] if r['class'] == dw.UNCHANGED)
+    target['s7_bin'] = dw.BIN_FAR          # not a field part 1 compares
+    # an assigned e', left at its real distance of 0.40 m across, which is
+    # outside T1 -- so part 3 holds and part 4 is the one that fires
+    _point_e_prime_at_an_assigned_element(monkeypatch, by_kc, inside=False)
+    _s9_run_expecting_failure(by_kc, spawn, s8, tmp_path,
+                              (n_u, n_t - 1, n_s + 1))
+    payload = _assert_s9_fail_file(tmp_path, capsys)
+    assert payload['G7']['parts']['4_carve_out_is_segmentation'] is False
+    assert payload['G7']['carve_out_assigned']
+
+
+def test_s9_refuses_a_dirty_tree(monkeypatch):
+    """Q14a: a result file must not name a commit it was not produced by."""
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/divergence_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s9()
+    assert e.value.code == 2
+
+
+def test_s9_refuses_when_the_registration_is_not_an_ancestor(monkeypatch):
+    """Q14b: P12 must be registered in history behind the code that tests it."""
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] in ('status', 'merge-base') else 'deadbeef'))
+    with pytest.raises(SystemExit) as e:
+        dw.run_s9()
+    assert e.value.code == 2
+
+
+def test_s9_refuses_when_the_spec_at_head_lacks_p12(monkeypatch):
+    """P14c: ancestry is not enough; the spec at HEAD must carry the header."""
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return '## 9\n\n**P11. REGISTERED 9 Oct 2026.** something\n'
+        return 'c0ffee'
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s9()
+    assert e.value.code == 2
+
+
+def test_s9_refuses_a_wrong_s8_sha256(tmp_path, monkeypatch):
+    """P14d: G7 is an equality against ONE S8 run, so that run is pinned."""
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return ('## Unchanged losses (P12)\n\n'
+                    '**P12. REGISTERED 9 Oct 2026.** Segmentation.\n')
+        return 'c0ffee'
+    monkeypatch.setattr(dw, '_git', fake)
+    (tmp_path / dw.S8_RESULT).write_text('{"elements": [], "rho_m": 0.1}')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s9(tmp_path)
+    assert e.value.code == 2
+
+
+def test_s9_nearest_same_dir_docstring_names_the_callers_set():
+    """Q15: the docstring fix, and that it is a wording change only.
+
+    The behaviour it describes is pinned elsewhere; what this holds is that the
+    docstring now says whose set is scanned, because P12's carve-out rests on
+    that set being B's ASSIGNED elements and the old wording read as all of
+    them.
+    """
+    doc = dw.nearest_same_dir.__doc__
+    assert 'face_elements_only' in doc
+    assert 'ASSIGNED TO A WALL SEGMENT' in doc
+    assert "the caller's choice" in doc.lower()
+    assert 'scans every same-direction element of B' not in doc
+    # and the behaviour is still the behaviour: handed a set, it scans that set
+    a = side(wall_grid())
+    el_b = b_at(a['el'], [(0.2, 0.0)])
+    assert dw.nearest_same_dir(a['el'], 0, el_b)['b_index'] == 0
+    assert dw.nearest_same_dir(a['el'], 0, {
+        'n': 0, 'x': np.empty(0), 'y': np.empty(0), 'nx': np.empty(0),
+        'ny': np.empty(0), 'dir': np.empty(0, dtype=np.int64)}) is None
 
 
 # ──────────────────────────── the named breaks ───────────────────────────────
