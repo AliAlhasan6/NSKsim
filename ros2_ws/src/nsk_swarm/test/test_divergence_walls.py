@@ -151,6 +151,51 @@ run, like the rest of this table, and nothing in them touches a real map.
        ancestor, and with a spec that lacks P9               on each of the
                                                              three
 
+The L series is S7, gains and losses. Its rows were written before the stage was
+run, and nothing in them touches a real map.
+
+  L1   an element corroborated at both cuts                 neither a gain nor
+                                                             a loss
+  L2   the direction convention                             not-then-yes is a
+                                                             gain, yes-then-not
+                                                             a loss, 0.1 m each
+  L3   gains minus losses                                   equals the change in
+                                                             the corroborated
+                                                             count, every case
+  L4   an unassigned element that changes state             counted as neither
+  L5   P10 at 0, 9, 10 and 20 of P3's 20 series             holds only from 10;
+                                                             P9's 60 never count
+  L6   G5, one ulp on one stored S6 share                   exit 2; the share
+                                                             comparisons only,
+                                                             and no gain, loss
+                                                             or distance at all
+  L7   G5, one element on one failing step's rise           exit 2; no reported
+                                                             gain, loss or
+                                                             distance, and the
+                                                             only counting is
+                                                             G5's own, on S6's
+                                                             failing steps
+  L8   G5 holding on a synthetic corpus                     80 series, 320 rows,
+                                                             P10 20/20, a file
+  L9   a reordered A element list                           the alignment
+                                                             assertion fires
+  L10  the nearest same-direction B element                 across first, then
+                                                             along, then the
+                                                             lowest index; None
+                                                             when B faces no
+                                                             such way
+  L11  the split that exposes the mask                      S6's row is the
+                                                             split plus shares,
+                                                             and c/n off the
+                                                             mask is the share
+  L12  --stage s7 on a dirty tree, without 9541ea1, with    refuses, exit 2, on
+       a spec lacking P10, and on a wrong S6 sha256          each of the four
+  L13  an unassigned element flipping at every step          counted nowhere,
+                                                             against the
+                                                             SHARE's own count,
+                                                             and no lost-element
+                                                             record
+
 WHAT THE FIXTURES ARE. `wall_grid` paints one row of OCCUPIED with FREE on one
 side and leaves the rest UNKNOWN, so the slab exposes exactly ONE face per
 column: an occupied-unknown boundary gives no element (Def 1, graph_walls
@@ -1225,6 +1270,480 @@ def test_s6_refuses_when_the_spec_at_head_lacks_p9(monkeypatch):
     monkeypatch.setattr(dw, '_git', fake)
     with pytest.raises(SystemExit) as e:
         dw.run_s6()
+    assert e.value.code == 2
+
+
+# ────────── S7: gains and losses, G5 and P10 (the L series) ─────────────────
+#
+# SYNTHETIC ONLY, like the M series. No element mask is computed on a real map
+# anywhere in this file.
+
+# One occupied run per cut, placed rather than merely grown: the run SHIFTS
+# right by one column at cut240, so A's column 0 is corroborated by B at cut120
+# and not by B at cut240. That is a loss, and it is what gives this corpus
+# failing P9 steps for G5's second check to compare and losses for P10 to count.
+S7_SPAN = {60: (0, 2), 120: (0, 5), 240: (1, 9), 1200: (0, 12)}
+S7_GRID_W = 18
+
+
+def wall_span(lo, hi, w_total=S7_GRID_W, h=12, wall_row=6):
+    """One occupied run from column `lo` to `hi` inclusive, FREE above it.
+
+    Exactly hi-lo+1 elements, all the same dir, at x = col*rho -- the shape
+    `wall_grid` gives, but placed. The cells beside the run stay UNKNOWN, so
+    the run's ends yield no element of their own (Def 1: an occupied-unknown
+    boundary is not a face), and A's and B's elements line up column for
+    column.
+    """
+    g = blank(h, w_total)
+    g[:wall_row, :] = FREE
+    g[wall_row, lo:hi + 1] = OCC
+    return g
+
+
+def s7_sides(n_robots=dw.N_ROBOTS):
+    """The synthetic corpus S7's cases run on: five robots by four cuts."""
+    by_kc, spawn = {}, {}
+    for k in range(n_robots):
+        spawn[k] = (0.0, 0.0)
+        for c, (lo, hi) in S7_SPAN.items():
+            by_kc[(k, c)] = fake_side(
+                wall_span(lo, hi + k),
+                f'b2maps_k{k}_cut{c}_gated_extfix_robot{k}')
+    return by_kc, spawn
+
+
+def s7_fake_s6(by_kc, spawn):
+    """An S6 payload for the synthetic corpus: the 320 rows and P9's failures.
+
+    Built with S6's own code, so S7's G5 agrees with it by construction and a
+    case can then break exactly one number and watch the stage stop.
+    """
+    keys = dw.matrix_keys()
+    rows = dw.cut_matrix(by_kc, spawn, keys)
+    return {'rows': [rows[k] for k in keys], 'P9': dw.p9_verdict(rows)}
+
+
+def gl_masks(ck, ckp, assigned=None, rho=RHO):
+    """Two one-row masks carrying only what `gain_loss_step` reads."""
+    ck, ckp = np.array(ck, bool), np.array(ckp, bool)
+    keep = (np.ones(ck.size, bool) if assigned is None
+            else np.array(assigned, bool))
+    return ({'key': (0, 1, 1200, 60), 'corr': ck, 'assigned': keep,
+             'rho': rho, 'n_corroborated': int((ck & keep).sum())},
+            {'key': (0, 1, 1200, 120), 'corr': ckp, 'assigned': keep,
+             'rho': rho, 'n_corroborated': int((ckp & keep).sum())})
+
+
+def b_at(el_a, offsets):
+    """B elements placed by hand at (across, along) from A's element 0.
+
+    Across is along A's own normal and along is along its tangent, which is
+    how `nearest_same_dir` measures, so a case can state the answer it wants.
+    """
+    nx, ny = float(el_a['nx'][0]), float(el_a['ny'][0])
+    tx, ty = -ny, nx
+    xs = [float(el_a['x'][0]) + ac * nx + al * tx for ac, al in offsets]
+    ys = [float(el_a['y'][0]) + ac * ny + al * ty for ac, al in offsets]
+    n = len(offsets)
+    return {'n': n, 'x': np.array(xs), 'y': np.array(ys),
+            'nx': np.full(n, nx), 'ny': np.full(n, ny),
+            'dir': np.full(n, int(el_a['dir'][0]), dtype=np.int64)}
+
+
+def banned_words_in(node, path='$'):
+    """Every path in a payload whose key names a gain, loss or distance."""
+    bad, words = [], ('gain', 'loss', 'lost', 'across_m', 'along_m', 'dist_m')
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if any(w in str(k).lower() for w in words):
+                bad.append(f'{path}.{k}')
+            bad += banned_words_in(v, f'{path}.{k}')
+    elif isinstance(node, list):
+        for v in node:
+            bad += banned_words_in(v, f'{path}[]')
+    return bad
+
+
+def test_s7_corroborated_at_both_cuts_is_neither():
+    """L1: a state that does not change is not a gain and not a loss."""
+    gl = dw.gain_loss_step(*gl_masks([1, 1, 1], [1, 1, 1]))
+    assert (gl['n_gained'], gl['n_lost']) == (0, 0)
+    gl = dw.gain_loss_step(*gl_masks([0, 0, 0], [0, 0, 0]))
+    assert (gl['n_gained'], gl['n_lost']) == (0, 0)
+
+
+def test_s7_the_gain_and_loss_direction_convention():
+    """L2: not-then-yes is a gain; yes-then-not is a loss. Never the reverse."""
+    gl = dw.gain_loss_step(*gl_masks([0, 1], [1, 0]))
+    assert (gl['n_gained'], gl['n_lost']) == (1, 1)
+    assert list(gl['gained_idx']) == [0]
+    assert list(gl['lost_idx']) == [1]
+    assert gl['gained_m'] == pytest.approx(RHO)
+    assert gl['lost_m'] == pytest.approx(RHO)
+
+
+@pytest.mark.parametrize('ck,ckp', [
+    ([0, 0, 1, 1], [1, 1, 1, 0]), ([1, 1, 1, 1], [0, 0, 0, 0]),
+    ([0, 0, 0, 0], [1, 1, 1, 1]), ([1, 0, 1, 0], [1, 0, 1, 0])])
+def test_s7_gains_minus_losses_is_the_change_in_count(ck, ckp):
+    """L3: every element that changed state is a gain or a loss, so the net is
+    the change in the corroborated count. The identity S7 asserts at run time."""
+    mk, mkp = gl_masks(ck, ckp)
+    gl = dw.gain_loss_step(mk, mkp)
+    assert (gl['n_gained'] - gl['n_lost']
+            == mkp['n_corroborated'] - mk['n_corroborated'])
+
+
+def test_s7_an_unassigned_element_is_neither():
+    """L4: §3 leaves unassigned elements as excluded length, out of every share."""
+    gl = dw.gain_loss_step(*gl_masks([0, 0], [1, 1], assigned=[True, False]))
+    assert (gl['n_gained'], gl['n_lost']) == (1, 0)
+    gl = dw.gain_loss_step(*gl_masks([1, 1], [0, 0], assigned=[True, False]))
+    assert (gl['n_gained'], gl['n_lost']) == (0, 1)
+
+
+def unassigned_side(grid, unassigned, stem):
+    """A side with chosen elements left off a face, so `assigned` is not all True.
+
+    `fake_side` assigns every element to face 0, which is what the M and L
+    corpora want and also why neither of them ever exercises §3's excluded
+    length. This is the fixture that does.
+    """
+    s = side(grid)
+    seg_of = s['seg_of'].copy()
+    seg_of[list(unassigned)] = -1
+    return {'stem': stem, 'el': s['el'], 'seg_of': seg_of, 'grid': grid,
+            'rho': s['rho'], 'origin': s['origin'], 'shape': s['shape'],
+            'segments': [{'p0': [0.0, 0.55], 'p1': [1.1, 0.55]}]}
+
+
+def test_s7_an_unassigned_element_flipping_never_counts():
+    """L13: an unassigned element changes state at every step and counts nowhere.
+
+    A carries six elements with the last left off a face. B's run covers all
+    six at cut120 and cut1200 and only the first five at cut60 and cut240, so
+    A's element 5 flips at all three steps -- a gain, then a loss, then a gain
+    if anything counted it. Nothing may: §3 leaves it as excluded length, so
+    `shares` never sees it and neither may a gain or a loss.
+
+    This is the case that ties the restriction to the SHARE's own count rather
+    than to a hand-built one: `change_in_corroborated` here comes from
+    `shares`, through `s7_mask`. Drop the `keep &` in `gain_loss_step` and the
+    run-time identity in `gain_loss_series` fires, because gains minus losses
+    would be -1 or +1 against a change of 0.
+    """
+    by_kc, spawn = {}, {0: (0.0, 0.0), 1: (0.0, 0.0)}
+    by_kc[(0, 1200)] = unassigned_side(wall_span(0, 5), [5], 'A_unassigned_5')
+    covers = {60: 4, 120: 5, 240: 4, 1200: 5}
+    for c, hi in covers.items():
+        by_kc[(1, c)] = fake_side(wall_span(0, hi), f'B_cut{c}_to_{hi}')
+
+    keys = [(0, 1, 1200, cb) for cb in dw.CUTS]
+    masks = {k: dw.s7_mask(by_kc, spawn, k) for k in keys}
+
+    # five assigned elements, all five corroborated at every cut; the sixth is
+    # excluded length and is not in the denominator at all
+    for k in keys:
+        assert masks[k]['n_elements'] == 5
+        assert masks[k]['n_corroborated'] == 5
+        assert masks[k]['corroborated'] == 1.0
+        assert masks[k]['assigned'].sum() == 5
+        assert masks[k]['el_a']['n'] == 6
+    # and it really does flip: corroborated at cut120 and cut1200, not at the others
+    assert [bool(masks[(0, 1, 1200, cb)]['corr'][5]) for cb in dw.CUTS] == [
+        False, True, False, True]
+
+    s = dw.gain_loss_series(masks, 0, 1, 1200)
+    assert s['n_elements'] == 5
+    assert s['n_corroborated_by_B_cut'] == [5, 5, 5, 5]
+    for st in s['steps']:
+        assert (st['n_gained'], st['n_lost']) == (0, 0)
+        assert st['change_in_corroborated'] == 0
+        assert (st['gained_m'], st['lost_m']) == (0.0, 0.0)
+    assert s['any_loss'] is False
+    assert (s['total_gained'], s['total_lost']) == (0, 0)
+
+    # and no lost-element record is written for it
+    assert dw.lost_elements(masks, [s]) == []
+
+
+@pytest.mark.parametrize('n_with_loss,expected', [
+    (0, False), (9, False), (10, True), (20, True)])
+def test_s7_p10_threshold_is_10_of_p3s_20(n_with_loss, expected):
+    """L5: 9 of 20 fails and 10 of 20 holds, and P9's 60 series never count."""
+    series = []
+    for i, (a, b) in enumerate(dw.ordered_pairs()):
+        n = 1 if i < n_with_loss else 0
+        series.append({'A': a, 'B': b, 'cut_A': 1200, 'any_loss': bool(n),
+                       'total_lost': n, 'steps': [{'n_lost': n, 'n_gained': 0}]})
+        for ca in (60, 120, 240):          # P9's, all with losses, all ignored
+            series.append({'A': a, 'B': b, 'cut_A': ca, 'any_loss': True,
+                           'total_lost': 9,
+                           'steps': [{'n_lost': 9, 'n_gained': 0}]})
+    out = dw.p10_verdict(series)
+    assert (out['of'], out['min_required']) == (20, 10)
+    assert out['n_with_loss'] == n_with_loss
+    assert out['holds'] is expected
+
+
+def _s7_spies(monkeypatch):
+    """Spies on the reported sweep, the distances, and the step counting."""
+    seen = {'series': 0, 'near': 0, 'steps': []}
+    real_series = dw.gain_loss_series
+    real_near = dw.nearest_same_dir
+    real_step = dw.gain_loss_step
+
+    def series(*a, **k):
+        seen['series'] += 1
+        return real_series(*a, **k)
+
+    def near(*a, **k):
+        seen['near'] += 1
+        return real_near(*a, **k)
+
+    def step(mk, mkp):
+        seen['steps'].append((tuple(mk['key']), tuple(mkp['key'])))
+        return real_step(mk, mkp)
+
+    monkeypatch.setattr(dw, 'gain_loss_series', series)
+    monkeypatch.setattr(dw, 'nearest_same_dir', near)
+    monkeypatch.setattr(dw, 'gain_loss_step', step)
+    return seen
+
+
+def _assert_g5_fail_file(tmp_path, capsys):
+    """The fail file and the terminal carry no gain, loss or distance."""
+    assert not list(tmp_path.glob('s7_gainloss_*.json'))
+    written = list(tmp_path.glob('s7_g5_fail_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert banned_words_in(payload) == []
+    assert 'series' not in payload and 'P10' not in payload
+    out = capsys.readouterr().out
+    for word in ('lost elements', 'P10', 'gains', 'losses', 'across'):
+        assert word not in out
+    return payload
+
+
+def test_s7_g5_one_ulp_share_stops_before_any_counting(tmp_path, capsys,
+                                                       monkeypatch):
+    """L6: one ulp on one of S6's 320 shares, and nothing is ever counted.
+
+    The share check runs first, so on this failure not even G5's own step
+    check gets to call the counter: the spy sees no call at all.
+    """
+    by_kc, spawn = s7_sides()
+    s6 = s7_fake_s6(by_kc, spawn)
+    was = s6['rows'][11]['corroborated']
+    s6['rows'][11]['corroborated'] = math.nextafter(was, math.inf)
+    assert s6['rows'][11]['corroborated'] != was
+
+    seen = _s7_spies(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        dw.s7_gainloss(by_kc, spawn, s6,
+                       {'stage': 's7', 'head': 'synthetic'}, tmp_path)
+    assert e.value.code == 2
+    assert (seen['series'], seen['near'], seen['steps']) == (0, 0, [])
+    payload = _assert_g5_fail_file(tmp_path, capsys)
+    assert payload['G5']['steps'] is None
+    assert payload['G5']['shares']['n'] == 320
+    assert len(payload['G5']['shares']['differing']) == 1
+
+
+def test_s7_g5_one_element_on_a_rise_stops_before_the_sweep(tmp_path, capsys,
+                                                            monkeypatch):
+    """L7: one element on one failing step's rise stops the stage.
+
+    G5's own second check cannot reach its verdict without counting on S6's
+    failing steps -- that is what it checks -- so the claim proved here is the
+    one that matters: the REPORTED sweep never runs and no distance is ever
+    measured, and the only counting that happened was G5's own, bounded to
+    S6's failing steps.
+    """
+    by_kc, spawn = s7_sides()
+    s6 = s7_fake_s6(by_kc, spawn)
+    fails = s6['P9']['failures']
+    assert fails, 'the synthetic corpus must have failing P9 steps'
+    s6['P9']['failures'][0]['rise_m'] += RHO        # one element out
+
+    seen = _s7_spies(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        dw.s7_gainloss(by_kc, spawn, s6,
+                       {'stage': 's7', 'head': 'synthetic'}, tmp_path)
+    assert e.value.code == 2
+    assert (seen['series'], seen['near']) == (0, 0)
+    assert len(seen['steps']) == len(fails)
+    s6_steps = {((f['A'], f['B'], f['cut_A'], f['from_cut_B']),
+                 (f['A'], f['B'], f['cut_A'], f['to_cut_B'])) for f in fails}
+    assert set(seen['steps']) == s6_steps
+
+    payload = _assert_g5_fail_file(tmp_path, capsys)
+    assert payload['G5']['shares']['all_equal']
+    assert len(payload['G5']['steps']['differing']) == 1
+
+
+def test_s7_g5_holding_lets_the_whole_sweep_through(tmp_path):
+    """L8: with G5 equal, all 80 series are counted and written."""
+    by_kc, spawn = s7_sides()
+    s6 = s7_fake_s6(by_kc, spawn)
+    out = dw.s7_gainloss(by_kc, spawn, s6,
+                         {'stage': 's7', 'head': 'synthetic'}, tmp_path)
+
+    assert out['G5']['all_equal']
+    assert out['G5']['shares']['n'] == 320
+    assert out['G5']['steps']['n'] == len(s6['P9']['failures'])
+    assert out['n_series'] == 80 == dw.N_SERIES
+    assert (out['P10']['of'], out['P10']['min_required']) == (20, 10)
+    # the corpus shifts B's run right at cut240, so A's column 0 is lost at the
+    # 120 -> 240 step of every series
+    assert out['P10']['n_with_loss'] == 20
+    assert out['P10']['holds']
+    assert out['lost_elements']
+    for s in out['series']:
+        assert len(s['steps']) == 3
+        for st in s['steps']:
+            assert (st['n_gained'] - st['n_lost']
+                    == st['change_in_corroborated'])
+    written = list(tmp_path.glob('s7_gainloss_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert len(payload['series']) == 80
+    assert out['written']['sha256'] == hashlib.sha256(
+        written[0].read_bytes()).hexdigest()
+
+
+def test_s7_alignment_fires_on_a_reordered_a_element_list():
+    """L9: index-wise counting is wrong the moment A's order moves."""
+    by_kc, spawn = s7_sides()
+    keys = [(0, 1, 1200, cb) for cb in dw.CUTS]
+    masks = {k: dw.s7_mask(by_kc, spawn, k) for k in keys}
+    dw.assert_aligned(masks, keys)                  # the real series aligns
+
+    m = masks[keys[2]]
+    el = dict(m['el_a'])
+    order = np.arange(el['n'])[::-1]
+    for f in ('x', 'y', 'dir'):
+        el[f] = el[f][order]
+    masks[keys[2]] = {**m, 'el_a': el}
+    with pytest.raises(AssertionError):
+        dw.assert_aligned(masks, keys)
+
+
+def test_s7_nearest_same_dir_takes_across_first_then_along_then_index():
+    """L10: the search's whole convention, and the null case.
+
+    `b_at` places B by (across, along) from A's element 0, so each case states
+    the answer it expects. The third element is nearer in a straight line and
+    further across, which is exactly the case the convention decides.
+    """
+    a = side(wall_grid())
+    el_a = a['el']
+
+    # across decides, even when another element is closer euclidean
+    el_b = b_at(el_a, [(0.30, 0.00), (0.05, 0.50)])
+    near = dw.nearest_same_dir(el_a, 0, el_b)
+    assert near['b_index'] == 1
+    assert near['across_m'] == pytest.approx(0.05)
+    assert near['along_m'] == pytest.approx(0.50)
+    assert near['dist_m'] == pytest.approx(math.hypot(0.05, 0.50))
+
+    # equal across: the smaller along wins
+    el_b = b_at(el_a, [(0.20, 0.40), (0.20, 0.10)])
+    assert dw.nearest_same_dir(el_a, 0, el_b)['b_index'] == 1
+
+    # equal across and equal along: the lowest index wins
+    el_b = b_at(el_a, [(0.20, 0.10), (0.20, -0.10)])
+    near = dw.nearest_same_dir(el_a, 0, el_b)
+    assert near['b_index'] == 0
+    assert near['across_m'] == pytest.approx(0.20)
+    assert near['along_m'] == pytest.approx(0.10)
+
+    # no element facing A's way at all
+    el_b = b_at(el_a, [(0.20, 0.00)])
+    el_b['dir'] = el_b['dir'] + 1
+    assert dw.nearest_same_dir(el_a, 0, el_b) is None
+    assert dw.nearest_same_dir(el_a, 0, {'n': 0, 'x': np.empty(0),
+                                         'y': np.empty(0), 'nx': np.empty(0),
+                                         'ny': np.empty(0),
+                                         'dir': np.empty(0, dtype=np.int64)}
+                               ) is None
+
+
+def test_s7_s6_row_is_the_split_plus_shares():
+    """L11: exposing the mask left S6's row exactly where it was.
+
+    `s6_row` is `s6_classify` plus `shares`, and the mask the split exposes is
+    the array the share was counted from -- `corroborated & assigned` over
+    `assigned` IS the corroborated share, which is what makes G5 an equality.
+    """
+    by_kc, spawn = s6_sides()
+    for key in ((0, 1, 1200, 60), (2, 3, 240, 240), (4, 0, 60, 1200)):
+        row = dw.s6_row(by_kc, spawn, key)
+        res, el_b, a, b = dw.s6_classify(by_kc, spawn, key)
+        sh = dw.shares(res)
+        assert row['L_A_m'] == sh['L_A']
+        assert row['corroborated'] == sh['corroborated']
+        assert row['not_corroborated'] == sh['not_corroborated']
+        assert row['n_corroborated'] == sh['n_corroborated']
+        assert row['n_elements'] == sh['n_elements']
+        assert (row['A_stem'], row['B_stem']) == (a['stem'], b['stem'])
+
+        n = int(res['assigned'].sum())
+        c = int((res['corroborated'] & res['assigned']).sum())
+        assert (c, n) == (sh['n_corroborated'], sh['n_elements'])
+        assert (c / n) == sh['corroborated']
+
+
+def test_s7_refuses_a_dirty_tree(monkeypatch):
+    """L12a: a result file must not name a commit it was not produced by."""
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/divergence_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s7()
+    assert e.value.code == 2
+
+
+def test_s7_refuses_when_the_registration_is_not_an_ancestor(monkeypatch):
+    """L12b: P10 must be registered in history behind the code that tests it."""
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] in ('status', 'merge-base') else 'deadbeef'))
+    with pytest.raises(SystemExit) as e:
+        dw.run_s7()
+    assert e.value.code == 2
+
+
+def test_s7_refuses_when_the_spec_at_head_lacks_p10(monkeypatch):
+    """L12c: ancestry is not enough; the spec at HEAD must carry the header."""
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return '## 9\n\n**P9. REGISTERED 8 Oct 2026.** something\n'
+        return 'c0ffee'
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s7()
+    assert e.value.code == 2
+
+
+def test_s7_refuses_a_wrong_s6_sha256(tmp_path, monkeypatch):
+    """L12d: G5 is an equality against ONE S6 run, so that run is pinned.
+
+    The refusal lands before the corpus is loaded, so no map is read here.
+    """
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return ('## Gains and losses (P10)\n\n'
+                    '**P10. REGISTERED 9 Oct 2026.** Losses under P3.\n')
+        return 'c0ffee'
+    monkeypatch.setattr(dw, '_git', fake)
+    (tmp_path / dw.S6_RESULT).write_text('{"rows": [], "P9": {"failures": []}}')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s7(tmp_path)
     assert e.value.code == 2
 
 

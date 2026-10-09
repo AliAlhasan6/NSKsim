@@ -1356,6 +1356,35 @@ def matrix_keys(cuts: tuple = CUTS, n_robots: int = N_ROBOTS) -> list[tuple]:
             for ca in cuts for cb in cuts]
 
 
+def s6_classify(by_kc: dict, spawn: dict, key: tuple) -> tuple:
+    """The `classify` call behind one cut-matrix row, and B in A's frame.
+
+    Returns `(res, el_b, a, b)`. Split out of `s6_row` -- which is now this
+    function plus `shares` -- so that S7 can take the per-element
+    corroboration mask from the SAME call that produced the share, rather than
+    from a second implementation of T1. The statements and their order are
+    unchanged, so S6's numbers cannot move; `test_s7_s6_row_is_the_split_plus_
+    shares` holds the two together, and the S6 cases are untouched.
+
+    `res['corroborated']` is the mask: the array `corroborate` returned.
+    `res['assigned']` is `seg_of >= 0`, and `shares` counts
+    `cls[assigned] == CORROBORATED`, which is `corroborated & assigned` -- so
+    the mask and the share are the same object seen two ways.
+    """
+    ka, kb, cut_a, cut_b = key
+    a, b = by_kc[(ka, cut_a)], by_kc[(kb, cut_b)]
+
+    keep_b = b['seg_of'] >= 0
+    bx, by = to_frame_a(b['el']['x'], b['el']['y'], spawn[kb], spawn[ka])
+    el_b = dict(face_elements_only(b['el'], b['seg_of']))
+    el_b['x'], el_b['y'] = bx[keep_b], by[keep_b]
+    el_b['seg'] = b['seg_of'][keep_b]
+
+    res = classify(a['el'], a['seg_of'], el_b, None, a['rho'], a['origin'],
+                   a['shape'])
+    return res, el_b, a, b
+
+
 def s6_row(by_kc: dict, spawn: dict, key: tuple) -> dict:
     """One cut-matrix row: C of A@cut_A against B@cut_B, and nothing else.
 
@@ -1377,16 +1406,7 @@ def s6_row(by_kc: dict, spawn: dict, key: tuple) -> dict:
     being computed before any C exists for it.
     """
     ka, kb, cut_a, cut_b = key
-    a, b = by_kc[(ka, cut_a)], by_kc[(kb, cut_b)]
-
-    keep_b = b['seg_of'] >= 0
-    bx, by = to_frame_a(b['el']['x'], b['el']['y'], spawn[kb], spawn[ka])
-    el_b = dict(face_elements_only(b['el'], b['seg_of']))
-    el_b['x'], el_b['y'] = bx[keep_b], by[keep_b]
-    el_b['seg'] = b['seg_of'][keep_b]
-
-    res = classify(a['el'], a['seg_of'], el_b, None, a['rho'], a['origin'],
-                   a['shape'])
+    res, el_b, a, b = s6_classify(by_kc, spawn, key)
     sh = shares(res)
     return {
         'A': ka, 'B': kb, 'cut_A': cut_a, 'cut_B': cut_b,
@@ -1822,14 +1842,536 @@ def run_s6(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
     return s6_matrix(by_kc, spawn, comparisons, meta, out_dir, t0)
 
 
+# ── S7: gains and losses, G5 and P10 (spec v0.12, "Gains and losses
+#    (P10)") ───────────────────────────────────────────────────────────────────
+
+S7_REGISTRATION = '9541ea1'        # the commit that registered P10 (spec v0.12)
+P10_HEADER = '**P10. REGISTERED'
+P10_GATE_TEXT = 'P10. REGISTERED'
+S6_RESULT = 's6_cutmatrix_20261008T225604Z.json'
+S6_SHA256 = ('a3d584f310e509c33bcca09c2fe641d4914dd4f768146f10c1ebf340f58b2'
+             'f13')
+P10_MIN_SERIES = 10                # "at least 10 of P3's 20 series"
+NEAREST_LIMIT_M = 1.0              # the "no same-direction element within" bound
+N_SERIES = 80                      # P3's 20 and P9's 60
+
+
+def series_keys(cuts: tuple = CUTS, n_robots: int = N_ROBOTS) -> list[tuple]:
+    """The 80 fixed-A series: every ordered pair by every A cut.
+
+    P3's 20 are those with A at cut1200 and P9's 60 are the other three A
+    cuts, which together are exactly the 80 the spec's "What is computed"
+    names.
+    """
+    return [(a, b, ca) for (a, b) in ordered_pairs(n_robots) for ca in cuts]
+
+
+def s7_mask(by_kc: dict, spawn: dict, key: tuple) -> dict:
+    """One row's per-element corroboration mask, and the share it makes.
+
+    THE MASK IS THE MEASURE'S OWN, not a reimplementation: `classify` already
+    returns it as `corroborated` -- the array `corroborate` produced -- and
+    `shares` counts `cls[assigned] == CORROBORATED`, which is the same array
+    AND-ed with `assigned`. `s6_classify` is the call S6's rows go through, so
+    the mask and S6's share come from one classification.
+
+    Only A's ASSIGNED elements enter a gain or a loss: §3 leaves the rest as
+    excluded length and they never appear in a share. `assigned` depends on A
+    alone, so it is the same at every B cut of a series.
+    """
+    res, el_b, a, b = s6_classify(by_kc, spawn, key)
+    sh = shares(res)
+    return {
+        'key': key, 'A': key[0], 'B': key[1], 'cut_A': key[2], 'cut_B': key[3],
+        'A_stem': a['stem'], 'B_stem': b['stem'],
+        'corr': res['corroborated'], 'assigned': res['assigned'],
+        'rho': res['rho'], 'eps': res['eps'],
+        'el_a': a['el'], 'seg_of_a': a['seg_of'], 'el_b': el_b,
+        'n_elements': sh['n_elements'], 'n_corroborated': sh['n_corroborated'],
+        'corroborated': sh['corroborated'], 'L_A_m': sh['L_A'],
+    }
+
+
+def assert_aligned(masks: dict, keys: list) -> None:
+    """A's elements are the same set, in the same order, at every B cut.
+
+    `face_elements` is a function of the grid alone -- four passes in DIRS
+    order, each row-major -- and with A fixed the four rows of a series share
+    one loaded side, so the arrays are the same object. S7 asserts it anyway:
+    an index-wise gain and loss count is wrong the moment the order differs,
+    and this is the assertion that would catch it. Count, positions,
+    directions and the assigned mask.
+    """
+    ref = masks[keys[0]]
+    for k in keys[1:]:
+        m = masks[k]
+        assert m['n_elements'] == ref['n_elements'], (k, keys[0])
+        assert m['el_a']['n'] == ref['el_a']['n'], (k, keys[0])
+        for f in ('x', 'y', 'dir'):
+            assert np.array_equal(m['el_a'][f], ref['el_a'][f]), (k, f)
+        assert np.array_equal(m['assigned'], ref['assigned']), (k, 'assigned')
+
+
+def gain_loss_step(m_k: dict, m_kp: dict) -> dict:
+    """One step's gains and losses, by the spec's definitions.
+
+    A **gain** is an element B does not corroborate at k and does at k'; a
+    **loss** is an element B corroborates at k and does not at k'. Restricted
+    to A's assigned elements, and index-wise, which `assert_aligned` is what
+    licenses.
+    """
+    keep = m_k['assigned']
+    gained = keep & ~m_k['corr'] & m_kp['corr']
+    lost = keep & m_k['corr'] & ~m_kp['corr']
+    n_g, n_l = int(gained.sum()), int(lost.sum())
+    rho = m_k['rho']
+    return {'n_gained': n_g, 'n_lost': n_l,
+            'gained_m': float(n_g * rho), 'lost_m': float(n_l * rho),
+            'gained_idx': np.nonzero(gained)[0],
+            'lost_idx': np.nonzero(lost)[0]}
+
+
+def gain_loss_series(masks: dict, a: int, b: int, cut_a: int,
+                     cuts: tuple = CUTS) -> dict:
+    """One fixed-A series: three steps of gains and losses, as counts and metres.
+
+    This is the reported sweep, and it is deliberately the thing a test can
+    spy on: if G5 fails it must never be called.
+    """
+    keys = [(a, b, cut_a, cb) for cb in cuts]
+    assert_aligned(masks, keys)
+    rows = [masks[k] for k in keys]
+    steps = []
+    for i in range(len(cuts) - 1):
+        gl = gain_loss_step(rows[i], rows[i + 1])
+        change = rows[i + 1]['n_corroborated'] - rows[i]['n_corroborated']
+        # the identity the counting has to satisfy: every element that changed
+        # state is a gain or a loss, so the net is the change in the count
+        assert gl['n_gained'] - gl['n_lost'] == change, (a, b, cut_a, i)
+        steps.append({
+            'step': f'cut{cuts[i]}->cut{cuts[i + 1]}',
+            'from_cut_B': cuts[i], 'to_cut_B': cuts[i + 1],
+            'n_gained': gl['n_gained'], 'n_lost': gl['n_lost'],
+            'gained_m': gl['gained_m'], 'lost_m': gl['lost_m'],
+            'change_in_corroborated': change,
+        })
+    return {
+        'A': a, 'B': b, 'cut_A': cut_a, 'B_cuts': list(cuts),
+        'A_stem': rows[0]['A_stem'], 'L_A_m': rows[0]['L_A_m'],
+        'n_elements': rows[0]['n_elements'],
+        'n_corroborated_by_B_cut': [r['n_corroborated'] for r in rows],
+        'steps': steps,
+        'any_loss': any(s['n_lost'] > 0 for s in steps),
+        'total_gained': sum(s['n_gained'] for s in steps),
+        'total_lost': sum(s['n_lost'] for s in steps),
+    }
+
+
+def nearest_same_dir(el_a: dict, i: int, el_b: dict) -> dict | None:
+    """The nearest same-direction element of B to A's element `i`.
+
+    NEAREST IS: the smallest ACROSS distance, ties broken by the smallest
+    ALONG distance, then by the lowest B element index. Across and along are
+    T1's own two axes -- `|d.n|` and `|d.t|`, with `n` A's element normal and
+    `t = (-n_y, n_x)` -- and the frame is the common one T1 works in, B
+    already translated into A's by `s6_classify`. Same direction is an
+    equality on `dir`, as T1 tests it: normals are axis-aligned by
+    construction and the frame change is a pure translation.
+
+    The tie rule decides WHICH element is named, never the distances reported:
+    a tie is by definition an equal across and an equal along. It differs from
+    `corroborate_matches`'s key, which puts B's segment id before the index
+    because O1 needs the segment; nothing here does.
+
+    T1 buckets B on an eps lattice and looks only at the 3x3 block around A's
+    own bucket, which is sound because both its tolerances are at most eps. A
+    LOST ELEMENT MAY HAVE NO B ELEMENT WITHIN EPS AT ALL -- that is the case
+    this report exists for -- so this scans every same-direction element of B
+    instead of the block. Returns None when B has none in that direction.
+    """
+    sel = np.nonzero(el_b['dir'] == int(el_a['dir'][i]))[0]
+    if sel.size == 0:
+        return None
+    dx = el_b['x'][sel] - el_a['x'][i]
+    dy = el_b['y'][sel] - el_a['y'][i]
+    nx, ny = el_a['nx'][i], el_a['ny'][i]
+    across = np.abs(dx * nx + dy * ny)
+    along = np.abs(dx * -ny + dy * nx)
+    # lexsort takes the LAST key as primary: across, then along, then index
+    j = np.lexsort((sel, along, across))[0]
+    return {'b_index': int(sel[j]), 'across_m': float(across[j]),
+            'along_m': float(along[j]),
+            'dist_m': float(math.hypot(float(across[j]), float(along[j])))}
+
+
+def lost_elements(masks: dict, series: list, cuts: tuple = CUTS) -> list[dict]:
+    """Reported, not tested: every lost element, located and measured.
+
+    Per element: where it is, which way it faces, and the across and along
+    distances to the nearest same-direction element of B at k'. `within_t1`
+    says whether that nearest element is inside T1's own two tolerances, which
+    it cannot be -- the element was not corroborated at k' -- so it is a
+    self-check on the search rather than a finding.
+    """
+    out = []
+    for s in series:
+        a, b, ca = s['A'], s['B'], s['cut_A']
+        for i in range(len(cuts) - 1):
+            k, kp = (a, b, ca, cuts[i]), (a, b, ca, cuts[i + 1])
+            m_k, m_kp = masks[k], masks[kp]
+            gl = gain_loss_step(m_k, m_kp)
+            el_a, el_b = m_k['el_a'], m_kp['el_b']
+            eps, half = m_kp['eps'], 0.5 * m_kp['rho']
+            for idx in gl['lost_idx']:
+                idx = int(idx)
+                near = nearest_same_dir(el_a, idx, el_b)
+                rec = {
+                    'A': a, 'B': b, 'cut_A': ca,
+                    'step': f'cut{cuts[i]}->cut{cuts[i + 1]}',
+                    'from_cut_B': cuts[i], 'to_cut_B': cuts[i + 1],
+                    'element': idx, 'face': int(m_k['seg_of_a'][idx]),
+                    'x': float(el_a['x'][idx]), 'y': float(el_a['y'][idx]),
+                    'dir': int(el_a['dir'][idx]),
+                    'nx': float(el_a['nx'][idx]), 'ny': float(el_a['ny'][idx]),
+                    'nearest_b_index': None, 'across_m': None,
+                    'along_m': None, 'dist_m': None, 'within_t1': None,
+                }
+                if near is not None:
+                    rec.update(nearest_b_index=near['b_index'],
+                               across_m=near['across_m'],
+                               along_m=near['along_m'],
+                               dist_m=near['dist_m'],
+                               within_t1=bool(
+                                   near['across_m'] <= eps + T1_TOL_M
+                                   and near['along_m'] <= half + T1_TOL_M))
+                out.append(rec)
+    return out
+
+
+def g5_shares(masks: dict, s6_rows: dict) -> dict:
+    """G5's first check: the share recomputed from each mask equals S6's.
+
+    Exactly, with no tolerance, on all 320 rows. Two shares are compared, not
+    one: the share counted straight off the mask -- corroborated-and-assigned
+    over assigned -- and the share `shares` returned from the same
+    classification. The first is what the spec's G5 asks for; the second
+    catches a mask that has been taken from the wrong row.
+    """
+    comparisons, n_equal = [], 0
+    for key, m in masks.items():
+        if key not in s6_rows:
+            die(f'G5: row {key} is not in the S6 file; G5 compares all 320 '
+                'rows of the cut matrix')
+        n = int(m['assigned'].sum())
+        c = int((m['corr'] & m['assigned']).sum())
+        share = (c / n) if n else 0.0
+        s6 = s6_rows[key]
+        ok = (share == s6['corroborated']
+              and m['corroborated'] == s6['corroborated']
+              and c == s6['n_corroborated'] and n == s6['n_elements'])
+        n_equal += int(ok)
+        comparisons.append({
+            'key': list(key), 'n_elements': n, 'n_corroborated': c,
+            'share_from_mask': share, 'share_from_shares': m['corroborated'],
+            's6_corroborated': s6['corroborated'],
+            's6_n_corroborated': s6['n_corroborated'],
+            's6_n_elements': s6['n_elements'], 'equal': bool(ok)})
+    diffs = [c for c in comparisons if not c['equal']]
+    return {'comparisons': comparisons, 'n': len(comparisons),
+            'n_equal': n_equal, 'all_equal': not diffs, 'differing': diffs}
+
+
+def g5_steps(masks: dict, s6_failures: list, rho: float) -> dict:
+    """G5's second check: losses minus gains equals S6's rise, in elements.
+
+    NOT IN THE SPEC'S G5 WORDING, which covers the share check alone. It is
+    added because the share check sees only whether the masks are right, never
+    whether the gain and loss COUNTING is: for each of S6's failing P9 steps,
+    `n_lost - n_gained` taken from the masks must equal S6's rise in metres
+    divided by the element length, as integers with no tolerance.
+
+    The counting goes through `gain_loss_step`, the same function the reported
+    sweep uses, so this checks that function rather than a stand-in. It is
+    bounded to S6's failing steps and nothing is kept from it but the verdict:
+    on a failure the fail file and the terminal name the step and withhold the
+    counts, because the spec's G5 says a failing run writes no gain or loss.
+    """
+    rows, n_equal = [], 0
+    for f in s6_failures:
+        if f.get('reason') is not None:            # an undefined series
+            continue
+        k = (f['A'], f['B'], f['cut_A'], f['from_cut_B'])
+        kp = (f['A'], f['B'], f['cut_A'], f['to_cut_B'])
+        gl = gain_loss_step(masks[k], masks[kp])
+        s6_rise = round(f['rise_m'] / rho)
+        ok = (gl['n_lost'] - gl['n_gained']) == s6_rise
+        n_equal += int(ok)
+        rows.append({'A': f['A'], 'B': f['B'], 'cut_A': f['cut_A'],
+                     'step': f'cut{f["from_cut_B"]}->cut{f["to_cut_B"]}',
+                     'from_cut_B': f['from_cut_B'],
+                     'to_cut_B': f['to_cut_B'],
+                     's6_rise_in_elements': s6_rise, 'equal': bool(ok)})
+    diffs = [r for r in rows if not r['equal']]
+    # the identities only: a count here would be a gain or a loss, and a
+    # failing run writes none
+    return {'steps': [{k: v for k, v in r.items() if k != 'equal'}
+                      for r in rows],
+            'n': len(rows), 'n_equal': n_equal, 'all_equal': not diffs,
+            'differing': [{k: v for k, v in r.items() if k != 'equal'}
+                          for r in diffs]}
+
+
+def p10_verdict(series: list) -> dict:
+    """P10, exactly as registered at spec v0.12.
+
+    Among P3's 20 series -- A at cut1200 -- count those in which at least one
+    step contains at least one loss. A loss of one element counts, so the test
+    is `n_lost >= 1`. P10 holds if the count is at least 10.
+    """
+    p3 = [s for s in series if s['cut_A'] == FULL_CUT]
+    assert len(p3) == len(ordered_pairs()), len(p3)
+    with_loss = [s for s in p3 if s['any_loss']]
+    n = len(with_loss)
+    return {
+        'of': len(p3), 'min_required': P10_MIN_SERIES, 'n_with_loss': n,
+        'holds': n >= P10_MIN_SERIES,
+        'series_with_losses': [
+            {'A': s['A'], 'B': s['B'], 'cut_A': s['cut_A'],
+             'total_lost': s['total_lost'],
+             'lost_by_step': [st['n_lost'] for st in s['steps']]}
+            for s in with_loss]}
+
+
+def _no_gain_or_loss_in(node, path='$') -> None:
+    """Assert a payload names no gain, loss or distance. The G5 fail guard."""
+    banned = ('gain', 'loss', 'lost', 'across_m', 'along_m', 'dist_m')
+    if isinstance(node, dict):
+        for k, v in node.items():
+            assert not any(w in str(k).lower() for w in banned), f'{path}.{k}'
+            _no_gain_or_loss_in(v, f'{path}.{k}')
+    elif isinstance(node, list):
+        for v in node:
+            _no_gain_or_loss_in(v, f'{path}[]')
+
+
+def _write_s7(payload: dict, out_dir: Path, prefix: str) -> tuple[Path, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    path = out_dir / f'{prefix}_{stamp}.json'
+    if path.exists():
+        die(f'{path} exists; this tool never overwrites a result')
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    sha = _sha256(path)
+    print(f'written, overwriting nothing: {path}')
+    print(f'sha256 {sha}')
+    return path, sha
+
+
+def _pct(vals, q):
+    return float(np.percentile(vals, q)) if len(vals) else None
+
+
+def _print_s7(series: list, lost: list, cuts: tuple) -> None:
+    """P3's 20 series, P9's 60 by A cut, then the lost elements."""
+    steps = [f'cut{cuts[i]}->{cuts[i + 1]}' for i in range(len(cuts) - 1)]
+    print(f'\nP3 series, A at cut{FULL_CUT}   gains/losses in elements per step')
+    print(''.ljust(16) + ''.join(s.rjust(16) for s in steps))
+    for s in (x for x in series if x['cut_A'] == FULL_CUT):
+        cells = [f'+{st["n_gained"]}/-{st["n_lost"]}' for st in s['steps']]
+        label = f'  A=k{s["A"]} B=k{s["B"]}'
+        print(label.ljust(16) + ''.join(c.rjust(16) for c in cells))
+
+    print('\nP9 series, by A cut'.ljust(26) + 'gains'.rjust(10)
+          + 'losses'.rjust(10) + 'series with a loss'.rjust(22))
+    for ca in cuts:
+        if ca == FULL_CUT:
+            continue
+        grp = [s for s in series if s['cut_A'] == ca]
+        n_loss = sum(1 for s in grp if s['any_loss'])
+        print(f'  cut_A {ca}'.ljust(26)
+              + str(sum(s['total_gained'] for s in grp)).rjust(10)
+              + str(sum(s['total_lost'] for s in grp)).rjust(10)
+              + f'{n_loss}/{len(grp)}'.rjust(22))
+
+    across = [r['across_m'] for r in lost if r['across_m'] is not None]
+    along = [r['along_m'] for r in lost if r['along_m'] is not None]
+    none_dir = sum(1 for r in lost if r['nearest_b_index'] is None)
+    far = sum(1 for r in lost
+              if r['dist_m'] is None or r['dist_m'] > NEAREST_LIMIT_M)
+    print(f'\nlost elements: {len(lost)}')
+    if across:
+        print(f'  across to the nearest same-dir B element at k\': '
+              f'median {_pct(across, 50):.4f} m, p90 {_pct(across, 90):.4f} m')
+        print(f'  along:  median {_pct(along, 50):.4f} m, '
+              f'p90 {_pct(along, 90):.4f} m')
+    print(f'  within T1\'s tolerances (across <= eps, along <= rho/2): '
+          f'{sum(1 for r in lost if r["within_t1"])}')
+    print(f'  no same-direction B element at all: {none_dir}; '
+          f'none within {NEAREST_LIMIT_M:.0f} m: {far}')
+
+
+def s7_gainloss(by_kc: dict, spawn: dict, s6: dict, meta: dict,
+                out_dir: Path = OUT_DIR_DEFAULT, t0: float | None = None,
+                cuts: tuple = CUTS, n_robots: int = N_ROBOTS) -> dict:
+    """The order that keeps every gain, loss and distance behind G5.
+
+    The masks come first, then G5's two checks, and only then does anything
+    count a gain or a loss for the record. On a G5 failure the stage writes
+    the share comparisons, names the failing steps without their counts, and
+    stops at exit 2: no reported gain, loss or distance is computed, written
+    or printed, because none has been computed yet.
+
+    Reads no file and resolves no spawn -- `run_s7` is this function plus the
+    corpus I/O -- so the whole pipeline, G5's refusal included, runs on
+    hand-built sides.
+    """
+    t0 = time.monotonic() if t0 is None else t0
+    s6_rows = {(r['A'], r['B'], r['cut_A'], r['cut_B']): r for r in s6['rows']}
+    keys = matrix_keys(cuts, n_robots)
+
+    masks = {k: s7_mask(by_kc, spawn, k) for k in keys}
+    rhos = {m['rho'] for m in masks.values()}
+    assert len(rhos) == 1, rhos
+    rho = rhos.pop()
+
+    sks = series_keys(cuts, n_robots)
+    assert len(sks) == N_SERIES, len(sks)
+    for (a, b, ca) in sks:
+        assert_aligned(masks, [(a, b, ca, cb) for cb in cuts])
+
+    g5s = g5_shares(masks, s6_rows)
+    print(f'G5: shares {g5s["n_equal"]}/{g5s["n"]} equal', end='')
+    if not g5s['all_equal']:
+        print('  FAIL')
+        for c in g5s['differing'][:20]:
+            a, b, ca, cb = c['key']
+            print(f'  A=k{a} B=k{b} cut_A {ca} cut_B {cb}: mask '
+                  f'{c["share_from_mask"]!r}  S6 {c["s6_corroborated"]!r}')
+        fail = dict(meta)
+        fail.update({'stage': 's7_g5_fail', 'seconds': time.monotonic() - t0,
+                     'G5': {'shares': g5s, 'steps': None}})
+        _no_gain_or_loss_in(fail)
+        path, _ = _write_s7(fail, out_dir, 's7_g5_fail')
+        die(f'G5 failed on {len(g5s["differing"])} of {g5s["n"]} shares; no '
+            f'gain, loss or distance was computed, written or printed. {path}')
+
+    g5t = g5_steps(masks, s6['P9']['failures'], rho)
+    print(f', steps {g5t["n_equal"]}/{g5t["n"]} equal  '
+          f'{"HOLD" if g5t["all_equal"] else "FAIL"}')
+    if not g5t['all_equal']:
+        for s in g5t['differing']:
+            print(f'  A=k{s["A"]} B=k{s["B"]} cut_A {s["cut_A"]} '
+                  f'{s["step"]}: S6\'s rise in elements is '
+                  f'{s["s6_rise_in_elements"]} and S7 disagrees')
+        fail = dict(meta)
+        fail.update({'stage': 's7_g5_fail', 'seconds': time.monotonic() - t0,
+                     'G5': {'shares': g5s, 'steps': g5t}})
+        _no_gain_or_loss_in(fail)
+        path, _ = _write_s7(fail, out_dir, 's7_g5_fail')
+        die(f'G5 failed on {len(g5t["differing"])} of {g5t["n"]} of S6\'s '
+            'failing P9 steps; no gain, loss or distance was computed, '
+            f'written or printed. {path}')
+
+    series = [gain_loss_series(masks, a, b, ca, cuts) for (a, b, ca) in sks]
+    p10 = p10_verdict(series)
+    lost = lost_elements(masks, series, cuts)
+
+    print(f'P10: {"HOLD" if p10["holds"] else "FAIL"}  '
+          f'{p10["n_with_loss"]}/{p10["of"]} of P3\'s series have a loss, '
+          f'{p10["min_required"]} required')
+    _print_s7(series, lost, cuts)
+
+    payload = dict(meta)
+    payload.update({
+        'seconds': time.monotonic() - t0, 'rho_m': rho,
+        'n_series': len(series), 'n_rows': len(masks),
+        'G5': {'shares': g5s, 'steps': g5t,
+               'all_equal': g5s['all_equal'] and g5t['all_equal']},
+        'series': series, 'lost_elements': lost, 'P10': p10})
+    path, sha = _write_s7(payload, out_dir, 's7_gainloss')
+    out = dict(payload)
+    out['written'] = {'path': str(path), 'sha256': sha}
+    return out
+
+
+def run_s7(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+           ) -> dict:
+    """S7: gains and losses per step, G5 against S6, then P10. Spec v0.12.
+
+    The gates, in this order and each before anything it could mislead:
+
+    1. REFUSES ON AN EDITED TREE, before a map is loaded, as S5 and S6 do.
+    2. REGISTRATION BEFORE RESULT: `9541ea1`, the commit that registered P10,
+       must be an ancestor of HEAD, and the spec at HEAD must carry
+       "P10. REGISTERED".
+    3. The P10 paragraph is read from the spec AT HEAD by script and stored
+       verbatim, never retyped.
+    4. THE S6 FILE IS PINNED BY HASH. G5 is an equality against S6's values,
+       so the file it compares against is named and its sha256 required; any
+       other S6 run is a different set of numbers and G5 would be measuring
+       the wrong thing.
+    """
+    import fit_world_transform as fwt                       # noqa: PLC0415
+    import robot_divergence as rd                           # noqa: PLC0415
+
+    t0 = time.monotonic()
+
+    porcelain = _git('status', '--porcelain').splitlines()
+    dirty = [ln for ln in porcelain if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    if not _is_ancestor(S7_REGISTRATION):
+        die(f'{S7_REGISTRATION} registered P10 and is not an ancestor of HEAD '
+            f'{head[:7] or "(unknown)"}; the registration must be in history '
+            'behind the code that tests it')
+    spec_text = _git('show', f'HEAD:{SPEC_REL}')
+    if P10_GATE_TEXT not in spec_text:
+        die(f'the spec at HEAD carries no "{P10_GATE_TEXT}"; S7 evaluates a '
+            'registered prediction or it does not run')
+    p10_text = spec_paragraph(spec_text, P10_HEADER)
+    spec_rev = _git('log', '-1', '--format=%h', '--', SPEC_REL)
+
+    s6_path = out_dir / S6_RESULT
+    if not s6_path.is_file():
+        die(f'{s6_path} is missing; G5 compares S7\'s masks against it')
+    s6_sha = _sha256(s6_path)
+    if s6_sha != S6_SHA256:
+        die(f'{s6_path.name} has sha256 {s6_sha}, not the {S6_SHA256} G5 is '
+            'stated against; that is a different S6 run')
+    s6 = json.loads(s6_path.read_text())
+
+    stems = corpus_stems(variant)
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    by_kc = {}
+    for s in stems:
+        k, c = gw._k_and_cut(s, 'S7 needs the robot and the cut')
+        by_kc[(k, c)] = load_side(s)
+
+    meta = {'stage': 's7', 'head': head, 'spec_rev': spec_rev,
+            'tree_dirty': bool(dirty),
+            'untracked': sum(1 for ln in porcelain if ln.startswith('??')),
+            'variant': variant, 't2': False,
+            'spec': 'SPEC_b2_divergence_walls v0.12, G5/P10',
+            'predictions_verbatim': {'P10': p10_text},
+            'sources': {'s6': {'file': s6_path.name, 'sha256': s6_sha,
+                               'head': s6.get('head')}},
+            'note': 'no viewpoint weight and no truth: S7 computes the element '
+                    'masks the measure makes and counts them'}
+    return s7_gainloss(by_kc, spawn, s6, meta, out_dir, t0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--stage', choices=('g2', 's5', 's6'), default=None,
+    ap.add_argument('--stage', choices=('g2', 's5', 's6', 's7'), default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
                          'the segment guard on the 20 maps; s5 evaluates G3, '
                          'P7 and P8 on the viewpoint weight; s6 computes the '
                          '320-row cut matrix, gates it on S4 and S5 with G4, '
-                         'and tests P9')
+                         'and tests P9; s7 counts gains and losses per step, '
+                         'gates them on S6 with G5, and tests P10')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -1850,6 +2392,9 @@ def main() -> int:
         return 0
     if args.stage == 's6':
         run_s6(args.out_dir)
+        return 0
+    if args.stage == 's7':
+        run_s7(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')
