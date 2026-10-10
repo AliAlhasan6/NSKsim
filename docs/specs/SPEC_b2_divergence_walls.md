@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.14, draft)
+# SPEC — B2 divergence on walls (v0.15, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -20,7 +20,10 @@ registers P11 on the cell states behind those losses, before any cell state at
 B's later cut was read for a lost element. v0.14 records the S8 results — G6
 holds and P11 fails, 21 of 213 wall cells freed — and registers P12 on whether
 the 132 unchanged losses are segmentation or geometry, before any segment
-assignment was read for an unchanged element. No code is written until the
+assignment was read for an unchanged element. v0.15 records the S9 results —
+G7 holds on all four parts and P12 holds, 75 of 78 unchanged losses in
+segmentation — and closes O7 and opens O8. It registers no prediction: the
+chain stopped at S9 by decision on 10 Oct 2026. No code is written until the
 stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
@@ -769,6 +772,60 @@ nearest-element search covers only B's assigned elements. They are reported,
 labelled seen, and not part of the test. The rest of the split is reported, not
 predicted.
 
+### S9 results
+
+Source: `experiments/logs/divergence/s9_segmentation_20261009T013501Z.json`, sha256
+`42c7505992ff8047d069cb7092dcdeaf3e8644193ff36484f3892425d307deab`. The file is not
+tracked — `experiments/logs/` is gitignored — so the hash stands in for it. Produced
+at HEAD `808c4eb`, the commit that added the stage, against a clean tree. Every
+number here was read from that file by script.
+
+**G7 — HOLD, all four parts.** S9's set of unchanged elements equals S8's exactly,
+132/132, with both of b's cell states equal on every one; e' exists for all 132/132,
+in b's direction; no e' is both assigned and within both of T1's tolerances from e
+(0); and no e' in the carve-out is assigned (0). **Part 4 checks the carve-out,**
+which is stricter than the registration asked for: the spec calls the 54 "none within
+1 m" elements segmentation by construction and carves them out without asking anyone
+to verify it. S7's nearest-element search covers only B's assigned elements, so an
+assigned e' within a metre would have been found there; an assigned e' in the
+carve-out would mean that reasoning is wrong. None is assigned.
+
+**P12 — HOLD, 75 of 78** unchanged losses in segmentation, 39 required.
+
+**The 78 are not P3's 78 losses.** The two counts coincide and name different sets.
+P3's 20 series account for 78 of the 213 losses (S7, v0.13); these 78 are the
+unchanged losses outside the carve-out — 76 in S7's "within eps across" bin, the
+one-cell hole along the wall, and 2 in "beyond eps across", shifted across it.
+
+**The carve-out: 54 of 54** in segmentation, reported and not tested, as registered.
+
+**The three classes by S7's distance bin.**
+
+| class | within eps across | beyond eps across | none within 1 m | total |
+|---|---|---|---|---|
+| segmentation | 75 | 0 | 54 | 129 |
+| geometry, across | 0 | 2 | 0 | 2 |
+| geometry, along | 1 | 0 | 0 | 1 |
+| **total** | 76 | 2 | 54 | 132 |
+
+The column totals are S8's own unchanged row from v0.14, 76, 2 and 54, which S9 was
+not made to reproduce.
+
+**The three geometric losses**, with the lattice offset of their step. All three are
+at step **cut60 → cut120**.
+
+| A | B | A's cut | across | along | class | lattice offset (cells) |
+|---|---|---|---|---|---|---|
+| k3 | k0 | 60 | 0.0675 m | 0.0785 m | along | (+0.0000, +0.3699) |
+| k4 | k2 | 120 | 0.1850 m | 0.0247 m | across | (+0.0000, −0.1641) |
+| k4 | k3 | 120 | 0.1748 m | 0.0056 m | across | (−0.1576, −0.1679) |
+
+All three sit within `eps + rho = 0.2707 m` across and `rho = 0.1000 m` along: e' is
+displaced from e by no more than a cell plus T1's own across tolerance, which is what
+a lattice shift of a fraction of a cell can do on its own. None is a wall that moved.
+
+The verdict stands as registered.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -792,10 +849,28 @@ predicted.
   is a guard against it, not an explanation of it.
 - **O6.** S5's output records the distinct `(S_A, S_B)` pairs per row, so caution
   2 gets an exact count at the next rerun.
-- **O7. Losses.** P10 held (S7); P11 failed (S8): 21 of 213 wall cells were freed,
-  and 132 of the 213 lost elements have both of b's cells unchanged at k'. The 31
-  off-grid elements are all at step cut60 → cut120, with B = k0 or k1. Open: P12
-  tests segmentation for the unchanged class.
+- **O7. Losses. CLOSED in v0.15.** P10 held (S7); P11 failed (S8), 21 of 213 wall
+  cells freed; P12 held (S9), 75 of the 78 tested unchanged losses in segmentation
+  and 54 of 54 in the carve-out. All 213 losses now carry a cause:
+
+  | cause | count |
+  |---|---|
+  | segmentation: cells unchanged, e' not assigned at k' | 129 |
+  | off grid at k' | 31 |
+  | front cell closed | 29 |
+  | wall cell freed | 21 |
+  | geometry | 3 |
+  | **total** | 213 |
+
+  Segmentation is the majority cause, 129 of 213, and geometry accounts for 3. What
+  is left is why the segmenter leaves those 129 unassigned — O8.
+- **O8. Unassigned face elements at k'. OPEN, not pursued.** For 129 of the 213
+  losses b's two cells hold their states at k', so B's grid at k' still carries the
+  face element e' between them, in b's direction — and yet `graph_walls` does not
+  assign e' to a wall segment, while b, its counterpart at the earlier cut k,
+  was assigned. Why the segmenter drops an element whose two cells are unchanged,
+  and what changed about it between B's two cuts, is unexplained. Not pursued: the
+  chain stopped at S9 by decision on 10 Oct 2026.
 
 ## 11. Stop points for Claude Code
 
