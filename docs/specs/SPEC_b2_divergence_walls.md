@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.15, draft)
+# SPEC — B2 divergence on walls (v0.16, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -23,8 +23,10 @@ the 132 unchanged losses are segmentation or geometry, before any segment
 assignment was read for an unchanged element. v0.15 records the S9 results —
 G7 holds on all four parts and P12 holds, 75 of 78 unchanged losses in
 segmentation — and closes O7 and opens O8. It registers no prediction: the
-chain stopped at S9 by decision on 10 Oct 2026. No code is written until the
-stop-point questions in §11 are answered.
+chain stopped at S9 by decision on 10 Oct 2026. v0.16 reverses that decision,
+reopens O8, and registers P13a, P13b and P14 on whether the segment b belonged
+to at k is intact at k', before any member of that segment was read at k'. No
+code is written until the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -826,6 +828,120 @@ a lattice shift of a fraction of a cell can do on its own. None is a wall that m
 
 The verdict stands as registered.
 
+## Segments behind the unassigned elements (P13, P14)
+
+**Why.** v0.15 stopped the chain at S9 by decision and left O8 open but not pursued.
+That decision is reversed on the same day, for two reasons.
+
+1. A read-only audit of `graph_walls.py` (the audit below) shows that segment
+   membership is decided by a greedy pass over the whole map. Whether an element is
+   assigned depends on elements far from it. S8 and S9 checked only e''s own two
+   cells. So S9's segmentation class does not yet show that these 129 losses happen
+   without B's map changing. The map may have changed elsewhere on b's segment.
+2. The rest of the schema (openings, corners, back-to-back face pairing) will likely
+   read segment ends. If membership can change between cuts while B's map does not,
+   openings can appear or vanish for reasons inside our pipeline.
+
+Record: the claim that most losses come from our own segmentation, and not from B's
+map changing (§10, O7), rests on e''s two cells only. It is withdrawn until S10
+reports.
+
+**Audit of `graph_walls.py`** (read-only, no real data). Path:
+`graph_and_elements` → `extract_with_elements` → face elements, Hough peaks, line
+candidates, refit, run splitting, minimum length. `seg_of` is −1 for an unassigned
+element. An element is assigned only as a member of an accepted run in some peak
+iteration. An assigned element is never unassigned.
+
+Rules by which an element ends at −1:
+
+| Rule | What it does | Inputs reach |
+|---|---|---|
+| R1, vote floor | No live Hough window containing it reaches vote_min = 3.5355 | Whole map |
+| R2, one-shot bins | Its seed bin was spent by an earlier iteration | Whole map, greedy order |
+| R3, eps band | It lies more than eps = 0.1707 m from the iteration's refitted line | Every candidate along the infinite line |
+| R4, facing | Its normal does not face the line's normal | Its own cells |
+| R5 + R6, gaps and length | Its run, cut at physical gaps ≥ g = 0.22 m, is shorter than l_min = 0.5 m | The run |
+| R7, abort guards | End an iteration early; they feed R2 | Whole map |
+
+R5 and R6 are local to the run and do not depend on the map's origin. R1, R2 and the
+line that R3 uses depend on the whole map: one global bin phase per map, the map's
+extent, and the greedy order.
+
+One consequence is used by P14. Take an unassigned element e' on the same face line,
+with the same direction, strictly between two members of one segment. Its distance
+to that segment's line lies between theirs, so it is within eps. It faces the line
+as they do. It is alive, since it was never assigned. And it falls inside their
+run, with no gap of g or more. So it would have been a member. Under the audit, no
+such e' exists.
+
+**Definitions.** The units are S9's 129 segmentation losses (75 one-cell holes, 54
+with no assigned element within 1 m), read from
+`s9_segmentation_20261009T013501Z.json`. For each, with B's earlier cut k and later
+cut k':
+
+- **S_b** is the segment b belongs to at k.
+- Every member m of S_b has a wall cell and a front cell. S10 finds each at k' by
+  position with `trinary_map.cell_index`, exactly as S8 finds b's cells. For that
+  lookup it never uses `trinary_map.sample`. Loading a map with `load_grid` is
+  unaffected.
+- **Changed:** at k', some member's wall cell is not occupied, or some member's front
+  cell is not free, or some member's cell is off grid.
+- **Intact:** otherwise. Every element of S_b at k then still exists at k'.
+- **Face line:** elements with the same direction and the same across coordinate,
+  within 1e-9 m.
+- **Flanked:** at k', e' lies strictly between two elements on its face line that
+  belong to the same segment.
+
+Counting units. P13a and P13b count distinct (B, k, k', S_b). P14 counts distinct
+(B, k, k', e'). Intact, changed and flanked do not depend on A, and S9's 129 rows
+repeat 22 distinct events 2 to 14 times, once per A pairing, so a count per loss
+would weight each event by how many As it was matched against. Per-loss counts are
+reported beside, not judged. An S_b behind losses of both shapes counts in both P13a
+and P13b.
+
+**What is computed.**
+- **G8 (S10 against S9).** S10 refuses an edited tree, requires this registration's
+  commit to be an ancestor of HEAD, and pins S9's result file by sha256
+  `42c7505992ff8047d069cb7092dcdeaf3e8644193ff36484f3892425d307deab`. Before
+  computing anything new, it checks:
+  1. S9's stored values reproduce exactly: all 132 rows and their classes, with the
+     129 segmentation losses split 75 and 54, and 22 distinct (B, k, k', e') among
+     them (14 and 8).
+  2. Every b has seg_of ≥ 0 at k, and every e' has seg_of = −1 at k': 129/129 each.
+  3. Every S_b is non-empty and contains b.
+
+  On a gate failure, S10 computes nothing unseen.
+- **Reported, not tested.**
+  - For each changed loss: which of wall cell freed, front cell closed and off grid
+    occurred (more than one can), how many members changed, and the distance along
+    the line from e' to the nearest changed member.
+  - For every loss: the number of members of S_b at k, and its length.
+  - **Base rate.** At each B step (B, k → k') that has at least one of the 129, the
+    share of all B's segments at k that are changed at k'. Without it, "changed"
+    could simply be what most segments do between cuts.
+
+S10 computes no viewpoint weight, so O3's mixed-cut prediction can still be
+registered.
+
+Registered: 10 Oct 2026, before any quantity below was computed on the real maps.
+
+**P13a. REGISTERED 10 Oct 2026.** Of the distinct S_b behind the 54 losses with no
+assigned element within 1 m, at least half (rounded up) are changed. Reason: the
+audit's most direct rule for this shape is the minimum length. A segment that met
+l_min at k can fail it at k' only by losing members.
+
+**P13b. REGISTERED 10 Oct 2026.** Of the distinct S_b behind the 75 one-cell holes,
+at least half (rounded up) are intact. Reason: the audit's only exclusion rule for
+this shape is R3. Its line is refitted to candidates along the whole infinite line,
+so it can move with no member of S_b changing.
+
+**P14. REGISTERED 10 Oct 2026.** None of the 22 distinct e' is flanked; P14 holds
+only at 0 of 22. The 8 behind the 54 hold by construction, since a flanking pair
+would put an assigned element within 1 m. S10 checks them rather than assuming it.
+P14 tests the audit, not the maps: a flanked e' means the audit missed a rule.
+
+P13a, P13b and P14 are judged separately.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -864,13 +980,14 @@ The verdict stands as registered.
 
   Segmentation is the majority cause, 129 of 213, and geometry accounts for 3. What
   is left is why the segmenter leaves those 129 unassigned — O8.
-- **O8. Unassigned face elements at k'. OPEN, not pursued.** For 129 of the 213
+- **O8. Unassigned face elements at k'. REOPENED in v0.16.** For 129 of the 213
   losses b's two cells hold their states at k', so B's grid at k' still carries the
   face element e' between them, in b's direction — and yet `graph_walls` does not
   assign e' to a wall segment, while b, its counterpart at the earlier cut k,
   was assigned. Why the segmenter drops an element whose two cells are unchanged,
   and what changed about it between B's two cuts, is unexplained. Not pursued: the
-  chain stopped at S9 by decision on 10 Oct 2026.
+  chain stopped at S9 by decision on 10 Oct 2026. Reopened in v0.16. S10 tests P13a,
+  P13b and P14.
 
 ## 11. Stop points for Claude Code
 
