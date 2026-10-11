@@ -278,6 +278,56 @@ distance is read on a real map anywhere in this file.
                                                              set; behaviour
                                                              unchanged
 
+The R series is S10, the segments behind the unassigned elements. Written
+before the stage ran; no cell of a member of S_b is read on a real map
+anywhere in this file, and no changed, intact or flanked is computed on one.
+
+  R1   S_b's members at k', every route and intact            one route per
+                                                              member, in P11's
+                                                              order; two routes
+                                                              at once when two
+                                                              members differ
+  R2   a member whose cells left the map                      off grid, and
+                                                              NEVER wall cell
+                                                              freed
+  R3   the lookup with trinary_map.sample made to raise       never called
+  R4   an unassigned element between two members of one       flanked
+       segment, on its face line
+  R5   two segments either side; past a segment's end;        not flanked in
+       off the face line by 2e-9 m; and at exactly 1e-9       each; 1e-9 is
+                                                              inclusive
+  R7   one event's rows, once per A pairing                   one event, one
+                                                              unit, rows kept
+  R8   an S_b behind losses of both shapes                    in both
+                                                              denominators;
+                                                              per-loss counting
+                                                              flips P13b, so the
+                                                              dedupe is checked
+  R9   ceil(n/2) at odd and even n, and in a verdict          the larger half;
+                                                              3 needs 2, 4
+                                                              needs 2; P14 is
+                                                              0 or nothing
+  R10  the base rate on a toy map of two segments             1 of 2, share 0.5
+  R11  G8 holding, end to end                                 108 losses, 27
+                                                              events, 2 units:
+                                                              the hole one
+                                                              intact, the
+                                                              carve-out one
+                                                              changed; P13a,
+                                                              P13b, P14 all
+                                                              hold; a file
+  R12  a failure at each of G8's three checks                 exit 2; segment_
+                                                              change and
+                                                              is_flanked called
+                                                              0 times; no later
+                                                              check run
+  R13  --stage s10 on a dirty tree, without e15c94b, with     refuses, exit 2,
+       a spec missing any of the three registrations, and     and loads nothing
+       on a wrong S9 sha256                                   in each
+  R14  S9's part-1 recompute, after the extraction            S9 calls it; its
+                                                              statements are
+                                                              gone from S9
+
 WHAT THE FIXTURES ARE. `wall_grid` paints one row of OCCUPIED with FREE on one
 side and leaves the rest UNKNOWN, so the slab exposes exactly ONE face per
 column: an occupied-unknown boundary gives no element (Def 1, graph_walls
@@ -2824,6 +2874,734 @@ def test_s9_nearest_same_dir_docstring_names_the_callers_set():
     assert dw.nearest_same_dir(a['el'], 0, {
         'n': 0, 'x': np.empty(0), 'y': np.empty(0), 'nx': np.empty(0),
         'ny': np.empty(0), 'dir': np.empty(0, dtype=np.int64)}) is None
+
+
+# ───── S10: the segments behind the unassigned elements (the R series) ──────
+#
+# SYNTHETIC ONLY. No cell of a member of S_b is read on a real map here or
+# anywhere else in this file, and no `changed`, `intact` or `flanked` is
+# computed on one.
+
+def s10_side(grid, stem, assign, origin=ORIGIN, theta=0.0):
+    """A side whose `segments` list really agrees with its `seg_of`.
+
+    `seg_side` carries one placeholder segment, which is enough for S9 and not
+    for S10: check 3 compares a segment's `id` and `n_elements` against the
+    members `seg_of` gives, the base rate walks `segments` to reach every
+    segment of the map, and the along distance is measured on a segment's own
+    `theta`. So the entry is built from `seg_of` here, the way
+    `extract_with_elements` builds it -- id by position in the list, members by
+    `seg_of == id`.
+
+    `assign(row, col, dir)` returns a segment id or None. `theta` is the line's
+    angle for every segment, which on these one-row walls is 0: only |d.u| is
+    ever read off it, so the sign the real extractor would pick does not
+    matter.
+    """
+    el = gw.face_elements(grid, RHO, origin)
+    seg_of = np.full(el['n'], -1, dtype=np.int64)
+    for i in range(el['n']):
+        s = assign(int(el['row'][i]), int(el['col'][i]), int(el['dir'][i]))
+        if s is not None:
+            seg_of[i] = s
+    ux, uy = gw.dir_of(theta)
+    segments = []
+    for s in range(int(seg_of.max()) + 1 if seg_of.size and seg_of.max() >= 0
+                   else 0):
+        m = np.nonzero(seg_of == s)[0]
+        t = el['x'][m] * ux + el['y'][m] * uy
+        t0, t1 = float(t.min()) - RHO / 2, float(t.max()) + RHO / 2
+        segments.append({
+            'id': s, 'theta': theta, 'n_elements': int(m.size),
+            'length': t1 - t0, 'normal': list(gw.normal_of(theta)),
+            'p0': [t0 * ux, t0 * uy], 'p1': [t1 * ux, t1 * uy]})
+    return {'stem': stem, 'el': el, 'seg_of': seg_of, 'grid': grid,
+            'rho': RHO, 'origin': origin, 'shape': grid.shape,
+            'segments': segments}
+
+
+def face_line_el(points, dir_i=3):
+    """An element table placed by hand, for the face-line cases.
+
+    DIRS[3] is '-y', whose normal is (0, -1), so for these elements ACROSS is
+    -y and ALONG is x: a case can put an element a stated distance off the
+    line and at a stated place along it, with no grid to paint.
+    """
+    nx, ny = gw.DIRS[dir_i][2], gw.DIRS[dir_i][3]
+    n = len(points)
+    return {'n': n,
+            'x': np.array([p[0] for p in points], float),
+            'y': np.array([p[1] for p in points], float),
+            'nx': np.full(n, nx), 'ny': np.full(n, ny),
+            'dir': np.full(n, dir_i, dtype=np.int64),
+            'row': np.zeros(n, dtype=np.int64),
+            'col': np.arange(n, dtype=np.int64)}
+
+
+def test_s10_members_take_one_route_each_and_intact_is_the_negation():
+    """R1: every route of change, per member, and an unchanged S_b.
+
+    The four cases are built on one segment of three members at k and four
+    different k' grids, so what differs between them is only B's later map.
+    """
+    g_k = wall_span(2, 4)                          # three '-y' elements
+    side_k = s10_side(g_k, 'B_k', lambda r, c, d: 0)
+    assert side_k['segments'][0]['n_elements'] == 3
+
+    intact = s10_side(wall_span(2, 4), 'B_kp', lambda r, c, d: 0)
+    ch = dw.segment_change(side_k, intact, 0)
+    assert (ch['state'], ch['changed'], ch['routes']) == (dw.INTACT, False, [])
+    assert ch['n_members'] == 3 and ch['n_changed_members'] == 0
+
+    freed = wall_span(2, 4)
+    freed[6, 3] = FREE                             # the middle wall cell goes
+    ch = dw.segment_change(side_k, s10_side(freed, 'B_kp',
+                                            lambda r, c, d: 0), 0)
+    assert (ch['state'], ch['routes']) == (dw.CHANGED, [dw.WALL_FREED])
+    assert ch['n_changed_members'] == 1
+    assert [r['member'] for r in ch['changed_members']] == [1]
+
+    closed = wall_span(2, 4)
+    closed[5, 2] = UNK                             # a front cell closes
+    ch = dw.segment_change(side_k, s10_side(closed, 'B_kp',
+                                            lambda r, c, d: 0), 0)
+    assert (ch['state'], ch['routes']) == (dw.CHANGED, [dw.FRONT_CLOSED])
+
+    # more than one route at once, which the spec says can happen
+    both = wall_span(2, 4)
+    both[6, 2] = FREE
+    both[5, 4] = UNK
+    ch = dw.segment_change(side_k, s10_side(both, 'B_kp',
+                                            lambda r, c, d: 0), 0)
+    assert ch['routes'] == [dw.WALL_FREED, dw.FRONT_CLOSED]
+    assert ch['n_changed_members'] == 2
+
+
+def test_s10_an_off_grid_member_is_off_grid_and_never_freed():
+    """R2: off grid is its own route, and it wins -- it is not a freed wall.
+
+    `trinary_map.sample` fills outside the map with UNKNOWN, which would read
+    as a wall cell no longer occupied: the class P13a predicts. The lookup is
+    `state_at`, which answers None off the grid, and `classify_cells` puts off
+    grid first, so a member whose cells left the map takes that route and only
+    that one.
+    """
+    side_k = s10_side(wall_span(2, 4), 'B_k', lambda r, c, d: 0)
+    # k' is the same wall, on a lattice 9 cells to the right: every member's
+    # cells fall off the left edge
+    away = s10_side(wall_span(2, 4), 'B_kp', lambda r, c, d: 0,
+                    origin=(0.9, 0.0))
+    ch = dw.segment_change(side_k, away, 0)
+    assert ch['routes'] == [dw.OFF_GRID]
+    assert dw.WALL_FREED not in ch['routes']
+    assert ch['n_changed_members'] == 3
+    for r in ch['changed_members']:
+        assert r['route'] == dw.OFF_GRID
+        assert r['wall_at_kp'] is None and not r['wall_on_grid_at_kp']
+
+
+def test_s10_the_cell_lookup_never_calls_trinary_map_sample(monkeypatch):
+    """R3: a spy on `sample` that raises, over the whole lookup phase.
+
+    The lookup phase only: `load_grid` verifies its own row order with
+    `sample` on a map's own lattice and is unaffected, which is why this
+    patches the module attribute and runs the two functions that read k'
+    rather than the stage.
+    """
+    tm = importlib.import_module('trinary_map')
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(a)
+        raise AssertionError('trinary_map.sample was called for a lookup')
+
+    monkeypatch.setattr(tm, 'sample', boom)
+    monkeypatch.setattr(gw, 'sample', boom)              # its other binding
+    assert not hasattr(dw, 'sample')                     # and not a third
+
+    side_k = s10_side(wall_span(2, 4), 'B_k', lambda r, c, d: 0)
+    off = s10_side(wall_span(2, 4), 'B_kp', lambda r, c, d: 0,
+                   origin=(0.9, 0.0))
+    assert dw.segment_change(side_k, side_k, 0)['state'] == dw.INTACT
+    assert dw.segment_change(side_k, off, 0)['routes'] == [dw.OFF_GRID]
+    assert dw.is_flanked(side_k['el'], side_k['seg_of'], 0)['flanked'] is False
+    assert calls == []
+
+
+def test_s10_flanked_between_two_members_of_one_segment():
+    """R4: strictly between two members of ONE segment, on its face line."""
+    g = wall_span(0, 12)
+    s = s10_side(g, 'B_kp', lambda r, c, d: None if c == 5 else 0)
+    i = int(np.nonzero((s['el']['col'] == 5) & (s['el']['dir'] == 3))[0][0])
+    assert s['seg_of'][i] == -1
+    out = dw.is_flanked(s['el'], s['seg_of'], i)
+    assert out['flanked'] is True
+    assert out['flanking_segments'] == [0]
+    assert out['n_on_face_line'] == 13          # the whole '-y' line, with i
+
+
+def test_s10_not_flanked_by_two_segments_or_past_an_end():
+    """R5a: two segments either side is not flanked, and nor is past the end."""
+    g = wall_span(0, 12)
+    two = s10_side(g, 'B_kp',
+                   lambda r, c, d: None if c == 5 else (0 if c < 5 else 1))
+    i = int(np.nonzero((two['el']['col'] == 5) & (two['el']['dir'] == 3))[0][0])
+    out = dw.is_flanked(two['el'], two['seg_of'], i)
+    assert out['flanked'] is False
+    assert out['segments_on_face_line'] == [0, 1]    # both are there, and
+    assert out['flanking_segments'] == []            # neither is on both sides
+
+    beyond = s10_side(g, 'B_kp', lambda r, c, d: 0 if c <= 4 else None)
+    j = int(np.nonzero((beyond['el']['col'] == 7)
+                       & (beyond['el']['dir'] == 3))[0][0])
+    assert dw.is_flanked(beyond['el'], beyond['seg_of'], j)['flanked'] is False
+
+
+def test_s10_not_flanked_off_the_face_line_and_the_tolerance_is_inclusive():
+    """R5b: "the same across coordinate, within 1e-9 m", inclusive at 1e-9.
+
+    ACROSS is the projection on the element's own normal, which for a '-y'
+    element is -y, so a pair moved in y is a pair off the line. At exactly the
+    tolerance the pair still flanks; at twice it, it does not.
+    """
+    tol = dw.FACE_LINE_TOL_M
+    seg_of = np.array([0, -1, 0], dtype=np.int64)
+    on = face_line_el([(0.0, 0.0), (0.5, 0.0), (1.0, 0.0)])
+    assert dw.is_flanked(on, seg_of, 1)['flanked'] is True
+
+    at_tol = face_line_el([(0.0, tol), (0.5, 0.0), (1.0, -tol)])
+    assert dw.is_flanked(at_tol, seg_of, 1)['flanked'] is True
+
+    past = face_line_el([(0.0, 2 * tol), (0.5, 0.0), (1.0, -2 * tol)])
+    out = dw.is_flanked(past, seg_of, 1)
+    assert out['flanked'] is False
+    assert out['n_on_face_line'] == 1            # only the element itself
+    # one side on the line is still not two sides
+    half = face_line_el([(0.0, 0.0), (0.5, 0.0), (1.0, -2 * tol)])
+    assert dw.is_flanked(half, seg_of, 1)['flanked'] is False
+
+
+def _r_rows(spec):
+    """Loss rows from `(B, k, kp, e_prime, seg_b, shape, A, cut_A)` tuples."""
+    return [{'A': a, 'B': b, 'cut_A': ca, 'step': f'cut{k}->cut{kp}',
+             'element': 0, 'b_index': 0, 'b_dir': 3, 'e_prime': e,
+             's7_bin': dw.BIN_FAR if shape == dw.SHAPE_FAR
+             else dw.BIN_WITHIN_EPS, 'k': k, 'kp': kp, 'seg_b': s,
+             'shape': shape}
+            for (b, k, kp, e, s, shape, a, ca) in spec]
+
+
+def test_s10_repeated_rows_of_one_event_count_once():
+    """R7: S9's rows repeat an event per A pairing; the unit is the event."""
+    rows = _r_rows([(1, 60, 120, 40, 0, dw.SHAPE_HOLE, a, ca)
+                    for a in (0, 2) for ca in (60, 120, 240)])
+    assert len(rows) == 6
+    events = dw.distinct_groups(rows, dw.EVENT_FIELDS)
+    assert len(events) == 1
+    assert events[0]['key'] == [1, 60, 120, 40]
+    assert len(events[0]['rows']) == 6               # the rows are kept
+    units = dw.distinct_groups(rows, dw.UNIT_FIELDS)
+    assert len(units) == 1 and units[0]['key'] == [1, 60, 120, 0]
+    # a second e' on the same segment is a second event and the same unit
+    rows += _r_rows([(1, 60, 120, 41, 0, dw.SHAPE_HOLE, 0, 60)])
+    assert len(dw.distinct_groups(rows, dw.EVENT_FIELDS)) == 2
+    assert len(dw.distinct_groups(rows, dw.UNIT_FIELDS)) == 1
+
+
+def _r_units(rows, changed_keys):
+    """The units `rows` make, each with the state the case wants."""
+    out = []
+    for u in dw.distinct_groups(rows, dw.UNIT_FIELDS):
+        key = tuple(u['key'])
+        state = dw.CHANGED if key in changed_keys else dw.INTACT
+        out.append({'key': list(key),
+                    'shapes': [s for s in dw.S10_SHAPES
+                               if any(r['shape'] == s for r in u['rows'])],
+                    'state': state, 'changed': state == dw.CHANGED,
+                    'n_losses': len(u['rows'])})
+    return out
+
+
+def test_s10_an_s_b_behind_both_shapes_counts_in_both():
+    """R8: it is in both denominators, and the dedupe is load-bearing.
+
+    Two segments: S_b 0 carries three one-cell holes (one per A pairing) and
+    one carve-out loss, and is changed; S_b 1 carries one hole and is intact.
+    Deduped, P13b is 1 intact of 2 and holds. Counted per loss -- the
+    mutation -- the shared S_b weighs three times and P13b fails, which is
+    what makes this test catch the dedupe going away.
+    """
+    rows = _r_rows(
+        [(1, 60, 120, 40, 0, dw.SHAPE_HOLE, a, 60) for a in (0, 2, 3)]
+        + [(1, 60, 120, 41, 0, dw.SHAPE_FAR, 0, 60),
+           (1, 60, 120, 50, 1, dw.SHAPE_HOLE, 0, 60)])
+    units = _r_units(rows, changed_keys={(1, 60, 120, 0)})
+    assert len(units) == 2
+    assert units[0]['shapes'] == [dw.SHAPE_HOLE, dw.SHAPE_FAR]
+
+    p13a = dw.p13_verdict(units, dw.SHAPE_FAR, dw.CHANGED)
+    p13b = dw.p13_verdict(units, dw.SHAPE_HOLE, dw.INTACT)
+    assert (p13a['of'], p13a['n'], p13a['holds']) == (1, 1, True)
+    assert (p13b['of'], p13b['n'], p13b['holds']) == (2, 1, True)
+    assert [1, 60, 120, 0] in p13a['units'] and [1, 60, 120, 0] in p13b['units']
+
+    # MUTATION: one unit per loss row instead of per distinct S_b
+    per_loss = [{'key': [r['B'], r['k'], r['kp'], r['seg_b']],
+                 'shapes': [r['shape']], 'state': u['state'],
+                 'changed': u['changed'], 'n_losses': 1}
+                for r in rows
+                for u in units if u['key'][3] == r['seg_b']]
+    mutated = dw.p13_verdict(per_loss, dw.SHAPE_HOLE, dw.INTACT)
+    assert (mutated['of'], mutated['n']) == (4, 1)
+    assert mutated['holds'] is False, 'the dedupe is what makes P13b hold here'
+
+
+@pytest.mark.parametrize('n,want', [(0, 0), (1, 1), (2, 1), (3, 2), (4, 2),
+                                    (21, 11), (22, 11), (75, 38), (54, 27)])
+def test_s10_at_least_half_is_ceil(n, want):
+    """R9: ceil(n/2) at odd and even n -- at an odd n, the larger half."""
+    assert dw.at_least_half(n) == want
+    assert dw.at_least_half(n) >= n / 2
+
+
+def test_s10_the_verdict_threshold_at_an_odd_and_an_even_denominator():
+    """R9b: the same rounding inside P13, and P14's own all-or-nothing form."""
+    def units(n, n_intact, shape=dw.SHAPE_HOLE):
+        return [{'key': [1, 60, 120, i], 'shapes': [shape],
+                 'state': dw.INTACT if i < n_intact else dw.CHANGED,
+                 'changed': i >= n_intact} for i in range(n)]
+
+    assert dw.p13_verdict(units(3, 2), dw.SHAPE_HOLE, dw.INTACT)['holds']
+    assert dw.p13_verdict(units(3, 1), dw.SHAPE_HOLE,
+                          dw.INTACT)['holds'] is False
+    assert dw.p13_verdict(units(3, 1), dw.SHAPE_HOLE,
+                          dw.INTACT)['min_required'] == 2
+    assert dw.p13_verdict(units(4, 2), dw.SHAPE_HOLE, dw.INTACT)['holds']
+    assert dw.p13_verdict(units(4, 1), dw.SHAPE_HOLE,
+                          dw.INTACT)['holds'] is False
+    with pytest.raises(AssertionError):                 # 0 of 0 never "holds"
+        dw.p13_verdict(units(2, 2, dw.SHAPE_FAR), dw.SHAPE_HOLE, dw.INTACT)
+
+    events = [{'key': [1, 60, 120, i], 'shape': dw.SHAPE_HOLE,
+               'flanked': False, 'flanking_segments': []} for i in range(5)]
+    out = dw.p14_verdict(events, n_expected=5)
+    assert (out['holds'], out['n_flanked'], out['of']) == (True, 0, 5)
+    events[2].update(flanked=True, flanking_segments=[7])
+    out = dw.p14_verdict(events, n_expected=5)
+    assert (out['holds'], out['n_flanked']) == (False, 1)
+    assert out['flanked'][0]['flanking_segments'] == [7]
+    with pytest.raises(AssertionError):                 # 22 is registered
+        dw.p14_verdict(events)
+
+
+def test_s10_the_base_rate_on_a_toy_map():
+    """R10: every segment of B at k, not only the S_b behind a loss."""
+    g_k = blank(12, S7_GRID_W)
+    g_k[:7, :] = FREE
+    g_k[6, 0:3] = OCC                                  # segment 0
+    g_k[6, 8:11] = OCC                                 # segment 1
+    side_k = s10_side(g_k, 'B_k1_cut60',
+                      lambda r, c, d: 0 if c < 4 else 1)
+    # 4 and 5: each run's three '-y' faces, plus the '+x' face at its right
+    # end, plus the '-x' face at the second run's left end
+    assert [s['n_elements'] for s in side_k['segments']] == [4, 5]
+
+    g_kp = g_k.copy()
+    g_kp[6, 9] = FREE                                  # one member of 1 goes
+    side_kp = s10_side(g_kp, 'B_k1_cut120',
+                       lambda r, c, d: 0 if c < 4 else 1)
+
+    rates = dw.base_rate({(1, 60): side_k, (1, 120): side_kp},
+                         [(1, 60, 120)])
+    assert len(rates) == 1
+    r = rates[0]
+    assert (r['n_segments'], r['n_changed']) == (2, 1)
+    assert r['share_changed'] == pytest.approx(0.5)
+    assert r['step'] == 'cut60->cut120'
+    assert r['by_route'] == {dw.OFF_GRID: 0, dw.WALL_FREED: 1,
+                             dw.FRONT_CLOSED: 0}
+    assert set(r['by_route']) == {dw.OFF_GRID, dw.WALL_FREED, dw.FRONT_CLOSED}
+
+
+# ── the end-to-end synthetic corpus ─────────────────────────────────────────
+#
+# Two robots, four cuts, and two loss steps -- one of each shape, with the
+# state P13 predicts for it:
+#
+#   A (k0), every cut    row 6 OCC cols 0..12, all assigned
+#   B (k1) at cut60      the same, all assigned        -> A corroborated
+#   B (k1) at cut120     row 6 and row 2 OCC, and ONLY row 2 assigned
+#   B (k1) at cut240     row 6 OCC cols 0..12, all assigned again
+#   B (k1) at cut1200    row 6 OCC cols 1..12, NOTHING assigned
+#
+# At 60 -> 120 every one of A's 14 elements loses its corroborator; b's two
+# cells still read occupied and free, so the loss is unchanged; e' is the
+# row-6 element, which is unassigned -- segmentation. The assigned row-2 line
+# sits 0.40 m away, so these are inside a metre: the ONE-CELL HOLE shape. S_b
+# is B's segment 0 at cut60, whose every member still has its two cells at
+# cut120: INTACT, which is P13b's prediction.
+#
+# At 240 -> 1200 the same losses recur, with nothing assigned at k' -- so
+# nothing within a metre, the CARVE-OUT shape -- and column 0's wall cell is
+# now free. A's own column-0 element is therefore a freed wall cell and not an
+# unchanged loss; the other 13 are unchanged, and their S_b has lost a member:
+# CHANGED, which is P13a's prediction.
+#
+# Each loss recurs once per A cut, four times, which is what the distinct
+# counting has to collapse: 108 rows, 27 events, 2 segment units.
+
+S10_N_ROWS, S10_N_EVENTS = 108, 27
+S10_N_HOLE_ROWS, S10_N_FAR_ROWS = 56, 52
+S10_N_HOLE_EVENTS, S10_N_FAR_EVENTS = 14, 13
+
+
+def s10_sides():
+    """The corpus above, as a `by_kc` and a spawn table."""
+    a_grid = two_runs({6: (0, 12)})
+    by_kc, spawn = {}, {0: (0.0, 0.0), 1: (0.0, 0.0)}
+    for c in dw.CUTS:
+        by_kc[(0, c)] = s10_side(a_grid, f'A_k0_cut{c}',
+                                 lambda r, c_, d: 0)
+    by_kc[(1, 60)] = s10_side(two_runs({6: (0, 12)}), 'B_k1_cut60',
+                              lambda r, c_, d: 0)
+    by_kc[(1, 120)] = s10_side(two_runs({2: (0, 12), 6: (0, 12)}),
+                               'B_k1_cut120',
+                               lambda r, c_, d: 0 if r == 2 else None)
+    by_kc[(1, 240)] = s10_side(two_runs({6: (0, 12)}), 'B_k1_cut240',
+                               lambda r, c_, d: 0)
+    by_kc[(1, 1200)] = s10_side(two_runs({6: (1, 12)}), 'B_k1_cut1200',
+                                lambda r, c_, d: None)
+    return by_kc, spawn
+
+
+def s10_fake_s9(by_kc, spawn, n_robots=2):
+    """An S9 payload for the synthetic corpus, built with S9's own code."""
+    rho = next(iter(by_kc.values()))['rho']
+    rows = dw.recompute_s9_rows(by_kc, spawn, rho, dw.CUTS, n_robots)
+    return {'elements': rows, 'rho_m': rho, 'head': 'synthetic',
+            'reported': {'class_by_bin': [
+                {'class': c, 's7_bin': b,
+                 'n': sum(1 for r in rows
+                          if r['class'] == c and r['s7_bin'] == b)}
+                for c in dw.P12_CLASSES for b in dw.S7_BINS]}}
+
+
+def _s10_counts(s9):
+    """The counts this corpus produced, as `s10_segments`'s own arguments."""
+    seg = [r for r in s9['elements'] if r['class'] == dw.SEGMENTATION]
+    far = [r for r in seg if r['s7_bin'] == dw.BIN_FAR]
+    hole = [r for r in seg if r['s7_bin'] != dw.BIN_FAR]
+
+    def n_distinct(rows):
+        return len({(r['B'], r['step'], r['e_prime']) for r in rows})
+
+    return {'n_unchanged': len(s9['elements']),
+            'n_segmentation': len(seg), 'n_hole': len(hole),
+            'n_far': len(far), 'n_events': n_distinct(seg),
+            'n_events_hole': n_distinct(hole),
+            'n_events_far': n_distinct(far)}
+
+
+def test_s10_the_corpus_has_the_shape_the_cases_assume():
+    """R11a: the counts above, before any of them is a gate's denominator."""
+    by_kc, spawn = s10_sides()
+    assert by_kc[(1, 60)]['el']['n'] == 14            # 13 '-y' and one '+x'
+    assert by_kc[(1, 60)]['segments'][0]['n_elements'] == 14
+    assert by_kc[(1, 1200)]['segments'] == []         # nothing assigned at k'
+    s9 = s10_fake_s9(by_kc, spawn)
+    counts = _s10_counts(s9)
+    assert {r['class'] for r in s9['elements']} == {dw.SEGMENTATION}
+    assert counts == {'n_unchanged': S10_N_ROWS,
+                      'n_segmentation': S10_N_ROWS,
+                      'n_hole': S10_N_HOLE_ROWS, 'n_far': S10_N_FAR_ROWS,
+                      'n_events': S10_N_EVENTS,
+                      'n_events_hole': S10_N_HOLE_EVENTS,
+                      'n_events_far': S10_N_FAR_EVENTS}
+
+
+def _s10_spies(monkeypatch):
+    """Spies on the two functions that compute an unseen quantity."""
+    seen = {'segment_change': 0, 'is_flanked': 0}
+    real_change, real_flank = dw.segment_change, dw.is_flanked
+
+    def change(*a, **k):
+        seen['segment_change'] += 1
+        return real_change(*a, **k)
+
+    def flank(*a, **k):
+        seen['is_flanked'] += 1
+        return real_flank(*a, **k)
+
+    monkeypatch.setattr(dw, 'segment_change', change)
+    monkeypatch.setattr(dw, 'is_flanked', flank)
+    return seen
+
+
+def test_s10_g8_holding_judges_all_three_predictions(tmp_path, monkeypatch):
+    """R11: the whole pipeline, both shapes, and a file.
+
+    The corpus is built to reach one unit of each shape with the state its
+    prediction names, so a verdict that read the wrong unit or the wrong state
+    would flip here rather than merely move a count.
+
+    The spies are the POSITIVE CONTROL for R12's zeroes: with G8 holding,
+    `segment_change` runs twice for the two units and twice more for the base
+    rate's two steps -- not 108 times, once per loss -- and `is_flanked` once
+    per distinct e'.
+    """
+    by_kc, spawn = s10_sides()
+    s9 = s10_fake_s9(by_kc, spawn)
+    seen = _s10_spies(monkeypatch)
+    out = dw.s10_segments(by_kc, spawn, s9,
+                          {'stage': 's10', 'head': 'synthetic'}, tmp_path,
+                          n_robots=2, **_s10_counts(s9))
+    assert seen == {'segment_change': 2 + 2, 'is_flanked': S10_N_EVENTS}
+    assert out['G8']['all_ok'] and all(out['G8']['parts'].values())
+    assert out['G8']['1_s9_rows_reproduce']['counts_equal']
+    assert out['G8']['1_s9_rows_reproduce']['class_by_bin_equal']
+    assert out['G8']['2_b_assigned_e_prime_unassigned']['n_ok'] == S10_N_ROWS
+    assert out['G8']['3_segment_holds_b']['n_ok'] == S10_N_ROWS
+
+    assert (out['n_losses'], out['n_events']) == (S10_N_ROWS, S10_N_EVENTS)
+    assert out['n_segment_units'] == 2
+    by_key = {tuple(u['key']): u for u in out['segment_units']}
+    hole, far = by_key[(1, 60, 120, 0)], by_key[(1, 240, 1200, 0)]
+    assert hole['shapes'] == [dw.SHAPE_HOLE]
+    assert (hole['state'], hole['routes']) == (dw.INTACT, [])
+    assert (hole['n_members'], hole['n_losses']) == (14, S10_N_HOLE_ROWS)
+    assert far['shapes'] == [dw.SHAPE_FAR]
+    assert (far['state'], far['routes']) == (dw.CHANGED, [dw.WALL_FREED])
+    assert (far['n_members'], far['n_changed_members']) == (14, 1)
+
+    assert (out['P13a']['of'], out['P13a']['n']) == (1, 1)
+    assert out['P13a']['holds'] and out['P13a']['min_required'] == 1
+    assert (out['P13b']['of'], out['P13b']['n']) == (1, 1)
+    assert out['P13b']['holds']
+    assert (out['P14']['of'], out['P14']['n_flanked']) == (S10_N_EVENTS, 0)
+    assert out['P14']['holds']
+    assert out['P14']['by_shape'][dw.SHAPE_FAR]['of'] == S10_N_FAR_EVENTS
+
+    # reported, not tested
+    per_loss = out['reported']['per_loss']
+    assert per_loss['of'] == S10_N_ROWS
+    assert per_loss['by_shape'][dw.SHAPE_HOLE][dw.INTACT] == S10_N_HOLE_ROWS
+    assert per_loss['by_shape'][dw.SHAPE_FAR][dw.CHANGED] == S10_N_FAR_ROWS
+    assert len(out['reported']['changed_losses']) == S10_N_FAR_EVENTS
+    # the one changed member is column 0's '-y' element, at x = 0, and the
+    # along distance to it is each e''s own x: columns 1 to 12 for the '-y'
+    # elements and 1.25 m for the '+x' face at the right-hand end
+    along = sorted(e['nearest_changed_member']['along_m']
+                   for e in out['reported']['changed_losses'])
+    assert along == pytest.approx([RHO * c for c in range(1, 13)] + [1.25])
+    for e in out['reported']['changed_losses']:
+        near = e['nearest_changed_member']
+        assert (near['route'], near['member']) == (dw.WALL_FREED, 1)
+        assert e['routes'] == [dw.WALL_FREED] and e['n_changed_members'] == 1
+    assert {r['step'] for r in out['reported']['base_rate']} == {
+        'cut60->cut120', 'cut240->cut1200'}
+    assert [r['share_changed'] for r in out['reported']['base_rate']] == [
+        0.0, 1.0]
+    assert len(out['reported']['segment_sizes']) == 2
+
+    written = list(tmp_path.glob('s10_segments_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert len(payload['losses']) == S10_N_ROWS
+    assert len(payload['events']) == S10_N_EVENTS
+    assert out['written']['sha256'] == hashlib.sha256(
+        written[0].read_bytes()).hexdigest()
+
+
+def _assert_s10_fail_file(tmp_path, capsys):
+    """The fail file holds the G8 comparisons and no unseen quantity."""
+    assert not list(tmp_path.glob('s10_segments_*.json'))
+    written = list(tmp_path.glob('s10_g8_fail_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert set(payload) >= {'G8', 'stage', 'seconds'}
+    for key in ('events', 'segment_units', 'losses', 'reported',
+                'P13a', 'P13b', 'P14'):
+        assert key not in payload
+
+    def keys_of(node):
+        if isinstance(node, dict):
+            return set(node) | set().union(*(keys_of(v) for v in node.values())
+                                           or [set()])
+        if isinstance(node, list):
+            return set().union(*(keys_of(v) for v in node) or [set()])
+        return set()
+
+    assert not (keys_of(payload) & {'changed', 'intact', 'flanked', 'state',
+                                    'routes', 'n_changed_members',
+                                    'base_rate', 'share_changed', 'events',
+                                    'segment_units', 'P13a', 'P13b', 'P14'})
+    out = capsys.readouterr().out
+    assert 'G8' in out and 'FAIL' in out
+    for word in ('P13a', 'P13b', 'P14', 'changed', 'intact', 'flanked',
+                 'base rate', 'distinct S_b'):
+        assert word not in out
+    return payload
+
+
+@pytest.mark.parametrize('check', ['1_s9_rows_reproduce',
+                                   '2_b_assigned_e_prime_unassigned',
+                                   '3_segment_holds_b'])
+def test_s10_a_failure_at_any_g8_check_computes_nothing(check, tmp_path,
+                                                        capsys, monkeypatch):
+    """R12: exit 2, and no changed, intact or flanked anywhere.
+
+    CHECKS 2 AND 3 ARE DRIVEN BY A PATCH OR A MUTATED SIDE, deliberately: on a
+    corpus S9 would accept neither can arise -- an assigned e' at k' would
+    have been corroborated, and `seg_of` and the segment list come out of one
+    pass of `extract_with_elements` -- so the only way to exercise the
+    handling is to make one of them answer as it would if that broke.
+    """
+    by_kc, spawn = s10_sides()
+    s9 = s10_fake_s9(by_kc, spawn)
+    counts = _s10_counts(s9)
+
+    if check == '1_s9_rows_reproduce':
+        # one stored class changed: the rows no longer reproduce
+        next(r for r in s9['elements']
+             if r['s7_bin'] == dw.BIN_FAR)['class'] = dw.GEOM_ACROSS
+    elif check == '2_b_assigned_e_prime_unassigned':
+        # e' pointed at an ASSIGNED element of B at k', after check 1 held
+        real = dw.loss_rows
+
+        def tampered(stored):
+            rows = real(stored)
+            kp = by_kc[(1, 120)]
+            assigned = int(np.nonzero(kp['seg_of'] >= 0)[0][0])
+            for r in rows:
+                if r['kp'] == 120:
+                    r['e_prime'] = assigned
+                    break
+            return rows
+
+        monkeypatch.setattr(dw, 'loss_rows', tampered)
+    else:
+        # the segment list disagrees with `seg_of` about its own membership
+        by_kc[(1, 60)]['segments'][0]['n_elements'] += 1
+
+    seen = _s10_spies(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        dw.s10_segments(by_kc, spawn, s9,
+                        {'stage': 's10', 'head': 'synthetic'}, tmp_path,
+                        n_robots=2, **counts)
+    assert e.value.code == 2
+    assert seen == {'segment_change': 0, 'is_flanked': 0}
+    payload = _assert_s10_fail_file(tmp_path, capsys)
+    assert payload['G8']['parts'][check] is False
+    later = [p for p in ('1_s9_rows_reproduce',
+                         '2_b_assigned_e_prime_unassigned',
+                         '3_segment_holds_b')
+             if p > check]
+    for p in later:                          # a failed check stops the chain
+        assert payload['G8'][p] is None
+
+
+def _s10_refusal_spies(monkeypatch):
+    """Spies on everything `run_s10` could read: the corpus and the S9 file."""
+    seen = {'load_side': 0, 'sha256': 0}
+    real = dw._sha256
+
+    def load_side(*a, **k):
+        seen['load_side'] += 1
+        raise AssertionError('run_s10 loaded a map past a refusal')
+
+    def sha256(path):
+        seen['sha256'] += 1
+        return real(path)
+
+    monkeypatch.setattr(dw, 'load_side', load_side)
+    monkeypatch.setattr(dw, '_sha256', sha256)
+    return seen
+
+
+def test_s10_refuses_a_dirty_tree(monkeypatch):
+    """R13a: a result file must not name a commit it was not produced by."""
+    seen = _s10_refusal_spies(monkeypatch)
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/divergence_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s10()
+    assert e.value.code == 2
+    assert seen == {'load_side': 0, 'sha256': 0}
+
+
+def test_s10_refuses_when_the_registration_is_not_an_ancestor(monkeypatch):
+    """R13b: P13a, P13b and P14 must be registered behind the code."""
+    seen = _s10_refusal_spies(monkeypatch)
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] in ('status', 'merge-base') else 'deadbeef'))
+    with pytest.raises(SystemExit) as e:
+        dw.run_s10()
+    assert e.value.code == 2
+    assert seen == {'load_side': 0, 'sha256': 0}
+
+
+@pytest.mark.parametrize('present', ['', 'P13a', 'P13a+P13b'])
+def test_s10_refuses_when_the_spec_at_head_lacks_a_registration(present,
+                                                                monkeypatch):
+    """R13c: all three headers, not one of them -- each is judged separately."""
+    seen = _s10_refusal_spies(monkeypatch)
+    text = '## 9\n\n**P12. REGISTERED 9 Oct 2026.** something\n'
+    for name in [p for p in present.split('+') if p]:
+        text += f'\n**{name}. REGISTERED 10 Oct 2026.** something\n'
+
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return text
+        return 'c0ffee'                       # merge-base == rev-parse
+
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s10()
+    assert e.value.code == 2
+    assert seen == {'load_side': 0, 'sha256': 0}
+
+
+def test_s10_refuses_a_wrong_s9_sha256(tmp_path, monkeypatch):
+    """R13d: G8 check 1 is an equality against ONE S9 run, so it is pinned."""
+    seen = _s10_refusal_spies(monkeypatch)
+
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return ('## Segments behind the unassigned elements\n\n'
+                    '**P13a. REGISTERED 10 Oct 2026.** Changed.\n\n'
+                    '**P13b. REGISTERED 10 Oct 2026.** Intact.\n\n'
+                    '**P14. REGISTERED 10 Oct 2026.** None flanked.\n')
+        return 'c0ffee'
+
+    monkeypatch.setattr(dw, '_git', fake)
+    (tmp_path / dw.S9_RESULT).write_text('{"elements": [], "rho_m": 0.1}')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s10(tmp_path)
+    assert e.value.code == 2
+    assert seen['load_side'] == 0            # the pin fires before the corpus
+    assert seen['sha256'] == 1               # and it did hash the named file
+
+
+def test_s10_the_unchanged_recompute_is_the_one_s9_committed():
+    """R14: the extraction behind G8 check 1 is S9's part 1, not a copy.
+
+    `recompute_unchanged` was lifted out of `s9_segmentation`; S10 reproduces
+    S9's rows through it, so S9 has to be the caller of it rather than hold a
+    second copy of those statements.
+    """
+    import inspect
+    src = inspect.getsource(dw.s9_segmentation)
+    assert 'recompute_unchanged(' in src
+    for gone in ('s7_mask(by_kc', 'gain_loss_series(masks',
+                 'g6_states_at_k(by_kc'):
+        assert gone not in src
+    doc = dw.recompute_unchanged.__doc__
+    assert 'pure extraction' in doc
 
 
 # ──────────────────────────── the named breaks ───────────────────────────────

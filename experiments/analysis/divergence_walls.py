@@ -2999,6 +2999,52 @@ def classify_unchanged(assigned: bool, across_m: float, along_m: float,
     return GEOM_ALONG
 
 
+def recompute_unchanged(by_kc: dict, spawn: dict, rho: float,
+                        cuts: tuple = CUTS,
+                        n_robots: int = N_ROBOTS) -> list[dict]:
+    """S8's UNCHANGED class, recomputed from S7's and S8's own code.
+
+    Extracted from `s9_segmentation`, where it was G7 part 1, so that S10's G8
+    check 1 reproduces S9's rows through the same statements in the same order
+    rather than through a second copy of them. A pure extraction: the calls,
+    their order and the fields of each row are the ones S9 committed.
+
+    The one addition is `s7_bin`, computed here with S8's own
+    `s7_distance_bin` from the lost record it belongs to. S9 does not read it
+    -- it takes each element's bin off the S8 file it pins, and compares only
+    `g7_unchanged_set`'s own field list -- so S9's output is unchanged by it.
+    S10 compares the two.
+    """
+    masks = {k: s7_mask(by_kc, spawn, k) for k in matrix_keys(cuts, n_robots)}
+    series = [gain_loss_series(masks, a, b, ca, cuts)
+              for (a, b, ca) in series_keys(cuts, n_robots)]
+    lost = lost_elements(masks, series, cuts)
+    keys_k = sorted({(r['A'], r['B'], r['cut_A'], r['from_cut_B'])
+                     for r in lost})
+    matches = b_matches(by_kc, spawn, keys_k)
+    at_k = g6_states_at_k(by_kc, matches, lost)
+    eps, half = gw.EPS_FACTOR * rho, 0.5 * rho
+    bin_of = {(r['A'], r['B'], r['cut_A'], r['step'], r['element']):
+              s7_distance_bin(r, eps, half) for r in lost}
+    recomputed = []
+    for row in at_k['rows']:
+        side_kp = by_kc[(row['B'], _to_cut(row['step']))]
+        s_wall = state_at(side_kp, tuple(row['wall_cell']))
+        s_front = state_at(side_kp, tuple(row['front_cell']))
+        if classify_cells(s_wall, s_front) != UNCHANGED:
+            continue
+        rec = dict(row)
+        rec.pop('equal', None)
+        rec.update({'wall_at_kp': state_name(s_wall['state']),
+                    'front_at_kp': state_name(s_front['state']),
+                    'wall_rc_at_kp': [s_wall['row'], s_wall['col']],
+                    'front_rc_at_kp': [s_front['row'], s_front['col']],
+                    's7_bin': bin_of[(row['A'], row['B'], row['cut_A'],
+                                      row['step'], row['element'])]})
+        recomputed.append(rec)
+    return recomputed
+
+
 def g7_unchanged_set(recomputed: list, stored: list,
                      n_expected: int = N_UNCHANGED) -> dict:
     """G7 part 1: S9's unchanged set and its cell states must equal S8's.
@@ -3154,28 +3200,7 @@ def s9_segmentation(by_kc: dict, spawn: dict, s8: dict, meta: dict,
                for o in s8['reported']['lattice_offsets']}
 
     # ── G7 part 1: S8's classification, recomputed with S8's own code ───────
-    masks = {k: s7_mask(by_kc, spawn, k) for k in matrix_keys(cuts, n_robots)}
-    series = [gain_loss_series(masks, a, b, ca, cuts)
-              for (a, b, ca) in series_keys(cuts, n_robots)]
-    lost = lost_elements(masks, series, cuts)
-    keys_k = sorted({(r['A'], r['B'], r['cut_A'], r['from_cut_B'])
-                     for r in lost})
-    matches = b_matches(by_kc, spawn, keys_k)
-    at_k = g6_states_at_k(by_kc, matches, lost)
-    recomputed = []
-    for row in at_k['rows']:
-        side_kp = by_kc[(row['B'], _to_cut(row['step']))]
-        s_wall = state_at(side_kp, tuple(row['wall_cell']))
-        s_front = state_at(side_kp, tuple(row['front_cell']))
-        if classify_cells(s_wall, s_front) != UNCHANGED:
-            continue
-        rec = dict(row)
-        rec.pop('equal', None)
-        rec.update({'wall_at_kp': state_name(s_wall['state']),
-                    'front_at_kp': state_name(s_front['state']),
-                    'wall_rc_at_kp': [s_wall['row'], s_wall['col']],
-                    'front_rc_at_kp': [s_front['row'], s_front['col']]})
-        recomputed.append(rec)
+    recomputed = recompute_unchanged(by_kc, spawn, rho, cuts, n_robots)
     g7a = g7_unchanged_set(recomputed, stored, n_unchanged)
 
     # ── G7 parts 2 and 3: e', its direction, its assignment, its distances ──
@@ -3369,10 +3394,891 @@ def run_s9(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
     return s9_segmentation(by_kc, spawn, s8, meta, out_dir, t0)
 
 
+# ── S10: segments behind the unassigned elements, G8, P13a, P13b and P14
+#    (spec v0.16, "Segments behind the unassigned elements (P13, P14)") ───────
+
+S10_REGISTRATION = 'e15c94b'       # registered P13a, P13b, P14 (spec v0.16)
+P13A_HEADER = '**P13a. REGISTERED'
+P13B_HEADER = '**P13b. REGISTERED'
+P14_HEADER = '**P14. REGISTERED'
+P13A_GATE_TEXT = 'P13a. REGISTERED'
+P13B_GATE_TEXT = 'P13b. REGISTERED'
+P14_GATE_TEXT = 'P14. REGISTERED'
+S9_RESULT = 's9_segmentation_20261009T013501Z.json'
+S9_SHA256 = ('42c7505992ff8047d069cb7092dcdeaf3e8644193ff36484f3892425d307de'
+             'ab')
+N_SEGMENTATION = 129               # S9's segmentation class, of its 132
+N_SEG_HOLE = 75                    # of those, the one-cell holes
+N_SEG_FAR = 54                     # of those, the carve-out
+N_EVENTS = 22                      # distinct (B, k, k', e') among the 129
+N_EVENTS_HOLE, N_EVENTS_FAR = 14, 8          # of that 22, by loss shape
+
+# "the same across coordinate, within 1e-9 m", the spec's face line. The same
+# inclusive 1e-9 m T1's own two tolerances carry (T1_TOL_M).
+FACE_LINE_TOL_M = 1e-9
+
+# The two loss shapes P13a and P13b are registered on, which are S9's own split
+# of the 129: "the 75 one-cell holes" and "the 54 losses with no assigned
+# element within 1 m". The second shape IS S7's third distance bin, so it is
+# that constant rather than a second spelling of it.
+SHAPE_HOLE = 'one_cell_hole'
+SHAPE_FAR = BIN_FAR
+S10_SHAPES = (SHAPE_HOLE, SHAPE_FAR)
+
+# The two states of S_b at k'.
+CHANGED, INTACT = 'changed', 'intact'
+
+# The counting units, and the fields that name them (§"Counting units").
+EVENT_FIELDS = ('B', 'k', 'kp', 'e_prime')
+UNIT_FIELDS = ('B', 'k', 'kp', 'seg_b')
+
+# What G8 check 1 compares, row by row, against S9's stored values.
+S9_ROW_FIELDS = ('b_index', 'b_dir', 'e_prime', 'e_prime_seg', 'assigned',
+                 'across_m', 'along_m', 'within_t1', 's7_bin', 'class',
+                 'map_at_kp')
+
+
+def at_least_half(n: int) -> int:
+    """The spec's "at least half (rounded up)" of `n`, which is ceil(n/2).
+
+    Integer arithmetic, so there is no float to round the wrong way: for every
+    n >= 0, `-(-n // 2)` is ceil(n/2), which at an odd n is the strictly larger
+    half. P13a and P13b are both stated this way and neither denominator is
+    known until the stage runs, so the threshold is computed and never
+    written down.
+    """
+    return -(-n // 2)
+
+
+def shape_of(s7_bin: str) -> str:
+    """Which of P13's two loss shapes a segmentation loss has.
+
+    S7's distance bin is what separates them: the carve-out P13a is about is
+    `none_within_1m`, and every one of the other 75 is `within_eps_across`,
+    the one-cell hole along the wall (spec v0.15, "S9 results"). G8 check 1
+    holds that split to 75 and 54 and reproduces S9's whole class-by-bin
+    table, so this mapping is checked rather than trusted.
+    """
+    return SHAPE_FAR if s7_bin == BIN_FAR else SHAPE_HOLE
+
+
+def _s9_key(row: dict) -> tuple:
+    """A loss's identity across S7, S8, S9 and S10: the A pairing included."""
+    return (row['A'], row['B'], row['cut_A'], row['step'], row['element'])
+
+
+def _unit_key(row: dict) -> tuple:
+    """(B, k, k', S_b), P13a's and P13b's counting unit."""
+    return tuple(row[f] for f in UNIT_FIELDS)
+
+
+def _event_key(row: dict) -> tuple:
+    """(B, k, k', e'), P14's counting unit."""
+    return tuple(row[f] for f in EVENT_FIELDS)
+
+
+def recompute_s9_rows(by_kc: dict, spawn: dict, rho: float,
+                      cuts: tuple = CUTS,
+                      n_robots: int = N_ROBOTS) -> list[dict]:
+    """S9's own rows, recomputed with S9's own code: e', then P12's class.
+
+    `recompute_unchanged` is G7 part 1; this adds G7 part 2's finder, its
+    distances and P12's classifier, in S9's order and through S9's functions,
+    so that G8 check 1 is an equality against values S9 published rather than
+    a second opinion about them.
+
+    A row whose e' is missing or faces another way keeps `e_prime` None and no
+    class: S9's own G7 part 2 refused that case, so check 1 is where it
+    surfaces -- as a row that does not reproduce -- and not as a crash here.
+    """
+    eps = gw.EPS_FACTOR * rho
+    out = []
+    for rec in recompute_unchanged(by_kc, spawn, rho, cuts, n_robots):
+        a_side = by_kc[(rec['A'], rec['cut_A'])]
+        b_side = by_kc[(rec['B'], _to_cut(rec['step']))]
+        j = find_e_prime(b_side['el'], tuple(rec['wall_rc_at_kp']),
+                         rec['b_dir'])
+        near = (None if j is None else
+                e_prime_distances(a_side, rec['element'], b_side, j,
+                                  spawn[rec['A']], spawn[rec['B']]))
+        row = {f: rec[f] for f in ('A', 'B', 'cut_A', 'step', 'element',
+                                   'b_index', 'b_dir', 's7_bin')}
+        row.update({'e_prime': j, 'map_at_kp': b_side['stem'],
+                    'e_prime_seg': None, 'assigned': None, 'across_m': None,
+                    'along_m': None, 'within_t1': None, 'class': None})
+        if near is not None:
+            assigned = bool(b_side['seg_of'][j] >= 0)
+            row.update({
+                'e_prime_seg': int(b_side['seg_of'][j]),
+                'assigned': assigned,
+                'across_m': near['across_m'], 'along_m': near['along_m'],
+                'within_t1': within_t1_tolerances(near['across_m'],
+                                                  near['along_m'], eps, rho),
+                'class': classify_unchanged(assigned, near['across_m'],
+                                            near['along_m'], eps, rho)})
+        out.append(row)
+    return out
+
+
+def g8_s9_rows(recomputed: list, s9: dict, n_unchanged: int = N_UNCHANGED,
+               n_segmentation: int = N_SEGMENTATION,
+               n_hole: int = N_SEG_HOLE, n_far: int = N_SEG_FAR,
+               n_events: int = N_EVENTS, n_events_hole: int = N_EVENTS_HOLE,
+               n_events_far: int = N_EVENTS_FAR) -> dict:
+    """G8 check 1: S9's stored rows, classes and counts reproduce exactly.
+
+    STRICTER THAN "all 132 rows and their classes". The identity of e' and of
+    b goes in too, and so do the two distances: S10's units are built out of
+    exactly those -- S_b is the segment of b at k, the counting unit is e' at
+    k', the loss shape is S7's bin -- and a row whose class S10 agrees with
+    while naming a different e' is not the loss S9 reported. A class-only
+    comparison would not notice. The distances are compared the way G4 and G5
+    compare a stored share: exactly, with no tolerance, because the same code
+    on the same pinned maps has no reason to move by an ulp.
+
+    The counts are the registered ones, not whatever came back: 132 rows, 129
+    segmentation split 75 and 54, and 22 distinct (B, k, k', e') among them,
+    14 and 8. S9's stored class-by-bin table goes in as a whole.
+    """
+    mine = {_s9_key(r): r for r in recomputed}
+    theirs = {_s9_key(r): r for r in s9['elements']}
+    assert len(mine) == len(recomputed), 'S10 produced a duplicate row'
+    assert len(theirs) == len(s9['elements']), 'S9 holds a duplicate row'
+
+    differing = []
+    for k in sorted(mine.keys() & theirs.keys()):
+        diff = {f: [mine[k].get(f), theirs[k].get(f)] for f in S9_ROW_FIELDS
+                if mine[k].get(f) != theirs[k].get(f)}
+        if diff:
+            differing.append({'key': list(k), 'differing_fields': diff})
+
+    table_mine = {(c, b): sum(1 for r in recomputed
+                              if r['class'] == c and r['s7_bin'] == b)
+                  for c in P12_CLASSES for b in S7_BINS}
+    table_s9 = {(r['class'], r['s7_bin']): r['n']
+                for r in s9['reported']['class_by_bin']}
+    table_ok = table_mine == table_s9
+
+    seg = [r for r in recomputed if r['class'] == SEGMENTATION]
+    far = [r for r in seg if r['s7_bin'] == BIN_FAR]
+    hole = [r for r in seg if r['s7_bin'] != BIN_FAR]
+
+    def distinct(rows):
+        return {(r['B'], _from_cut(r['step']), _to_cut(r['step']),
+                 r['e_prime']) for r in rows}
+
+    counts = {
+        'n_rows': len(recomputed), 'n_rows_expected': n_unchanged,
+        'n_segmentation': len(seg), 'n_segmentation_expected': n_segmentation,
+        'n_one_cell_hole': len(hole), 'n_one_cell_hole_expected': n_hole,
+        'n_none_within_1m': len(far), 'n_none_within_1m_expected': n_far,
+        'n_distinct_e_prime': len(distinct(seg)),
+        'n_distinct_e_prime_expected': n_events,
+        'n_distinct_e_prime_one_cell_hole': len(distinct(hole)),
+        'n_distinct_e_prime_one_cell_hole_expected': n_events_hole,
+        'n_distinct_e_prime_none_within_1m': len(distinct(far)),
+        'n_distinct_e_prime_none_within_1m_expected': n_events_far,
+    }
+    counts_ok = all(counts[n] == counts[f'{n}_expected'] for n in (
+        'n_rows', 'n_segmentation', 'n_one_cell_hole', 'n_none_within_1m',
+        'n_distinct_e_prime', 'n_distinct_e_prime_one_cell_hole',
+        'n_distinct_e_prime_none_within_1m'))
+
+    return {
+        'n_recomputed': len(mine), 'n_stored': len(theirs),
+        'n_common': len(mine.keys() & theirs.keys()),
+        'n_rows_equal': len(mine.keys() & theirs.keys()) - len(differing),
+        'only_in_s10': [list(k) for k in sorted(mine.keys() - theirs.keys())],
+        'only_in_s9': [list(k) for k in sorted(theirs.keys() - mine.keys())],
+        'differing_rows': differing,
+        'class_by_bin': [{'class': c, 's7_bin': b, 'n': n}
+                         for (c, b), n in sorted(table_mine.items())],
+        'class_by_bin_equal': table_ok,
+        'counts': counts, 'counts_equal': counts_ok,
+        'ok': (mine.keys() == theirs.keys() and not differing
+               and table_ok and counts_ok),
+    }
+
+
+def g8_assignments(by_kc: dict, rows: list[dict]) -> dict:
+    """G8 check 2: b is assigned at k and e' is unassigned at k', on all 129.
+
+    b's segment is read here and nowhere else, because it IS S_b's identity:
+    every unit P13a and P13b count is keyed by it. `seg_of` runs parallel to
+    B's FULL element arrays, index for index (`extract_with_elements` builds it
+    off `face_elements`), so `seg_of[b_index]` at k and `seg_of[e_prime]` at k'
+    are the two assignments the spec names -- and reading either off
+    `face_elements_only`'s subset would silently name another element.
+
+    Opens no cell at k': a failure here leaves `changed` and `flanked` unseen.
+    """
+    out, bad = [], []
+    for r in rows:
+        side_k, side_kp = by_kc[(r['B'], r['k'])], by_kc[(r['B'], r['kp'])]
+        seg_b = int(side_k['seg_of'][r['b_index']])
+        seg_e = int(side_kp['seg_of'][r['e_prime']])
+        ok = seg_b >= 0 and seg_e < 0
+        rec = {f: r[f] for f in ('A', 'B', 'cut_A', 'step', 'element', 'k',
+                                 'kp', 'b_index', 'b_dir', 'e_prime')}
+        rec.update({'seg_b': seg_b, 'seg_e_prime': seg_e,
+                    'b_assigned_at_k': seg_b >= 0,
+                    'e_prime_assigned_at_kp': seg_e >= 0,
+                    'map_at_k': side_k['stem'], 'map_at_kp': side_kp['stem'],
+                    'ok': ok})
+        out.append(rec)
+        if not ok:
+            bad.append(rec)
+    return {'rows': out, 'n': len(out),
+            'n_ok': sum(1 for r in out if r['ok']), 'not_ok': bad,
+            'ok': bool(out) and not bad}
+
+
+def g8_segments(by_kc: dict, assign_rows: list[dict]) -> dict:
+    """G8 check 3: every S_b is non-empty and holds b.
+
+    MEMBERS COME OFF `seg_of`, not off the segment dict: `_finish` strips
+    `_members` before `graph_and_elements` returns, and `seg_of == id` is the
+    very membership it was built from (`extract_with_elements` sets
+    `seg_of[members] = seg_id`, and an assigned element is never unassigned).
+    The segment's own `n_elements` and `id` are checked against that, so the
+    two disagreeing is a failure rather than a silent choice between them.
+
+    Opens no cell at k' either.
+    """
+    out, bad = [], []
+    for r in assign_rows:
+        side_k = by_kc[(r['B'], r['k'])]
+        segs = side_k['segments']
+        seg = segs[r['seg_b']] if 0 <= r['seg_b'] < len(segs) else None
+        members = np.nonzero(side_k['seg_of'] == r['seg_b'])[0]
+        holds_b = bool(r['b_index'] in set(members.tolist()))
+        rec = {f: r[f] for f in ('B', 'k', 'kp', 'b_index', 'seg_b')}
+        rec.update({
+            'n_members': int(members.size), 'holds_b': holds_b,
+            'n_elements_agrees': seg is not None
+            and int(seg['n_elements']) == int(members.size),
+            'id_agrees': seg is not None and int(seg['id']) == r['seg_b'],
+            'map_at_k': side_k['stem']})
+        rec['ok'] = bool(members.size and holds_b and rec['n_elements_agrees']
+                         and rec['id_agrees'])
+        out.append(rec)
+        if not rec['ok']:
+            bad.append(rec)
+    return {'rows': out, 'n': len(out),
+            'n_ok': sum(1 for r in out if r['ok']), 'not_ok': bad,
+            'ok': bool(out) and not bad}
+
+
+def member_states_at_kp(side_k: dict, side_kp: dict, member: int) -> dict:
+    """One member of S_b, its two cells at k', and the route it took.
+
+    The cells are b's two cells, for every member: `cell_centres_of` gives
+    them in B's own frame at k -- the frame k' shares, both maps being B's own
+    and each anchored at B's spawn -- and `state_at` reads the cell of k' that
+    CONTAINS each centre, by position, through `trinary_map.cell_index`.
+
+    `trinary_map.sample` IS NEVER USED FOR THAT LOOKUP. Off the grid it fills
+    UNKNOWN, which would turn a member that left the map into a freed wall
+    cell; off grid and freed are separate routes here, exactly as they are
+    separate classes in P11. `classify_cells` decides which, in P11's own
+    order, so OFF GRID wins for a member whose cell is gone.
+    """
+    wall, front = cell_centres_of(side_k['el'], member, side_k['rho'])
+    s_wall, s_front = state_at(side_kp, wall), state_at(side_kp, front)
+    return {'member': int(member),
+            'route': classify_cells(s_wall, s_front),
+            'wall_at_kp': state_name(s_wall['state']),
+            'front_at_kp': state_name(s_front['state']),
+            'wall_on_grid_at_kp': s_wall['on_grid'],
+            'front_on_grid_at_kp': s_front['on_grid'],
+            'x': float(side_k['el']['x'][member]),
+            'y': float(side_k['el']['y'][member])}
+
+
+def segment_change(side_k: dict, side_kp: dict, seg_id: int) -> dict:
+    """Is segment `seg_id` of B at k changed at k', and by which routes?
+
+    CHANGED is the spec's disjunction over S_b's members -- some member's wall
+    cell not occupied, or some member's front cell not free, or some member's
+    cell off grid -- and INTACT is its negation, which is "every element of
+    S_b at k then still exists at k'". More than one route can occur, so the
+    routes are a set over the members and never one class.
+
+    This is the one function that reads a member's cells at k', which is what
+    makes a spy on it a proof that a gate failure computed no `changed`.
+    """
+    members = np.nonzero(side_k['seg_of'] == seg_id)[0]
+    rows = [member_states_at_kp(side_k, side_kp, int(m)) for m in members]
+    moved = [r for r in rows if r['route'] != UNCHANGED]
+    return {'seg': int(seg_id), 'n_members': int(members.size),
+            'changed': bool(moved), 'state': CHANGED if moved else INTACT,
+            'n_changed_members': len(moved),
+            'routes': [c for c in P11_CLASSES if c != UNCHANGED
+                       and any(r['route'] == c for r in moved)],
+            'changed_members': moved,
+            'map_at_k': side_k['stem'], 'map_at_kp': side_kp['stem']}
+
+
+def along_on_line(theta_deg: float, x0: float, y0: float,
+                  x1: np.ndarray, y1: np.ndarray) -> np.ndarray:
+    """Distance ALONG a line of angle `theta_deg`, from (x0, y0) to each point.
+
+    `|d . u|` with `u = dir_of(theta)`, which is the projection T1 calls along
+    and the one `_geometry` orders a run's members by. The sign of u does not
+    matter: a '-y' face line reports theta 180 as readily as 0, and this is a
+    distance.
+    """
+    ux, uy = gw.dir_of(theta_deg)
+    return np.abs((x1 - x0) * ux + (y1 - y0) * uy)
+
+
+def nearest_changed_member(seg: dict, change: dict, x: float,
+                           y: float) -> dict | None:
+    """The changed member of S_b nearest to (x, y) ALONG S_b's own line.
+
+    Reported, not tested. (x, y) is e''s midpoint at k' and the members sit at
+    k, both in B's own frame; the line is S_b's reported line at k, which is
+    what "the distance along the line" names. None when nothing changed.
+    """
+    if not change['changed']:
+        return None
+    moved = change['changed_members']
+    d = along_on_line(seg['theta'], x, y,
+                      np.array([r['x'] for r in moved]),
+                      np.array([r['y'] for r in moved]))
+    i = int(np.argmin(d))
+    return {'member': moved[i]['member'], 'route': moved[i]['route'],
+            'along_m': float(d[i])}
+
+
+def face_line_of(el: dict, i: int, tol: float = FACE_LINE_TOL_M) -> dict:
+    """Element `i`'s face line: the same direction, the same across coordinate.
+
+    ACROSS is the projection on the element's own normal and ALONG the
+    projection on its tangent, which are T1's two axes. Normals are
+    axis-aligned by construction (DIRS), so one of the two is x and the other
+    y. "Within 1e-9 m" is read as an inclusive band around `i`'s own across
+    coordinate, the same inclusive 1e-9 m T1's tolerances carry.
+    """
+    d = int(el['dir'][i])
+    nx, ny = float(el['nx'][i]), float(el['ny'][i])
+    same = np.nonzero(el['dir'] == d)[0]
+    across_i = float(el['x'][i]) * nx + float(el['y'][i]) * ny
+    on_line = same[np.abs(el['x'][same] * nx + el['y'][same] * ny
+                          - across_i) <= tol]
+    return {'members': on_line, 'dir': d, 'across_i': across_i, 'tol_m': tol,
+            'along': -el['x'][on_line] * ny + el['y'][on_line] * nx,
+            'along_i': -float(el['x'][i]) * ny + float(el['y'][i]) * nx}
+
+
+def is_flanked(el: dict, seg_of: np.ndarray, i: int,
+               tol: float = FACE_LINE_TOL_M) -> dict:
+    """Does element `i` lie STRICTLY between two members of ONE segment?
+
+    The audit's consequence P14 tests. Such an element is within eps of that
+    segment's line -- its across distance lies between the pair's -- faces the
+    line as they do, is alive since it was never assigned, and falls inside
+    their run with no gap of g or more, so it would have been a member. A
+    flanked e' means the audit missed a rule.
+
+    ONE segment, BOTH sides: a member strictly below `i` along the face line
+    AND a member strictly above it, with the same `seg_of >= 0`. Strictly,
+    with no tolerance of its own -- an element at `i`'s own along coordinate is
+    beside it, not either side of it -- and the unassigned are not a segment,
+    so `seg_of < 0` is skipped rather than treated as one group.
+    """
+    line = face_line_of(el, i, tol)
+    sides: dict[int, list[bool]] = {}
+    for j, t in zip(line['members'].tolist(), line['along'].tolist()):
+        s = int(seg_of[j])
+        if j == i or s < 0:
+            continue
+        below_above = sides.setdefault(s, [False, False])
+        if t < line['along_i']:
+            below_above[0] = True
+        elif t > line['along_i']:
+            below_above[1] = True
+    flanking = sorted(s for s, (below, above) in sides.items()
+                      if below and above)
+    return {'flanked': bool(flanking), 'flanking_segments': flanking,
+            'n_on_face_line': int(line['members'].size),
+            'segments_on_face_line': sorted(sides), 'tol_m': tol}
+
+
+def distinct_groups(rows: list[dict], fields: tuple) -> list[dict]:
+    """One group per distinct value of `fields`, sorted, with its rows.
+
+    WHY THE UNIT IS NOT THE LOSS. Changed, intact and flanked depend on B, its
+    two cuts and the element, never on A, and S9's 129 rows repeat 22 events 2
+    to 14 times, once per A pairing. A count per loss would therefore weight
+    each event by how many As it was matched against, so P13a, P13b and P14
+    are counted on distinct keys and the per-loss counts are reported beside
+    them.
+    """
+    groups: dict[tuple, dict] = {}
+    for r in rows:
+        key = tuple(r[f] for f in fields)
+        groups.setdefault(key, {'key': list(key), 'rows': []})
+        groups[key]['rows'].append(r)
+    return [groups[k] for k in sorted(groups)]
+
+
+def loss_rows(stored: list[dict]) -> list[dict]:
+    """S9's segmentation losses, each with k, k' and its loss shape.
+
+    The units are read from the S9 file the stage pins, as the spec says they
+    are; G8 check 1 is what shows the file's values reproduce.
+    """
+    return [{**{f: r[f] for f in ('A', 'B', 'cut_A', 'step', 'element',
+                                  'b_index', 'b_dir', 'e_prime', 's7_bin')},
+             'k': _from_cut(r['step']), 'kp': _to_cut(r['step']),
+             'shape': shape_of(r['s7_bin'])}
+            for r in stored if r['class'] == SEGMENTATION]
+
+
+def p13_verdict(units: list[dict], shape: str, outcome: str) -> dict:
+    """P13a or P13b, exactly as registered at spec v0.16.
+
+    Counted on distinct (B, k, k', S_b), with "at least half (rounded up)"
+    being `at_least_half`. AN S_b BEHIND LOSSES OF BOTH SHAPES COUNTS IN BOTH,
+    as the spec says, so the selection is membership in the unit's shape SET
+    and the two denominators may overlap.
+
+    The denominator is asserted non-empty: with no unit at all the threshold
+    would be 0 and the prediction would "hold" having been tested on nothing.
+    It is not asserted to be any particular number -- unlike P12's 78, how
+    many distinct S_b sit behind the 129 is not registered and was unknown
+    when this was written.
+    """
+    sel = [u for u in units if shape in u['shapes']]
+    assert sel, (shape, outcome)
+    n_hit = sum(1 for u in sel if u['state'] == outcome)
+    need = at_least_half(len(sel))
+    return {'shape': shape, 'outcome': outcome, 'of': len(sel), 'n': n_hit,
+            'min_required': need, 'holds': n_hit >= need,
+            'by_state': {s: sum(1 for u in sel if u['state'] == s)
+                         for s in (CHANGED, INTACT)},
+            'units': [u['key'] for u in sel]}
+
+
+def p14_verdict(events: list[dict], n_expected: int = N_EVENTS) -> dict:
+    """P14, exactly as registered at spec v0.16: NONE of the 22 e' is flanked.
+
+    "P14 holds only at 0 of 22", so the test is `n_flanked == 0` and there is
+    no threshold to round. The 8 events behind the carve-out hold by
+    construction -- a flanking pair would put an assigned element within 1 m --
+    and the spec asks for them to be checked rather than assumed, so they sit
+    in the denominator and are reported separately as well.
+    """
+    assert len(events) == n_expected, len(events)
+    flanked = [e for e in events if e['flanked']]
+    return {'of': len(events), 'n_flanked': len(flanked),
+            'holds': not flanked,
+            'by_shape': {s: {'of': sum(1 for e in events if e['shape'] == s),
+                             'n_flanked': sum(1 for e in flanked
+                                              if e['shape'] == s)}
+                         for s in S10_SHAPES},
+            'flanked': [{'key': e['key'], 'shape': e['shape'],
+                         'flanking_segments': e['flanking_segments']}
+                        for e in flanked]}
+
+
+def base_rate(by_kc: dict, steps: list[tuple]) -> list[dict]:
+    """Reported, not tested: the share of ALL B's segments at k changed at k'.
+
+    One row per B step that carries at least one of the 129, over every
+    segment of B's map at k and not only the S_b behind a loss. Without it,
+    "changed" could simply be what most segments do between two cuts, and P13a
+    would be reading a background rate as a finding.
+    """
+    out = []
+    for (b, k, kp) in steps:
+        side_k, side_kp = by_kc[(b, k)], by_kc[(b, kp)]
+        changes = [segment_change(side_k, side_kp, int(s['id']))
+                   for s in side_k['segments']]
+        n_ch = sum(1 for c in changes if c['changed'])
+        out.append({
+            'B': b, 'from_cut_B': k, 'to_cut_B': kp,
+            'step': f'cut{k}->cut{kp}', 'map_at_k': side_k['stem'],
+            'map_at_kp': side_kp['stem'], 'n_segments': len(changes),
+            'n_changed': n_ch,
+            'share_changed': (n_ch / len(changes)) if changes else None,
+            'by_route': {r: sum(1 for c in changes if r in c['routes'])
+                         for r in P11_CLASSES if r != UNCHANGED}})
+    return out
+
+
+def _no_change_in(payload: dict) -> None:
+    """Assert a G8 fail payload carries no changed, intact or flanked.
+
+    EXACT KEY NAMES, which is the lesson G7's guard cost a rewrite: a
+    substring ban cannot tell a gate's own part name from a quantity. What is
+    unseen at S10 is `changed`, `intact` and `flanked` and everything built out
+    of them, including the base rate. S9's classes are NOT banned -- they are
+    published (spec v0.15) and check 1 is an equality against them, so a fail
+    file is exactly where they belong.
+    """
+    banned = {'changed', 'intact', 'flanked', 'state', 'routes', 'by_route',
+              'n_changed', 'n_changed_members', 'changed_members',
+              'flanking_segments', 'n_on_face_line', 'segments_on_face_line',
+              'nearest_changed_member', 'base_rate', 'share_changed',
+              'events', 'segment_units', 'by_state', 'P13a', 'P13b', 'P14',
+              'reported', 'verdict'}
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                assert str(k) not in banned, \
+                    f'{path}.{k} is an unseen quantity'
+                walk(v, f'{path}.{k}')
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f'{path}[{i}]')
+
+    walk(payload, '$')
+
+
+def _write_s10(payload: dict, out_dir: Path, prefix: str) -> tuple[Path, str]:
+    """S9's writer, already generic in its prefix, under this stage's name.
+
+    A dated file, never an overwrite, and the sha256 printed. The call site
+    says which stage is writing, which is the whole reason for the name.
+    """
+    return _write_s9(payload, out_dir, prefix)
+
+
+def _print_s10(units: list[dict], events: list[dict], rates: list[dict],
+               per_loss: dict) -> None:
+    """The two tables the verdicts are read off, then the base rate."""
+    print('\ndistinct S_b by loss shape and state at k\'')
+    print(f'  {"loss shape":<34}{CHANGED:>10}{INTACT:>10}{"total":>10}')
+
+    def line(label, sel):
+        n_ch = sum(1 for u in sel if u['changed'])
+        print(f'  {label:<34}{n_ch:>10}{len(sel) - n_ch:>10}{len(sel):>10}')
+
+    for s in S10_SHAPES:
+        line(s, [u for u in units if s in u['shapes']])
+    line('(of those, behind both shapes)',
+         [u for u in units if len(u['shapes']) == 2])
+    line('all distinct S_b', units)
+
+    print('\nper loss, reported not judged: '
+          + '  '.join(f'{s} {v["of"]} ({v[CHANGED]} {CHANGED}, '
+                      f'{v[INTACT]} {INTACT}, {v["flanked"]} flanked)'
+                      for s, v in per_loss['by_shape'].items()))
+
+    print('\ndistinct e\' (B, k, k\', e\')')
+    for e in events:
+        near = e['nearest_changed_member']
+        tail = ('' if near is None else
+                f'  nearest changed member {near["member"]} '
+                f'{near["along_m"]:.4f} m along ({near["route"]})')
+        print(f'  B=k{e["B"]} {e["step"]} e\' {e["e_prime"]}  b {e["b_index"]}'
+              f'  S_b {e["seg_b"]} ({e["n_members"]} members, '
+              f'{e["length_m"]:.2f} m)  {e["shape"]}  {e["state"]}'
+              f'  flanked {e["flanked"]}'
+              + (f'  routes {",".join(e["routes"])}' if e['routes'] else '')
+              + tail)
+
+    print('\nbase rate: all of B\'s segments at k, changed at k\'')
+    print(f'  {"B, step":<34}{"segments":>10}{CHANGED:>10}{"share":>10}')
+    for r in rates:
+        share = ('-' if r['share_changed'] is None
+                 else f'{r["share_changed"]:.4f}')
+        label = f'B=k{r["B"]} {r["step"]}'
+        print(f'  {label:<34}{r["n_segments"]:>10}'
+              f'{r["n_changed"]:>10}{share:>10}')
+
+
+def s10_segments(by_kc: dict, spawn: dict, s9: dict, meta: dict,
+                 out_dir: Path = OUT_DIR_DEFAULT, t0: float | None = None,
+                 cuts: tuple = CUTS, n_robots: int = N_ROBOTS,
+                 n_unchanged: int = N_UNCHANGED,
+                 n_segmentation: int = N_SEGMENTATION,
+                 n_hole: int = N_SEG_HOLE, n_far: int = N_SEG_FAR,
+                 n_events: int = N_EVENTS,
+                 n_events_hole: int = N_EVENTS_HOLE,
+                 n_events_far: int = N_EVENTS_FAR) -> dict:
+    """The order that keeps changed, intact and flanked unseen behind G8.
+
+    G8's three checks run first, and not one cell of a member of S_b is read
+    at k' until all three hold: check 1 reproduces S9, check 2 reads two
+    `seg_of` entries per loss, check 3 counts S_b's members. On a failure the
+    stage writes the G8 comparisons and stops at exit 2, having computed no
+    `changed`, no `intact` and no `flanked` -- the guard is the order of the
+    code, and the payload is walked for those names before it is written.
+
+    `segment_change` runs ONCE PER DISTINCT (B, k, k', S_b), not once per loss:
+    the three quantities do not depend on A, and running it per row would read
+    the same cells up to 14 times and invite a count weighted by A pairings.
+
+    Reads no file and resolves no spawn; `run_s10` is this function plus the
+    corpus I/O, so the whole pipeline runs on hand-built sides.
+    """
+    t0 = time.monotonic() if t0 is None else t0
+    rho = s9['rho_m']
+
+    # ── G8 check 1: S9's own rows, recomputed with S9's own code ────────────
+    recomputed = recompute_s9_rows(by_kc, spawn, rho, cuts, n_robots)
+    c1 = g8_s9_rows(recomputed, s9, n_unchanged, n_segmentation, n_hole,
+                    n_far, n_events, n_events_hole, n_events_far)
+
+    # ── G8 checks 2 and 3: the two assignments, then S_b itself ────────────
+    rows = loss_rows(s9['elements']) if c1['ok'] else []
+    c2 = g8_assignments(by_kc, rows) if c1['ok'] else None
+    c3 = g8_segments(by_kc, c2['rows']) if (c2 and c2['ok']) else None
+
+    g8 = {'1_s9_rows_reproduce': c1,
+          '2_b_assigned_e_prime_unassigned': c2,
+          '3_segment_holds_b': c3,
+          'parts': {'1_s9_rows_reproduce': c1['ok'],
+                    '2_b_assigned_e_prime_unassigned': bool(c2 and c2['ok']),
+                    '3_segment_holds_b': bool(c3 and c3['ok'])}}
+    g8['all_ok'] = all(g8['parts'].values())
+    print('G8: ' + '  '.join(
+        f'check {n.split("_")[0]} {"HOLD" if ok else "FAIL"}'
+        for n, ok in g8['parts'].items())
+        + f'   {"HOLD" if g8["all_ok"] else "FAIL"}')
+
+    if not g8['all_ok']:
+        for label, bad in (
+                ('only in S10', c1['only_in_s10']),
+                ('only in S9', c1['only_in_s9']),
+                ('rows differing', c1['differing_rows'][:10]),
+                ('counts', None if c1['counts_equal'] else c1['counts']),
+                ('class by bin', None if c1['class_by_bin_equal']
+                 else c1['class_by_bin']),
+                ('assignments', None if c2 is None else c2['not_ok'][:10]),
+                ('segments', None if c3 is None else c3['not_ok'][:10])):
+            if bad:
+                print(f'  {label}: {bad}')
+        fail = dict(meta)
+        fail.update({'stage': 's10_g8_fail', 'seconds': time.monotonic() - t0,
+                     'G8': g8})
+        _no_change_in(fail)
+        path, _ = _write_s10(fail, out_dir, 's10_g8_fail')
+        die('G8 failed; no cell of a member of S_b was read at k\', and no '
+            'changed, intact or flanked was computed, written or printed. '
+            f'{path}')
+
+    # ── S_b per loss, then one change read per distinct (B, k, k', S_b) ─────
+    seg_b_of = {_s9_key(r): r['seg_b'] for r in c2['rows']}
+    for r in rows:
+        r['seg_b'] = seg_b_of[_s9_key(r)]
+
+    unit_groups = distinct_groups(rows, UNIT_FIELDS)
+    change_of = {}
+    for u in unit_groups:
+        b, k, kp, seg = u['key']
+        change_of[tuple(u['key'])] = segment_change(
+            by_kc[(b, k)], by_kc[(b, kp)], seg)
+
+    units = []
+    for u in unit_groups:
+        b, k, kp, seg = u['key']
+        ch = change_of[tuple(u['key'])]
+        side_k = by_kc[(b, k)]
+        units.append({
+            'key': list(u['key']), 'B': b, 'k': k, 'kp': kp,
+            'step': f'cut{k}->cut{kp}', 'seg_b': seg,
+            # in S10_SHAPES order, not sorted: an S_b behind losses of both
+            # shapes carries both, and the order is the spec's, not the
+            # alphabet's
+            'shapes': [s for s in S10_SHAPES
+                       if any(r['shape'] == s for r in u['rows'])],
+            'n_losses': len(u['rows']),
+            'n_e_prime': len({r['e_prime'] for r in u['rows']}),
+            'state': ch['state'], 'changed': ch['changed'],
+            'routes': ch['routes'],
+            'n_changed_members': ch['n_changed_members'],
+            'n_members': ch['n_members'],
+            'length_m': float(side_k['segments'][seg]['length']),
+            'map_at_k': ch['map_at_k'], 'map_at_kp': ch['map_at_kp']})
+
+    events = []
+    for g in distinct_groups(rows, EVENT_FIELDS):
+        b, k, kp, j = g['key']
+        side_k, side_kp = by_kc[(b, k)], by_kc[(b, kp)]
+        # b, its direction, S_b and the shape are functions of the event, not
+        # of A: a row disagreeing would mean one e' with two b's behind it
+        fixed = {(r['b_index'], r['b_dir'], r['seg_b'], r['shape'])
+                 for r in g['rows']}
+        assert len(fixed) == 1, (g['key'], fixed)
+        b_index, b_dir, seg, shape = fixed.pop()
+        ch = change_of[(b, k, kp, seg)]
+        flank = is_flanked(side_kp['el'], side_kp['seg_of'], j)
+        events.append({
+            'key': list(g['key']), 'B': b, 'k': k, 'kp': kp,
+            'step': f'cut{k}->cut{kp}', 'e_prime': j, 'b_index': b_index,
+            'b_dir': b_dir, 'seg_b': seg, 'shape': shape,
+            'n_losses': len(g['rows']),
+            'losses': [[r['A'], r['cut_A'], r['element']] for r in g['rows']],
+            'state': ch['state'], 'changed': ch['changed'],
+            'routes': ch['routes'],
+            'n_changed_members': ch['n_changed_members'],
+            'n_members': ch['n_members'],
+            'length_m': float(side_k['segments'][seg]['length']),
+            'nearest_changed_member': nearest_changed_member(
+                side_k['segments'][seg], ch,
+                float(side_kp['el']['x'][j]), float(side_kp['el']['y'][j])),
+            'flanked': flank['flanked'],
+            'flanking_segments': flank['flanking_segments'],
+            'n_on_face_line': flank['n_on_face_line'],
+            'segments_on_face_line': flank['segments_on_face_line'],
+            'map_at_k': side_k['stem'], 'map_at_kp': side_kp['stem']})
+
+    # ── the three verdicts, judged on the distinct units ───────────────────
+    p13a = p13_verdict(units, SHAPE_FAR, CHANGED)
+    p13b = p13_verdict(units, SHAPE_HOLE, INTACT)
+    p14 = p14_verdict(events, n_events)
+    for name, v in (('P13a', p13a), ('P13b', p13b)):
+        print(f'{name}: {"HOLD" if v["holds"] else "FAIL"}  {v["n"]}/'
+              f'{v["of"]} distinct S_b behind the {v["shape"]} losses are '
+              f'{v["outcome"]}, {v["min_required"]} required')
+    print(f'P14: {"HOLD" if p14["holds"] else "FAIL"}  {p14["n_flanked"]}/'
+          f'{p14["of"]} distinct e\' flanked, 0 required')
+
+    # ── reported, not tested ───────────────────────────────────────────────
+    flanked_of = {tuple(e['key']): e['flanked'] for e in events}
+    per_loss = {
+        'note': 'per loss, i.e. once per A pairing: reported beside the '
+                'verdicts and never judged, since changed, intact and '
+                'flanked do not depend on A',
+        'of': len(rows),
+        'by_shape': {
+            s: {'of': sum(1 for r in rows if r['shape'] == s),
+                CHANGED: sum(1 for r in rows if r['shape'] == s
+                             and change_of[_unit_key(r)]['changed']),
+                INTACT: sum(1 for r in rows if r['shape'] == s
+                            and not change_of[_unit_key(r)]['changed']),
+                'flanked': sum(1 for r in rows if r['shape'] == s
+                               and flanked_of[_event_key(r)])}
+            for s in S10_SHAPES}}
+    steps = sorted({(r['B'], r['k'], r['kp']) for r in rows})
+    rates = base_rate(by_kc, steps)
+    _print_s10(units, events, rates, per_loss)
+
+    payload = dict(meta)
+    payload.update({
+        'seconds': time.monotonic() - t0, 'rho_m': rho,
+        'eps_m': gw.EPS_FACTOR * rho, 'face_line_tol_m': FACE_LINE_TOL_M,
+        'n_losses': len(rows), 'n_segment_units': len(units),
+        'n_events': len(events),
+        'G8': g8, 'losses': rows, 'segment_units': units, 'events': events,
+        'P13a': p13a, 'P13b': p13b, 'P14': p14,
+        'reported': {
+            'changed_losses': [
+                {k: e[k] for k in ('key', 'B', 'step', 'e_prime', 'seg_b',
+                                   'shape', 'routes', 'n_changed_members',
+                                   'n_members', 'nearest_changed_member')}
+                for e in events if e['changed']],
+            # "for every loss, the number of members of S_b at k and its
+            # length": per distinct S_b, which covers every loss, with the
+            # number of losses behind it beside so a per-loss reading is
+            # recoverable without weighting a verdict by A
+            'segment_sizes': [
+                {k: u[k] for k in ('key', 'B', 'step', 'seg_b', 'n_members',
+                                   'length_m', 'shapes', 'state', 'n_losses',
+                                   'n_e_prime')}
+                for u in units],
+            'per_loss': per_loss,
+            'base_rate': rates}})
+    path, sha = _write_s10(payload, out_dir, 's10_segments')
+    out = dict(payload)
+    out['written'] = {'path': str(path), 'sha256': sha}
+    return out
+
+
+def run_s10(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+            ) -> dict:
+    """S10: the segments behind the unassigned elements. Spec v0.16.
+
+    G8 against S9, then P13a, P13b and P14, judged separately.
+
+    The gates, in this order and each before anything it could mislead:
+
+    1. REFUSES ON AN EDITED TREE, before anything is loaded, as S5 to S9 do.
+    2. REGISTRATION BEFORE RESULT: `e15c94b`, the commit that registered P13a,
+       P13b and P14, must be an ancestor of HEAD, and the spec at HEAD must
+       carry all three "REGISTERED" headers.
+    3. The three paragraphs are read from the spec AT HEAD by script and
+       stored verbatim, never retyped.
+    4. THE S9 FILE IS PINNED BY HASH. G8 check 1 is an equality against S9's
+       132 rows, their classes and its class-by-bin table, so the file is
+       named and its sha256 required; any other S9 run is a different set.
+
+    NOTHING IS LOADED UNTIL ALL FOUR HOLD. The two function-scope imports sit
+    below them rather than at the top of the body, so a refusal costs no map,
+    no graph JSON and no spawn table.
+
+    S_b's members come from `load_side`, which rebuilds B's elements with
+    `graph_and_elements` -- `g` from that map's own graph JSON `thresholds.g`,
+    and the map's sha256 checked against the JSON -- exactly as S5 to S9 do.
+    """
+    t0 = time.monotonic()
+
+    porcelain = _git('status', '--porcelain').splitlines()
+    dirty = [ln for ln in porcelain if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    if not _is_ancestor(S10_REGISTRATION):
+        die(f'{S10_REGISTRATION} registered P13a, P13b and P14 and is not an '
+            f'ancestor of HEAD {head[:7] or "(unknown)"}; the registration '
+            'must be in history behind the code that tests it')
+    spec_text = _git('show', f'HEAD:{SPEC_REL}')
+    for gate in (P13A_GATE_TEXT, P13B_GATE_TEXT, P14_GATE_TEXT):
+        if gate not in spec_text:
+            die(f'the spec at HEAD carries no "{gate}"; S10 evaluates three '
+                'registered predictions or it does not run')
+    verbatim = {'P13a': spec_paragraph(spec_text, P13A_HEADER),
+                'P13b': spec_paragraph(spec_text, P13B_HEADER),
+                'P14': spec_paragraph(spec_text, P14_HEADER)}
+    spec_rev = _git('log', '-1', '--format=%h', '--', SPEC_REL)
+
+    s9_path = out_dir / S9_RESULT
+    if not s9_path.is_file():
+        die(f'{s9_path} is missing; G8 check 1 reproduces its rows and the '
+            'units are read from it')
+    s9_sha = _sha256(s9_path)
+    if s9_sha != S9_SHA256:
+        die(f'{s9_path.name} has sha256 {s9_sha}, not the {S9_SHA256} G8 is '
+            'stated against; that is a different S9 run')
+    s9 = json.loads(s9_path.read_text())
+
+    import fit_world_transform as fwt                       # noqa: PLC0415
+    import robot_divergence as rd                           # noqa: PLC0415
+
+    stems = corpus_stems(variant)
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    by_kc = {}
+    for s in stems:
+        k, c = gw._k_and_cut(s, 'S10 needs the robot and the cut')
+        by_kc[(k, c)] = load_side(s)
+
+    meta = {'stage': 's10', 'head': head, 'spec_rev': spec_rev,
+            'tree_dirty': bool(dirty),
+            'untracked': sum(1 for ln in porcelain if ln.startswith('??')),
+            'variant': variant, 't2': False,
+            'spec': 'SPEC_b2_divergence_walls v0.16, G8/P13a/P13b/P14',
+            'predictions_verbatim': verbatim,
+            'cell_centre': CELL_CENTRE_OFFSET,
+            'sources': {'s9': {'file': s9_path.name, 'sha256': s9_sha,
+                               'head': s9.get('head')}},
+            'note': "S_b is the segment of seg_of[b] at k, its members read "
+                    "off seg_of; every member's two cells are found at k' by "
+                    'position with trinary_map.cell_index and never with '
+                    'trinary_map.sample. No viewpoint weight is computed'}
+    return s10_segments(by_kc, spawn, s9, meta, out_dir, t0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--stage',
-                    choices=('g2', 's5', 's6', 's7', 's8', 's9'),
+                    choices=('g2', 's5', 's6', 's7', 's8', 's9', 's10'),
                     default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
                          'the segment guard on the 20 maps; s5 evaluates G3, '
@@ -3383,7 +4289,9 @@ def main() -> int:
                          "the cell states behind the losses, gates them on S7 "
                          'with G6, and tests P11; s9 sorts the unchanged '
                          'losses into segmentation or geometry, gates them on '
-                         'S8 with G7, and tests P12')
+                         'S8 with G7, and tests P12; s10 reads the segment b '
+                         'belonged to at k, gates it on S9 with G8, and tests '
+                         'P13a, P13b and P14')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -3413,6 +4321,9 @@ def main() -> int:
         return 0
     if args.stage == 's9':
         run_s9(args.out_dir)
+        return 0
+    if args.stage == 's10':
+        run_s10(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')
