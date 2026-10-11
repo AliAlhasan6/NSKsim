@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.16, draft)
+# SPEC — B2 divergence on walls (v0.17, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -25,8 +25,12 @@ G7 holds on all four parts and P12 holds, 75 of 78 unchanged losses in
 segmentation — and closes O7 and opens O8. It registers no prediction: the
 chain stopped at S9 by decision on 10 Oct 2026. v0.16 reverses that decision,
 reopens O8, and registers P13a, P13b and P14 on whether the segment b belonged
-to at k is intact at k', before any member of that segment was read at k'. No
-code is written until the stop-point questions in §11 are answered.
+to at k is intact at k', before any member of that segment was read at k'.
+v0.17 records the S10 results — G8 holds on all three checks, P13a fails, 2 of
+5 segments changed, and P13b holds, 12 of 14 intact, and P14 holds, 0 of 22
+flanked — and registers P15 and P16 on which rule of the extraction drops each
+e', before any class was computed for any e'. No code is written until the
+stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -942,6 +946,189 @@ P14 tests the audit, not the maps: a flanked e' means the audit missed a rule.
 
 P13a, P13b and P14 are judged separately.
 
+### S10 results
+
+Source: `experiments/logs/divergence/s10_segments_20261011T134922Z.json`, sha256
+`fa750aa97fc08c5a1f177b78019832c3c5794ef42a8898d9d8f6d1d7127407e2`. The file is not
+tracked — `experiments/logs/` is gitignored — so the hash stands in for it. Produced
+at HEAD `ed2a618`, the commit that added the stage, against a clean tree. Every
+number here was read from that file by script.
+
+- **G8: HOLD,** all three checks.
+- **P13a: FAIL.** 2 of the 5 distinct S_b behind the 54 losses with no assigned
+  element within 1 m are changed; 3 required.
+- **P13b: HOLD.** 12 of the 14 distinct S_b behind the 75 one-cell holes are intact;
+  7 required.
+- **P14: HOLD.** 0 of the 22 distinct e' are flanked.
+- No S_b lies behind both shapes. Of the 19 distinct S_b, 4 are changed and 15
+  intact.
+- Per loss, reported and not judged: one-cell holes 20 changed, 55 intact; no
+  assigned element within 1 m, 11 changed, 43 intact; 0 flanked. Judged per loss,
+  every verdict would be the same.
+- Of the 22 distinct e', 18 sit on intact S_b and 4 on changed ones.
+
+**Table 1 — distinct S_b by loss shape and state at k'.** An S_b behind losses of
+both shapes would count in both rows, as P13a and P13b are registered; none does.
+
+| loss shape | changed | intact | total |
+|---|---|---|---|
+| one-cell hole | 2 | 12 | 14 |
+| none within 1 m | 2 | 3 | 5 |
+| of those, behind both shapes | 0 | 0 | 0 |
+| **all distinct S_b** | 4 | 15 | 19 |
+
+**Table 2 — the 22 distinct e'.** S_b is named by its segment id in B's map at k, and
+`b` by its element index there; `members` and `length` are S_b's. The last two
+columns are empty where S_b is intact.
+
+| B | step | e' | b | S_b | members | length | shape | state | flanked | routes | nearest changed member |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| k0 | cut60 → cut120 | 436 | 198 | 3 | 52 | 5.05 m | none within 1 m | changed | no | wall cell freed | 120, 4.74 m |
+| k0 | cut120 → cut240 | 760 | 511 | 5 | 53 | 5.15 m | one-cell hole | intact | no | — | — |
+| k0 | cut240 → cut1200 | 86 | 14 | 6 | 72 | 7.15 m | one-cell hole | intact | no | — | — |
+| k1 | cut60 → cut120 | 431 | 198 | 2 | 53 | 5.15 m | none within 1 m | intact | no | — | — |
+| k1 | cut60 → cut120 | 432 | 199 | 2 | 53 | 5.15 m | none within 1 m | intact | no | — | — |
+| k1 | cut120 → cut240 | 735 | 511 | 6 | 53 | 5.15 m | one-cell hole | intact | no | — | — |
+| k1 | cut240 → cut1200 | 85 | 14 | 5 | 72 | 7.15 m | one-cell hole | intact | no | — | — |
+| k1 | cut240 → cut1200 | 232 | 105 | 11 | 15 | 1.55 m | one-cell hole | intact | no | — | — |
+| k2 | cut60 → cut120 | 137 | 88 | 5 | 40 | 3.85 m | none within 1 m | changed | no | front cell closed | 80, 2.50 m |
+| k2 | cut120 → cut240 | 17 | 14 | 3 | 74 | 7.15 m | one-cell hole | intact | no | — | — |
+| k2 | cut120 → cut240 | 799 | 543 | 5 | 53 | 5.15 m | one-cell hole | intact | no | — | — |
+| k2 | cut240 → cut1200 | 227 | 106 | 5 | 73 | 7.15 m | one-cell hole | intact | no | — | — |
+| k2 | cut240 → cut1200 | 1017 | 716 | 8 | 55 | 5.15 m | one-cell hole | changed | no | wall cell freed, front cell closed | 652, 1.30 m |
+| k2 | cut240 → cut1200 | 1022 | 722 | 9 | 54 | 5.16 m | one-cell hole | intact | no | — | — |
+| k2 | cut240 → cut1200 | 1099 | 801 | 7 | 56 | 5.15 m | one-cell hole | changed | no | wall cell freed | 809, 2.70 m |
+| k3 | cut240 → cut1200 | 571 | 518 | 5 | 73 | 7.15 m | one-cell hole | intact | no | — | — |
+| k3 | cut240 → cut1200 | 1118 | 947 | 6 | 53 | 5.15 m | none within 1 m | intact | no | — | — |
+| k3 | cut240 → cut1200 | 1119 | 948 | 6 | 53 | 5.15 m | none within 1 m | intact | no | — | — |
+| k4 | cut60 → cut120 | 81 | 57 | 2 | 73 | 7.15 m | none within 1 m | intact | no | — | — |
+| k4 | cut60 → cut120 | 83 | 58 | 2 | 73 | 7.15 m | none within 1 m | intact | no | — | — |
+| k4 | cut120 → cut240 | 551 | 308 | 5 | 53 | 5.15 m | one-cell hole | intact | no | — | — |
+| k4 | cut240 → cut1200 | 543 | 358 | 5 | 72 | 7.15 m | one-cell hole | intact | no | — | — |
+
+**Table 3 — the base rate per step,** over every segment of B at k and not only the
+S_b behind a loss.
+
+| B | step | segments | changed | share |
+|---|---|---|---|---|
+| k0 | cut60 → cut120 | 4 | 4 | 1.0000 |
+| k0 | cut120 → cut240 | 7 | 1 | 0.1429 |
+| k0 | cut240 → cut1200 | 10 | 4 | 0.4000 |
+| k1 | cut60 → cut120 | 4 | 2 | 0.5000 |
+| k1 | cut120 → cut240 | 7 | 2 | 0.2857 |
+| k1 | cut240 → cut1200 | 12 | 5 | 0.4167 |
+| k2 | cut60 → cut120 | 7 | 3 | 0.4286 |
+| k2 | cut120 → cut240 | 7 | 2 | 0.2857 |
+| k2 | cut240 → cut1200 | 10 | 7 | 0.7000 |
+| k3 | cut240 → cut1200 | 11 | 3 | 0.2727 |
+| k4 | cut60 → cut120 | 7 | 3 | 0.4286 |
+| k4 | cut120 → cut240 | 7 | 4 | 0.5714 |
+| k4 | cut240 → cut1200 | 9 | 4 | 0.4444 |
+| **total** | 13 steps | 102 | 44 | 0.4314 |
+
+What S10 shows:
+
+1. **P13a's reason is refuted.** It rested on the minimum length: a segment that met
+   l_min at k can fail it at k' only by losing members. The 5 S_b behind the 54
+   losses are 3.85–7.15 m long, and 3 of them are intact.
+2. **Where S_b is changed, the change is not near e'.** In all 4 changed S_b, the
+   nearest changed member lies 1.30–4.74 m along the line from e'.
+3. **Base rate,** reported and not tested. Over the 13 steps that carry a loss, 44 of
+   102 segments are changed (0.43). Behind the losses, 4 of 19 are (0.21). This
+   comparison was not registered and carries no verdict.
+
+**Record.** v0.16 withdrew the claim that most losses come from our segmentation and
+not from B's map changing, until S10 reported. S10 restores it in a narrower form. Of
+the 19 segments behind the 129 losses, 15 are intact at k', and in the other 4 the
+nearest change is at least 1.29 m from e'. So these losses do not come from changes
+to the walls they sit on. They come from the extraction, whose rules read the whole
+map and its grid (v0.16 audit).
+
+## The rule that drops each e' (P15, P16)
+
+**Why.** S10 shows the losses sit on walls that are intact at k', or changed far from
+e'. The v0.16 audit names the rules by which an element can end unassigned. Which
+rule acts decides what a fix must change, and whether openings and corners can be
+read from segment ends.
+
+**Definitions.**
+
+- **Units.** The 22 distinct (B, k, k', e') of S10: 18 on intact S_b, 4 on changed
+  ones. The 22 are not independent: 3 S_b each carry two e'. Counts per distinct S_b
+  are reported beside, not judged.
+- **Trace.** `graph_walls`' extraction on B at k', and on B at k for the line
+  quantities at k, rerun with a read-only tracer. For every peak iteration it
+  records:
+  - the seed (theta index and d bin);
+  - whether e' voted in the seed window;
+  - e''s distance to the iteration's first-pass line and to its refitted line;
+  - whether e' was a candidate of the refitted line;
+  - which run held e', the run's length, and whether the run was accepted.
+
+  The tracer changes no output (G9, check 2).
+- **Counterpart** of a member m of S_b at k': the element at k' with m's direction,
+  in the cell found at m's wall-cell position with `trinary_map.cell_index`, if one
+  exists.
+- **Home iteration H:** the iteration at k' that assigned the most counterparts of
+  S_b's members. Ties go to the earliest. If no counterpart is assigned at k', e' has
+  no home.
+- **Refitted line:** the line of the iteration's own refit, the one its second
+  candidate pass tests against; not the line `_segment` may report for a segment.
+- **Class.** If H does not exist, e' is in **No home**. Otherwise e' takes the first
+  class that applies at H:
+  - **R3, line:** e' is farther than eps from H's refitted line.
+  - **R4, facing:** e' does not face H's refitted line.
+  - **R5+R6, short run:** e' is a candidate of H, in a run rejected as shorter than
+    l_min.
+  - **Other:** none of the above.
+
+**What is computed.**
+- **G9 (S11 against S10).** S11 refuses an edited tree, requires this registration's
+  commit to be an ancestor of HEAD, and pins S10's result file by sha256
+  `fa750aa97fc08c5a1f177b78019832c3c5794ef42a8898d9d8f6d1d7127407e2`. Checks, in
+  order:
+  1. S10's stored values reproduce exactly through the functions S10's stage calls,
+     without writing an S10 result file: the verdicts, the 19 S_b and their states,
+     the 22 e' rows, and the base rate.
+  2. **Non-interference:** for every map traced, `seg_of` and the segment list with
+     the tracer on equal those with it off, exactly.
+  3. Every e' is unassigned in the traced run, and lands in exactly one class.
+
+  On a gate failure, S11 classifies nothing and prints no class.
+- **Reported, not tested.**
+  - Classes by loss shape, and by intact or changed S_b.
+  - At H: the angle between H's refitted line and the wall's axis, in degrees; e''s
+    distance to the first-pass and refitted lines, against eps; and the along-extent
+    of H's candidates against S_b's span, which shows whether H's line was fitted to
+    elements beyond the wall.
+  - The same line quantities at k, for the iteration that assigned b.
+  - For R5+R6: whether the gap that cut e''s run lies where H's candidates were
+    thinned by R3.
+  - After H, why no later iteration took e': never in a seeded window again (R1), its
+    seed bin exhausted (R2), a later rejected run (R5+R6), or an aborted iteration
+    (R7).
+  - For no home: whether R1 or R2 kept S_b's counterparts unassigned.
+  - Whether e''s nearest assigned same-direction element at k' is on e''s own face
+    line.
+
+S11 computes no viewpoint weight, so O3's mixed-cut prediction can still be
+registered.
+
+Registered: 11 Oct 2026, before any quantity below was computed on the real maps.
+
+**P15. REGISTERED 11 Oct 2026.** At least 11 of the 22 distinct e' are in R3. Reason:
+the audit's only exclusion rule for a live element beside members of the same face is
+the line. H's line is refitted to every candidate along the infinite line, so it can
+move while the wall's own cells do not.
+
+**P16. REGISTERED 11 Oct 2026.** None of the 22 is in Other. P16 holds only at 0 of
+22. A candidate in an accepted run is assigned, so an e' in Other would mean the
+audit or the trace missed a rule. R4 is not excluded: a segment can hold faces of
+more than one direction, so R4 can act, and its count is reported. P16 tests the
+audit and the trace, not the maps.
+
+P15 and P16 are judged separately.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -983,11 +1170,13 @@ P13a, P13b and P14 are judged separately.
 - **O8. Unassigned face elements at k'. REOPENED in v0.16.** For 129 of the 213
   losses b's two cells hold their states at k', so B's grid at k' still carries the
   face element e' between them, in b's direction — and yet `graph_walls` does not
-  assign e' to a wall segment, while b, its counterpart at the earlier cut k,
-  was assigned. Why the segmenter drops an element whose two cells are unchanged,
-  and what changed about it between B's two cuts, is unexplained. Not pursued: the
-  chain stopped at S9 by decision on 10 Oct 2026. Reopened in v0.16. S10 tests P13a,
-  P13b and P14.
+  assign e' to a wall segment, while b, its counterpart at the earlier cut k, was
+  assigned. Why the segmenter drops an element whose two cells are unchanged, and
+  what changed about it between B's two cuts, is unexplained. Not pursued: the chain
+  stopped at S9 by decision on 10 Oct 2026. Reopened in v0.16. S10 tests P13a, P13b
+  and P14. S10 (v0.17): the losses sit on walls intact at k', or changed
+  at least 1.29 m from e'. P13a failed; P13b and P14 held. S11 traces which rule
+  drops each e' (P15, P16).
 
 ## 11. Stop points for Claude Code
 
