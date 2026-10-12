@@ -1127,3 +1127,196 @@ def test_the_off_wall_sample_excludes_returns_that_fell_off_the_grid():
     pts = gw.off_wall_sample(returns, b1['hit'], b1['inside'])
     assert pts.shape == (1, 2), 'the one in-grid miss, not the off-grid return'
     assert pts[0].tolist() == pytest.approx([0.40, 0.30])
+
+
+# ─────────────────────────────── the tracer ──────────────────────────────────
+# SPEC_b2_divergence_walls v0.17, G9 check 2. Synthetic maps only.
+
+def _suite_maps():
+    """Every synthetic map the cases above build, by name."""
+    five = five_face_grid()
+    return {
+        'five_faces': five,
+        'five_faces_no_jitter': five_face_grid(jitter=False),
+        'rotated_30': (rotate_nn(five[0], 30.0), five[1], five[2]),
+        'gaps': gap_grid(),
+        'disc_rho_0p02': disc_grid(0.02),
+        'disc_rho_0p1': disc_grid(0.1),
+        'end_states': end_state_grid(),
+        'two_sided_1': two_sided_grid(1),
+        'two_sided_2': two_sided_grid(2),
+    }
+
+
+BREAKS = {'default': {}, 'A1': {'eps_factor': 0.4}, 'A2': {'dtheta_deg': 90.0},
+          'A3': {'g': 4.0 * ROBOT_RADIUS}, 'A4': {'l_min': 0.1},
+          'A5': {'endpoint_precedence': ('unknown', 'occupied')},
+          'A6': {'enforce_facing': False}, 'A7': {'tie_break_seed': 1}}
+
+# every map under the default parameters, and every named break on the two
+# maps that are cheap under all of them
+TRACED_CASES = ([(m, 'default') for m in _suite_maps()]
+                + [(m, b) for m in ('gaps', 'five_faces_no_jitter')
+                   for b in BREAKS if b != 'default'])
+
+
+def _off_and_on(grid, rho, origin, p, tracer=None):
+    tracer = gw.Tracer() if tracer is None else tracer
+    off = gw.extract_with_elements(grid, rho, origin, p)
+    on = gw.extract_with_elements(grid, rho, origin, p, tracer)
+    return off, on, tracer
+
+
+@pytest.mark.parametrize('name,brk', TRACED_CASES)
+def test_tracer_off_and_on_give_the_same_extraction(name, brk):
+    """The whole graph, `seg_of` and the elements, with the tracer on and off.
+
+    And the record agrees with the loop it watched: one iteration recorded per
+    `n_iter`, on whichever exit path each took, every seedable bin accounted
+    for, and the members it read inside the loop exactly the assigned ones.
+    """
+    grid, rho, origin = _suite_maps()[name]
+    (g0, e0, s0), (g1, e1, s1), tracer = _off_and_on(
+        grid, rho, origin, params(**BREAKS[brk]))
+    assert np.array_equal(s0, s1) and s0.dtype == s1.dtype
+    assert json.dumps(g0['segments']) == json.dumps(g1['segments'])
+    assert json.dumps(g0, default=str) == json.dumps(g1, default=str)
+    for k in ('x', 'y', 'nx', 'ny', 'row', 'col', 'dir'):
+        assert np.array_equal(e0[k], e1[k])
+
+    assert len(tracer.iterations) == g1['extraction']['n_iterations']
+    assert tracer.n_iter == g1['extraction']['n_iterations']
+    assert sum(1 for r in tracer.iterations
+               if r['exit'] == gw.TRACE_ACCEPTED) == len(g1['lines'])
+    check = tracer.self_check()
+    assert check['ok'], check
+    assert np.array_equal(tracer.seg_of, s1)
+    assigned = tracer.assigned_in()
+    assert np.array_equal(assigned >= 0, s1 >= 0)
+
+
+def test_tracer_records_an_iteration_on_each_real_abort_path():
+    """Three of the four aborts, the accepting exit, and the count.
+
+    A1's narrow eps on the gap map reaches the no-first-pass-candidate, the
+    no-refit-candidate and the no-accepted-run aborts in one pass, beside an
+    accepted line, and every one of them is an iteration the loop counted.
+    """
+    grid, rho, origin = gap_grid()
+    _off, (graph, _el, _seg_of), tracer = _off_and_on(
+        grid, rho, origin, params(eps_factor=0.4))
+    exits = [r['exit'] for r in tracer.iterations]
+    for want in (gw.TRACE_NO_FIRST_PASS, gw.TRACE_NO_REFIT_CANDIDATE,
+                 gw.TRACE_NO_ACCEPTED_RUN, gw.TRACE_ACCEPTED):
+        assert want in exits, want
+    assert len(exits) == graph['extraction']['n_iterations']
+    assert [r['i'] for r in tracer.iterations] == list(range(len(exits)))
+
+    # each record holds exactly what its exit path had reached
+    for r in tracer.iterations:
+        reached_first = r['exit'] != gw.TRACE_NO_LIVE_VOTE
+        reached_refit = r['exit'] not in (gw.TRACE_NO_LIVE_VOTE,
+                                          gw.TRACE_NO_FIRST_PASS)
+        reached_runs = r['exit'] in (gw.TRACE_NO_ACCEPTED_RUN,
+                                     gw.TRACE_ACCEPTED)
+        assert (r['d_peak'] is not None) == reached_first
+        assert (r['theta_line'] is not None) == reached_refit
+        assert (r['runs'] is not None) == reached_runs
+        if r['exit'] == gw.TRACE_NO_FIRST_PASS:
+            assert not r['cand_first'].any()
+        if r['exit'] == gw.TRACE_NO_REFIT_CANDIDATE:
+            assert r['cand_first'].any() and not r['cand'].any()
+        if r['exit'] == gw.TRACE_NO_ACCEPTED_RUN:
+            assert r['runs'] and not any(r['run_accepted'])
+            assert all(length < 0.5 for length in r['run_length'])
+        if r['exit'] == gw.TRACE_ACCEPTED:
+            assert any(r['run_accepted'])
+            for ok, length, seg in zip(r['run_accepted'], r['run_length'],
+                                       r['run_seg']):
+                assert ok == (length >= 0.5)
+                assert (seg is not None) == ok
+
+
+def test_tracer_records_the_empty_window_abort(monkeypatch):
+    """The first abort, which no map reaches, driven through the generator.
+
+    `peaks` yields a bin only while its live window sum is at least vote_min,
+    and the live votes of a window are exactly its alive voters, so the loop's
+    own empty-window guard cannot fire on a real pass. A generator that hands
+    the loop one empty bin first shows the guard's exit is recorded like the
+    others -- and that the tracer took the seed it was handed, not one it
+    asked `peaks` for.
+    """
+    grid, rho, origin = gap_grid()
+    real_peaks = gw.Hough.peaks
+
+    def peaks(self, vote_min, tie_break_seed=None):
+        empty = np.argwhere(self.window_all() == 0)[0]
+        yield int(empty[0]), int(empty[1]), 0
+        yield from real_peaks(self, vote_min, tie_break_seed)
+
+    monkeypatch.setattr(gw.Hough, 'peaks', peaks)
+    tracer = gw.Tracer()
+    graph, _el, _seg_of = gw.extract_with_elements(grid, rho, origin, params(),
+                                                   tracer)
+    first = tracer.iterations[0]
+    assert first['exit'] == gw.TRACE_NO_LIVE_VOTE
+    assert not first['in_window'].any()
+    assert (first['d_peak'], first['cand_first'], first['runs']) == (
+        None, None, None)
+    assert len(tracer.iterations) == graph['extraction']['n_iterations']
+    assert {r['exit'] for r in tracer.iterations} >= {
+        gw.TRACE_NO_LIVE_VOTE, gw.TRACE_NO_ACCEPTED_RUN, gw.TRACE_ACCEPTED}
+
+
+def test_tracer_copies_what_it_is_handed():
+    """A record is a copy: later iterations do not rewrite an earlier one.
+
+    `alive` is one array for the whole pass and ends with every assigned
+    element False. Had the tracer kept the reference, every record's `alive`
+    would be that final array; the first record's is all True instead, and no
+    record shares memory with another's.
+    """
+    grid, rho, origin = five_face_grid()
+    _off, (_graph, _el, seg_of), tracer = _off_and_on(grid, rho, origin,
+                                                      params())
+    recs = tracer.iterations
+    assert len(recs) > 5 and (seg_of >= 0).any()
+    assert recs[0]['alive'].all() and not recs[-1]['alive'].all()
+    assigned = tracer.assigned_in()
+    for r in recs:
+        # alive at an iteration is "not assigned by an earlier one"
+        assert np.array_equal(r['alive'], ~((assigned >= 0)
+                                            & (assigned < r['i'])))
+    for a, b in zip(recs, recs[1:]):
+        assert not np.shares_memory(a['alive'], b['alive'])
+        assert not np.shares_memory(a['in_window'], b['in_window'])
+    # and the accumulator's two tables are its own, not the Hough's
+    assert tracer.bins.base is None and tracer.vote.base is None
+
+
+@pytest.mark.parametrize('seed', [None, 1, 2])
+def test_tracer_leaves_the_tie_break_seed_alone(seed):
+    """A7's break reorders the whole pass; the tracer neither reads nor sets it."""
+    grid, rho, origin = five_face_grid(jitter=False)
+    p = params(tie_break_seed=seed)
+    before = dict(p.__dict__)
+    (g0, _e0, s0), (g1, _e1, s1), _tracer = _off_and_on(grid, rho, origin, p)
+    assert p.__dict__ == before
+    assert np.array_equal(s0, s1)
+    assert json.dumps(g0, default=str) == json.dumps(g1, default=str)
+
+
+def test_tracer_defaults_to_none_all_the_way_down(tmp_path):
+    """`graph_and_elements` threads it; left out, it is not there at all."""
+    grid, rho, origin = gap_grid()
+    write_map(tmp_path, 'scratch', grid, rho, origin)
+    plain = gw.graph_and_elements('scratch', tmp_path, params(), 'test')
+    tracer = gw.Tracer()
+    traced = gw.graph_and_elements('scratch', tmp_path, params(), 'test',
+                                   tracer)
+    assert json.dumps(plain[0], default=str) == json.dumps(traced[0],
+                                                           default=str)
+    assert np.array_equal(plain[2], traced[2])
+    assert len(tracer.iterations) == traced[0]['extraction']['n_iterations']
+    assert tracer.self_check()['ok']

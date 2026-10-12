@@ -3991,6 +3991,128 @@ def _print_s10(units: list[dict], events: list[dict], rates: list[dict],
               f'{r["n_changed"]:>10}{share:>10}')
 
 
+def s10_derive(by_kc: dict, rows: list[dict], assign_rows: list[dict],
+               n_events: int = N_EVENTS) -> dict:
+    """Everything S10 computes once G8 holds: units, events, verdicts, report.
+
+    Lifted out of `s10_segments` whole, so that S11's G9 check 1 reproduces
+    S10's stored values through the statements S10 itself runs and not
+    through a copy of them. It prints nothing and writes nothing; the caller
+    does both. `rows` are the loss rows and gain `seg_b` here, as before.
+    """
+    # ── S_b per loss, then one change read per distinct (B, k, k', S_b) ─────
+    seg_b_of = {_s9_key(r): r['seg_b'] for r in assign_rows}
+    for r in rows:
+        r['seg_b'] = seg_b_of[_s9_key(r)]
+
+    unit_groups = distinct_groups(rows, UNIT_FIELDS)
+    change_of = {}
+    for u in unit_groups:
+        b, k, kp, seg = u['key']
+        change_of[tuple(u['key'])] = segment_change(
+            by_kc[(b, k)], by_kc[(b, kp)], seg)
+
+    units = []
+    for u in unit_groups:
+        b, k, kp, seg = u['key']
+        ch = change_of[tuple(u['key'])]
+        side_k = by_kc[(b, k)]
+        units.append({
+            'key': list(u['key']), 'B': b, 'k': k, 'kp': kp,
+            'step': f'cut{k}->cut{kp}', 'seg_b': seg,
+            # in S10_SHAPES order, not sorted: an S_b behind losses of both
+            # shapes carries both, and the order is the spec's, not the
+            # alphabet's
+            'shapes': [s for s in S10_SHAPES
+                       if any(r['shape'] == s for r in u['rows'])],
+            'n_losses': len(u['rows']),
+            'n_e_prime': len({r['e_prime'] for r in u['rows']}),
+            'state': ch['state'], 'changed': ch['changed'],
+            'routes': ch['routes'],
+            'n_changed_members': ch['n_changed_members'],
+            'n_members': ch['n_members'],
+            'length_m': float(side_k['segments'][seg]['length']),
+            'map_at_k': ch['map_at_k'], 'map_at_kp': ch['map_at_kp']})
+
+    events = []
+    for g in distinct_groups(rows, EVENT_FIELDS):
+        b, k, kp, j = g['key']
+        side_k, side_kp = by_kc[(b, k)], by_kc[(b, kp)]
+        # b, its direction, S_b and the shape are functions of the event, not
+        # of A: a row disagreeing would mean one e' with two b's behind it
+        fixed = {(r['b_index'], r['b_dir'], r['seg_b'], r['shape'])
+                 for r in g['rows']}
+        assert len(fixed) == 1, (g['key'], fixed)
+        b_index, b_dir, seg, shape = fixed.pop()
+        ch = change_of[(b, k, kp, seg)]
+        flank = is_flanked(side_kp['el'], side_kp['seg_of'], j)
+        events.append({
+            'key': list(g['key']), 'B': b, 'k': k, 'kp': kp,
+            'step': f'cut{k}->cut{kp}', 'e_prime': j, 'b_index': b_index,
+            'b_dir': b_dir, 'seg_b': seg, 'shape': shape,
+            'n_losses': len(g['rows']),
+            'losses': [[r['A'], r['cut_A'], r['element']] for r in g['rows']],
+            'state': ch['state'], 'changed': ch['changed'],
+            'routes': ch['routes'],
+            'n_changed_members': ch['n_changed_members'],
+            'n_members': ch['n_members'],
+            'length_m': float(side_k['segments'][seg]['length']),
+            'nearest_changed_member': nearest_changed_member(
+                side_k['segments'][seg], ch,
+                float(side_kp['el']['x'][j]), float(side_kp['el']['y'][j])),
+            'flanked': flank['flanked'],
+            'flanking_segments': flank['flanking_segments'],
+            'n_on_face_line': flank['n_on_face_line'],
+            'segments_on_face_line': flank['segments_on_face_line'],
+            'map_at_k': side_k['stem'], 'map_at_kp': side_kp['stem']})
+
+    # ── the three verdicts, judged on the distinct units ───────────────────
+    p13a = p13_verdict(units, SHAPE_FAR, CHANGED)
+    p13b = p13_verdict(units, SHAPE_HOLE, INTACT)
+    p14 = p14_verdict(events, n_events)
+
+    # ── reported, not tested ───────────────────────────────────────────────
+    flanked_of = {tuple(e['key']): e['flanked'] for e in events}
+    per_loss = {
+        'note': 'per loss, i.e. once per A pairing: reported beside the '
+                'verdicts and never judged, since changed, intact and '
+                'flanked do not depend on A',
+        'of': len(rows),
+        'by_shape': {
+            s: {'of': sum(1 for r in rows if r['shape'] == s),
+                CHANGED: sum(1 for r in rows if r['shape'] == s
+                             and change_of[_unit_key(r)]['changed']),
+                INTACT: sum(1 for r in rows if r['shape'] == s
+                            and not change_of[_unit_key(r)]['changed']),
+                'flanked': sum(1 for r in rows if r['shape'] == s
+                               and flanked_of[_event_key(r)])}
+            for s in S10_SHAPES}}
+    steps = sorted({(r['B'], r['k'], r['kp']) for r in rows})
+    rates = base_rate(by_kc, steps)
+    return {
+        'n_losses': len(rows), 'n_segment_units': len(units),
+        'n_events': len(events),
+        'losses': rows, 'segment_units': units, 'events': events,
+        'P13a': p13a, 'P13b': p13b, 'P14': p14,
+        'reported': {
+            'changed_losses': [
+                {k: e[k] for k in ('key', 'B', 'step', 'e_prime', 'seg_b',
+                                   'shape', 'routes', 'n_changed_members',
+                                   'n_members', 'nearest_changed_member')}
+                for e in events if e['changed']],
+            # "for every loss, the number of members of S_b at k and its
+            # length": per distinct S_b, which covers every loss, with the
+            # number of losses behind it beside so a per-loss reading is
+            # recoverable without weighting a verdict by A
+            'segment_sizes': [
+                {k: u[k] for k in ('key', 'B', 'step', 'seg_b', 'n_members',
+                                   'length_m', 'shapes', 'state', 'n_losses',
+                                   'n_e_prime')}
+                for u in units],
+            'per_loss': per_loss,
+            'base_rate': rates}}
+
+
 def s10_segments(by_kc: dict, spawn: dict, s9: dict, meta: dict,
                  out_dir: Path = OUT_DIR_DEFAULT, t0: float | None = None,
                  cuts: tuple = CUTS, n_robots: int = N_ROBOTS,
@@ -4062,76 +4184,10 @@ def s10_segments(by_kc: dict, spawn: dict, s9: dict, meta: dict,
             'changed, intact or flanked was computed, written or printed. '
             f'{path}')
 
-    # ── S_b per loss, then one change read per distinct (B, k, k', S_b) ─────
-    seg_b_of = {_s9_key(r): r['seg_b'] for r in c2['rows']}
-    for r in rows:
-        r['seg_b'] = seg_b_of[_s9_key(r)]
-
-    unit_groups = distinct_groups(rows, UNIT_FIELDS)
-    change_of = {}
-    for u in unit_groups:
-        b, k, kp, seg = u['key']
-        change_of[tuple(u['key'])] = segment_change(
-            by_kc[(b, k)], by_kc[(b, kp)], seg)
-
-    units = []
-    for u in unit_groups:
-        b, k, kp, seg = u['key']
-        ch = change_of[tuple(u['key'])]
-        side_k = by_kc[(b, k)]
-        units.append({
-            'key': list(u['key']), 'B': b, 'k': k, 'kp': kp,
-            'step': f'cut{k}->cut{kp}', 'seg_b': seg,
-            # in S10_SHAPES order, not sorted: an S_b behind losses of both
-            # shapes carries both, and the order is the spec's, not the
-            # alphabet's
-            'shapes': [s for s in S10_SHAPES
-                       if any(r['shape'] == s for r in u['rows'])],
-            'n_losses': len(u['rows']),
-            'n_e_prime': len({r['e_prime'] for r in u['rows']}),
-            'state': ch['state'], 'changed': ch['changed'],
-            'routes': ch['routes'],
-            'n_changed_members': ch['n_changed_members'],
-            'n_members': ch['n_members'],
-            'length_m': float(side_k['segments'][seg]['length']),
-            'map_at_k': ch['map_at_k'], 'map_at_kp': ch['map_at_kp']})
-
-    events = []
-    for g in distinct_groups(rows, EVENT_FIELDS):
-        b, k, kp, j = g['key']
-        side_k, side_kp = by_kc[(b, k)], by_kc[(b, kp)]
-        # b, its direction, S_b and the shape are functions of the event, not
-        # of A: a row disagreeing would mean one e' with two b's behind it
-        fixed = {(r['b_index'], r['b_dir'], r['seg_b'], r['shape'])
-                 for r in g['rows']}
-        assert len(fixed) == 1, (g['key'], fixed)
-        b_index, b_dir, seg, shape = fixed.pop()
-        ch = change_of[(b, k, kp, seg)]
-        flank = is_flanked(side_kp['el'], side_kp['seg_of'], j)
-        events.append({
-            'key': list(g['key']), 'B': b, 'k': k, 'kp': kp,
-            'step': f'cut{k}->cut{kp}', 'e_prime': j, 'b_index': b_index,
-            'b_dir': b_dir, 'seg_b': seg, 'shape': shape,
-            'n_losses': len(g['rows']),
-            'losses': [[r['A'], r['cut_A'], r['element']] for r in g['rows']],
-            'state': ch['state'], 'changed': ch['changed'],
-            'routes': ch['routes'],
-            'n_changed_members': ch['n_changed_members'],
-            'n_members': ch['n_members'],
-            'length_m': float(side_k['segments'][seg]['length']),
-            'nearest_changed_member': nearest_changed_member(
-                side_k['segments'][seg], ch,
-                float(side_kp['el']['x'][j]), float(side_kp['el']['y'][j])),
-            'flanked': flank['flanked'],
-            'flanking_segments': flank['flanking_segments'],
-            'n_on_face_line': flank['n_on_face_line'],
-            'segments_on_face_line': flank['segments_on_face_line'],
-            'map_at_k': side_k['stem'], 'map_at_kp': side_kp['stem']})
-
-    # ── the three verdicts, judged on the distinct units ───────────────────
-    p13a = p13_verdict(units, SHAPE_FAR, CHANGED)
-    p13b = p13_verdict(units, SHAPE_HOLE, INTACT)
-    p14 = p14_verdict(events, n_events)
+    # ── S_b, the change per distinct unit, the verdicts and the report ─────
+    d = s10_derive(by_kc, rows, c2['rows'], n_events)
+    units, events = d['segment_units'], d['events']
+    p13a, p13b, p14 = d['P13a'], d['P13b'], d['P14']
     for name, v in (('P13a', p13a), ('P13b', p13b)):
         print(f'{name}: {"HOLD" if v["holds"] else "FAIL"}  {v["n"]}/'
               f'{v["of"]} distinct S_b behind the {v["shape"]} losses are '
@@ -4139,51 +4195,14 @@ def s10_segments(by_kc: dict, spawn: dict, s9: dict, meta: dict,
     print(f'P14: {"HOLD" if p14["holds"] else "FAIL"}  {p14["n_flanked"]}/'
           f'{p14["of"]} distinct e\' flanked, 0 required')
 
-    # ── reported, not tested ───────────────────────────────────────────────
-    flanked_of = {tuple(e['key']): e['flanked'] for e in events}
-    per_loss = {
-        'note': 'per loss, i.e. once per A pairing: reported beside the '
-                'verdicts and never judged, since changed, intact and '
-                'flanked do not depend on A',
-        'of': len(rows),
-        'by_shape': {
-            s: {'of': sum(1 for r in rows if r['shape'] == s),
-                CHANGED: sum(1 for r in rows if r['shape'] == s
-                             and change_of[_unit_key(r)]['changed']),
-                INTACT: sum(1 for r in rows if r['shape'] == s
-                            and not change_of[_unit_key(r)]['changed']),
-                'flanked': sum(1 for r in rows if r['shape'] == s
-                               and flanked_of[_event_key(r)])}
-            for s in S10_SHAPES}}
-    steps = sorted({(r['B'], r['k'], r['kp']) for r in rows})
-    rates = base_rate(by_kc, steps)
-    _print_s10(units, events, rates, per_loss)
+    _print_s10(units, events, d['reported']['base_rate'],
+               d['reported']['per_loss'])
 
     payload = dict(meta)
     payload.update({
         'seconds': time.monotonic() - t0, 'rho_m': rho,
         'eps_m': gw.EPS_FACTOR * rho, 'face_line_tol_m': FACE_LINE_TOL_M,
-        'n_losses': len(rows), 'n_segment_units': len(units),
-        'n_events': len(events),
-        'G8': g8, 'losses': rows, 'segment_units': units, 'events': events,
-        'P13a': p13a, 'P13b': p13b, 'P14': p14,
-        'reported': {
-            'changed_losses': [
-                {k: e[k] for k in ('key', 'B', 'step', 'e_prime', 'seg_b',
-                                   'shape', 'routes', 'n_changed_members',
-                                   'n_members', 'nearest_changed_member')}
-                for e in events if e['changed']],
-            # "for every loss, the number of members of S_b at k and its
-            # length": per distinct S_b, which covers every loss, with the
-            # number of losses behind it beside so a per-loss reading is
-            # recoverable without weighting a verdict by A
-            'segment_sizes': [
-                {k: u[k] for k in ('key', 'B', 'step', 'seg_b', 'n_members',
-                                   'length_m', 'shapes', 'state', 'n_losses',
-                                   'n_e_prime')}
-                for u in units],
-            'per_loss': per_loss,
-            'base_rate': rates}})
+        'G8': g8, **d})
     path, sha = _write_s10(payload, out_dir, 's10_segments')
     out = dict(payload)
     out['written'] = {'path': str(path), 'sha256': sha}
@@ -4275,10 +4294,974 @@ def run_s10(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
     return s10_segments(by_kc, spawn, s9, meta, out_dir, t0)
 
 
+# ── S11: the rule that drops each e', G9, P15 and P16
+#    (spec v0.17, "The rule that drops each e' (P15, P16)") ──────────────────
+
+S11_REGISTRATION = 'dc754de'       # registered P15 and P16 (spec v0.17)
+P15_HEADER = '**P15. REGISTERED'
+P16_HEADER = '**P16. REGISTERED'
+P15_GATE_TEXT = 'P15. REGISTERED'
+P16_GATE_TEXT = 'P16. REGISTERED'
+S10_RESULT = 's10_segments_20261011T134922Z.json'
+S10_SHA256 = ('fa750aa97fc08c5a1f177b78019832c3c5794ef42a8898d9d8f6d1d7127407'
+              'e2')
+P15_MIN_R3 = 11                    # "at least 11 of the 22 distinct e'"
+
+# The five classes, in the order the spec decides them: no home first, then
+# the first of R3, R4 and R5+R6 that applies at H, then Other.
+NO_HOME = 'no_home'
+R3_LINE = 'R3_line'
+R4_FACING = 'R4_facing'
+R56_SHORT_RUN = 'R5+R6_short_run'
+OTHER = 'other'
+DROP_CLASSES = (NO_HOME, R3_LINE, R4_FACING, R56_SHORT_RUN, OTHER)
+
+# What an iteration that seeded a window holding the element did with it.
+LATER_ABORTED = 'R7_aborted_before_runs'
+LATER_BEYOND_EPS = 'R3_beyond_eps'
+LATER_NOT_FACING = 'R4_not_facing'
+LATER_SHORT_RUN = 'R5+R6_rejected_run'
+LATER_ASSIGNED = 'assigned'
+LATER_OUTCOMES = (LATER_ABORTED, LATER_BEYOND_EPS, LATER_NOT_FACING,
+                  LATER_SHORT_RUN, LATER_ASSIGNED)
+
+# The sections of S10's result file G9 check 1 reproduces: "the verdicts, the
+# 19 S_b and their states, the 22 e' rows, and the base rate" are in these.
+S10_COMPARED = ('n_losses', 'n_segment_units', 'n_events', 'losses',
+                'segment_units', 'events', 'P13a', 'P13b', 'P14', 'reported')
+
+
+def _as_stored(node):
+    """`node` as `_write_s9` would store it and `json.loads` read it back."""
+    return json.loads(json.dumps(node, sort_keys=True, default=str))
+
+
+def _row_order_free(node):
+    """`node` with every list of rows put in one canonical order.
+
+    S10's loss rows follow the order of S9's file, and three of its lists
+    inherit that order: `losses`, each event's `losses`, and the rows of G8
+    checks 2 and 3. The order of rows is not a stored VALUE, so check 1
+    compares those lists as sorted lists -- every row still has to be there,
+    equal field for field and as many times -- and everything else as it is.
+    """
+    def key(v):
+        return json.dumps(v, sort_keys=True)
+
+    if isinstance(node, dict):
+        return {k: (sorted((_row_order_free(x) for x in v), key=key)
+                    if k in ('losses', 'rows') and isinstance(v, list)
+                    else _row_order_free(v))
+                for k, v in node.items()}
+    if isinstance(node, list):
+        return [_row_order_free(v) for v in node]
+    return node
+
+
+def g9_s10_reproduces(by_kc: dict, spawn: dict, s10: dict,
+                      cuts: tuple = CUTS, n_robots: int = N_ROBOTS,
+                      n_events: int = N_EVENTS,
+                      s9_sha: str | None = None) -> tuple[dict, dict | None]:
+    """G9 check 1: S10's stored values, through the functions S10 calls.
+
+    `recompute_s9_rows`, `loss_rows`, G8's checks 2 and 3 and `s10_derive`,
+    which is the body of `s10_segments` itself -- and no `_write_s10`, so no
+    second S10 result file appears. S9's file is not read: the loss rows are
+    the recomputed ones, and they are held equal to the 129 S10 stored, which
+    it read from S9's file. `s9_sha`, when given, is the S9 hash S10's file
+    must name, so the chain behind the pinned file is the pinned chain.
+
+    Compared exactly, with no tolerance: every section of `S10_COMPARED`, and
+    G8's checks 2 and 3. Returns the check and what was derived, which is
+    None unless the derivation ran.
+    """
+    rho = s10['rho_m']
+    recomputed = recompute_s9_rows(by_kc, spawn, rho, cuts, n_robots)
+    rows = loss_rows(recomputed)
+    c2 = g8_assignments(by_kc, rows)
+    c3 = g8_segments(by_kc, c2['rows']) if c2['ok'] else None
+
+    derived, asserted = None, None
+    if c3 is not None and c3['ok']:
+        try:
+            derived = s10_derive(by_kc, rows, c2['rows'], n_events)
+        except AssertionError as e:
+            asserted = repr(e)
+
+    sections = {}
+    if derived is not None:
+        for name in S10_COMPARED:
+            sections[name] = (
+                _row_order_free({name: _as_stored(derived[name])})
+                == _row_order_free({name: s10.get(name)}))
+    stored_g8 = s10.get('G8', {})
+    g8_equal = {
+        name: (mine is not None and _row_order_free(_as_stored(mine))
+               == _row_order_free(stored_g8.get(name)))
+        for name, mine in (('2_b_assigned_e_prime_unassigned', c2),
+                           ('3_segment_holds_b', c3))}
+    named = (s10.get('sources', {}).get('s9', {}).get('sha256')
+             if s9_sha is not None else None)
+    check = {
+        'n_loss_rows_recomputed': len(rows),
+        'n_loss_rows_stored': len(s10.get('losses', [])),
+        'g8_assignments_ok': c2['ok'],
+        'g8_segments_ok': bool(c3 and c3['ok']),
+        'derivation_asserted': asserted,
+        # a list, not a dict keyed by section: the section names are S10's
+        # own payload keys, and a fail file is walked for some of them
+        'sections_compared': [{'section': n, 'equal': eq}
+                              for n, eq in sections.items()],
+        'sections_differing': sorted(n for n, eq in sections.items()
+                                     if not eq),
+        'g8_checks_equal': g8_equal,
+        's9_sha256_named_by_s10': named,
+        's9_sha256_expected': s9_sha,
+        'wrote_an_s10_file': False,
+    }
+    check['ok'] = bool(
+        derived is not None and all(sections.values())
+        and len(sections) == len(S10_COMPARED) and all(g8_equal.values())
+        and (s9_sha is None or named == s9_sha))
+    return check, derived
+
+
+def trace_extraction(run, tracer_factory=None) -> dict:
+    """One map's extraction twice: tracer off, then tracer on.
+
+    `run(tracer)` returns `(graph, el, seg_of)` and is the SAME call both
+    times apart from that one argument, which is what G9 check 2 is a
+    statement about.
+    """
+    tracer = (tracer_factory or gw.Tracer)()
+    g0, el0, s0 = run(None)
+    g1, el1, s1 = run(tracer)
+    return {'off': {'graph': g0, 'el': el0, 'seg_of': s0},
+            'on': {'graph': g1, 'el': el1, 'seg_of': s1},
+            'tracer': tracer}
+
+
+def trace_grid(side: dict, params: gw.Params | None = None,
+               tracer_factory=None) -> dict:
+    """`trace_extraction` on a side's own grid; what the synthetic cases use."""
+    params = gw.Params() if params is None else params
+    return trace_extraction(
+        lambda t: gw.extract_with_elements(side['grid'], side['rho'],
+                                           side['origin'], params, t),
+        tracer_factory)
+
+
+def trace_stem(side: dict) -> dict:
+    """`trace_extraction` on a corpus map, built exactly as `load_side` builds.
+
+    `Params(g)` with g from the map's own graph JSON `thresholds.g`, and the
+    map's sha256 checked against that JSON on both runs. A different g is a
+    different extraction, and the trace would describe a run S10 never saw.
+    """
+    stem = side['stem']
+    out_json = gw.OUT_DIR_DEFAULT / f'{stem}.json'
+    if not out_json.is_file():
+        die(f'{stem}: no graph JSON at {out_json}; graph_walls writes it')
+    saved = json.loads(out_json.read_text())
+    params = gw.Params(g=saved['thresholds']['g']['value'])
+
+    def run(tracer):
+        graph, el, seg_of, _grid = gw.graph_and_elements(
+            stem, params=params, g_source=f'{out_json.name} thresholds.g',
+            tracer=tracer)
+        if graph['map_sha256'] != saved['map_sha256']:
+            die(f'{stem}: map sha256 {graph["map_sha256"][:12]} is not the '
+                f'JSON\'s {saved["map_sha256"][:12]}; the JSON describes '
+                'another map')
+        return graph, el, seg_of
+
+    return trace_extraction(run)
+
+
+def _dumped(node) -> str:
+    return json.dumps(node, sort_keys=True, default=str)
+
+
+def _same_elements(a: dict, b: dict) -> bool:
+    return a['n'] == b['n'] and all(
+        np.array_equal(a[k], b[k])
+        for k in ('x', 'y', 'nx', 'ny', 'row', 'col', 'dir'))
+
+
+def g9_non_interference(by_kc: dict, traced: dict) -> dict:
+    """G9 check 2: per traced map, tracer on equals tracer off, exactly.
+
+    The registered comparison is `seg_of` and the segment list. Two things
+    are held beside it and both are STRICTER THAN THE SPEC. The tracer-off run
+    must be the loaded side S10's reproduction read -- same elements, same
+    `seg_of`, same segments -- or an e' index would name another element in
+    the trace. And the trace must pass its own `self_check`: one record per
+    iteration on every exit path, every seedable bin accounted for, the
+    recorded members exactly the assigned elements.
+
+    `whole_graph_equal` is reported and does not gate.
+    """
+    rows = []
+    for (b, c) in sorted(traced):
+        t, side = traced[(b, c)], by_kc[(b, c)]
+        off, on = t['off'], t['on']
+        rec = {
+            'B': b, 'cut': c, 'map': side['stem'],
+            'n_elements': int(on['el']['n']),
+            'n_segments': len(on['graph']['segments']),
+            'seg_of_equal': bool(
+                off['seg_of'].shape == on['seg_of'].shape
+                and np.array_equal(off['seg_of'], on['seg_of'])),
+            'segments_equal': (_dumped(off['graph']['segments'])
+                               == _dumped(on['graph']['segments'])),
+            'whole_graph_equal': _dumped(off['graph']) == _dumped(on['graph']),
+            'off_is_the_loaded_side': bool(
+                _same_elements(side['el'], off['el'])
+                and _same_elements(side['el'], on['el'])
+                and np.array_equal(side['seg_of'], off['seg_of'])
+                and _dumped(side['segments'])
+                == _dumped(off['graph']['segments'])),
+            'trace_self_check': t['tracer'].self_check()}
+        rec['ok'] = bool(rec['seg_of_equal'] and rec['segments_equal']
+                         and rec['off_is_the_loaded_side']
+                         and rec['trace_self_check']['ok'])
+        rows.append(rec)
+    return {'rows': rows, 'n': len(rows),
+            'n_ok': sum(1 for r in rows if r['ok']),
+            'not_ok': [r for r in rows if not r['ok']],
+            'ok': bool(rows) and all(r['ok'] for r in rows)}
+
+
+def g9_unassigned(traced: dict, events: list[dict]) -> dict:
+    """G9 check 3, first half: every e' is unassigned in the traced run.
+
+    Three readings of one fact, all required: the traced run's `seg_of`, the
+    `seg_of` the tracer copied at the end of that run, and no accepted run of
+    any recorded iteration holding e'.
+    """
+    rows = []
+    for e in events:
+        t = traced[(e['B'], e['kp'])]
+        j = e['e_prime']
+        rec = {'B': e['B'], 'k': e['k'], 'kp': e['kp'], 'e_prime': j,
+               'seg_of_traced_run': int(t['on']['seg_of'][j]),
+               'seg_of_recorded': int(t['tracer'].seg_of[j]),
+               'assigning_iteration': int(t['tracer'].assigned_in()[j])}
+        rec['ok'] = (rec['seg_of_traced_run'] < 0
+                     and rec['seg_of_recorded'] < 0
+                     and rec['assigning_iteration'] < 0)
+        rows.append(rec)
+    return {'rows': rows, 'n': len(rows),
+            'n_ok': sum(1 for r in rows if r['ok']),
+            'not_ok': [r for r in rows if not r['ok']],
+            'ok': bool(rows) and all(r['ok'] for r in rows)}
+
+
+def g9_one_class(classes: list, n_events: int = N_EVENTS) -> dict:
+    """G9 check 3, second half: every e' lands in exactly one class.
+
+    A post-condition on the classification, so it is the one check that runs
+    after `classify_drop`; a failure still prints and writes no class. One
+    class per e', each a member of `DROP_CLASSES`, and as many as there are
+    registered e'.
+    """
+    bad = [c for c in classes if c not in DROP_CLASSES]
+    return {'n': len(classes), 'n_expected': n_events,
+            'n_not_a_registered_label': len(bad),
+            'ok': len(classes) == n_events and not bad}
+
+
+def counterparts(side_k: dict, side_kp: dict, seg_id: int) -> list[dict]:
+    """Each member of S_b, and the element of k' that is its counterpart.
+
+    The spec's definition: the element at k' with m's direction, in the cell
+    found at m's wall-cell position with `trinary_map.cell_index`. `state_at`
+    is that lookup -- the one S8 and S10 use, and never `trinary_map.sample`
+    -- and `find_e_prime` names the element by (row, col, dir). None where the
+    cell is off k''s grid or carries no element in that direction.
+    """
+    out = []
+    for m in np.nonzero(side_k['seg_of'] == seg_id)[0].tolist():
+        wall, _front = cell_centres_of(side_k['el'], m, side_k['rho'])
+        cell = state_at(side_kp, wall)
+        j = (find_e_prime(side_kp['el'], (cell['row'], cell['col']),
+                          int(side_k['el']['dir'][m]))
+             if cell['on_grid'] else None)
+        out.append({'member': int(m), 'counterpart': j})
+    return out
+
+
+def home_iteration(assigned_in: np.ndarray, cps: list[dict]) -> dict:
+    """H: the iteration at k' that assigned the most counterparts of S_b.
+
+    Ties go to the earliest iteration. `H` is None when no counterpart is
+    assigned at k', which is "e' has no home".
+    """
+    tally: dict[int, int] = {}
+    for c in cps:
+        if c['counterpart'] is None:
+            continue
+        it = int(assigned_in[c['counterpart']])
+        if it >= 0:
+            tally[it] = tally.get(it, 0) + 1
+    home = min(tally, key=lambda it: (-tally[it], it)) if tally else None
+    return {'H': home, 'n_members': len(cps),
+            'n_counterparts': sum(1 for c in cps
+                                  if c['counterpart'] is not None),
+            'n_counterparts_assigned': sum(tally.values()),
+            'n_counterparts_assigned_by_H': tally.get(home, 0),
+            'counterparts_by_iteration': [[it, tally[it]]
+                                          for it in sorted(tally)]}
+
+
+def refit_line_of(rec: dict) -> tuple:
+    """(theta, d) of an iteration's OWN refit, or (None, None) before it.
+
+    The spec's "refitted line": the one the iteration's second candidate pass
+    tests against (`_refit`'s result in `extract_with_elements`), not the line
+    `_segment` may go on to report for a segment cut on it.
+    """
+    return rec['theta_line'], rec['d_line']
+
+
+def element_at(tracer, it: int, e: int) -> dict:
+    """The registered per-iteration record of element `e` at iteration `it`.
+
+    The seed; whether e voted in the seed window; its distance to the
+    first-pass line and to the refitted line; whether it was a candidate of
+    the refitted line; and the run that held it, that run's length and whether
+    it was accepted. A field the iteration never reached is None, and an
+    element that was not a candidate has no run.
+
+    Distance and facing are evaluated SEPARATELY, off the recorded lines with
+    `line_candidates`' own two expressions, because the candidate mask is
+    their conjunction and cannot say which of R3 and R4 excluded an element.
+    """
+    rec = tracer.iterations[it]
+    out = {'iteration': int(it), 'exit': rec['exit'],
+           'seed_theta_index': rec['theta_index'],
+           'seed_d_bin': rec['d_bin'], 'seed_theta_deg': rec['theta_peak'],
+           'seed_votes': rec['votes'],
+           'voted_in_seed_window': bool(rec['in_window'][e]),
+           'alive': bool(rec['alive'][e]),
+           'dist_first_pass_m': None, 'candidate_first_pass': None,
+           'dist_refit_m': None, 'within_eps_of_refit': None,
+           'facing_dot_refit': None, 'faces_refit': None,
+           'candidate': None, 'run': None}
+    if rec['d_peak'] is not None:
+        out['dist_first_pass_m'] = float(
+            tracer.distance(rec['theta_peak'], rec['d_peak'])[e])
+        out['candidate_first_pass'] = bool(rec['cand_first'][e])
+    theta, d = refit_line_of(rec)
+    if theta is not None:
+        dist = float(tracer.distance(theta, d)[e])
+        dot = float(tracer.facing(theta)[e])
+        out.update({'dist_refit_m': dist,
+                    'within_eps_of_refit': bool(dist <= tracer.eps),
+                    'facing_dot_refit': dot,
+                    'faces_refit': bool(dot > gw.FACING_MIN),
+                    'candidate': bool(rec['cand'][e])})
+    if rec['runs'] is not None and rec['cand'][e]:
+        pos = int(np.nonzero(rec['order'] == e)[0][0])
+        for r, (lo, hi) in enumerate(rec['runs']):
+            if lo <= pos < hi:
+                out['run'] = {'index': r, 'n_elements': hi - lo,
+                              'length_m': rec['run_length'][r],
+                              'accepted': rec['run_accepted'][r],
+                              'segment': rec['run_seg'][r],
+                              'position_in_candidates': pos}
+    return out
+
+
+def classify_drop(home, at_home: dict | None) -> str:
+    """The class of one e', exactly as registered at spec v0.17.
+
+    No home is decided first. Otherwise the FIRST that applies at H:
+
+        R3     e' is farther than eps from H's refitted line
+        R4     e' does not face H's refitted line
+        R5+R6  e' is a candidate of H, in a run rejected as shorter than l_min
+        Other  none of the above
+
+    "Farther than eps" is the negation of `line_candidates`' own inclusive
+    `<= eps`, and "does not face" the negation of its `> FACING_MIN`, both
+    already evaluated in `at_home` against the iteration's refit.
+    """
+    if home is None:
+        return NO_HOME
+    if not at_home['within_eps_of_refit']:
+        return R3_LINE
+    if not at_home['faces_refit']:
+        return R4_FACING
+    run = at_home['run']
+    if at_home['candidate'] and run is not None and not run['accepted']:
+        return R56_SHORT_RUN
+    return OTHER
+
+
+def later_fate(tracer, e: int, since: int) -> dict:
+    """Reported: what became of element `e` after iteration `since`.
+
+    Every (theta, d) window that holds e is one seed bin, and each ends one of
+    three ways: never seedable (its live sum never reached `vote_min`),
+    dropped (it fell below `vote_min` unyielded -- with the first, R1), or
+    exhausted by the iteration it seeded (R2). For each iteration after
+    `since` that seeded a window holding e, what that iteration did with e is
+    named: aborted before any run (R7), e beyond eps of its refit (R3), e not
+    facing it (R4), or e in a rejected run (R5+R6). `since = -1` covers the
+    whole pass.
+
+    The tally covers every such iteration; only the ACCEPTING ones are listed
+    one by one, since an element can sit in thousands of seeded windows.
+    """
+    half, n_d = tracer.half, tracer.n_d
+    w = {'n_windows': 0, 'never_seedable': 0,
+         'exhausted_up_to_since': 0, 'exhausted_after': 0,
+         'dropped_up_to_since': 0, 'dropped_after': 0}
+    for j in np.nonzero(tracer.vote[e])[0].tolist():
+        b0 = int(tracer.bins[e, j])
+        for b in range(max(0, b0 - half), min(n_d, b0 + half + 1)):
+            w['n_windows'] += 1
+            spent, fell = int(tracer.spent_at[j, b]), int(tracer.fell_at[j, b])
+            if spent >= 0:
+                w['exhausted_up_to_since' if spent <= since
+                  else 'exhausted_after'] += 1
+            elif fell >= 0:
+                w['dropped_up_to_since' if fell <= since
+                  else 'dropped_after'] += 1
+            else:
+                w['never_seedable'] += 1
+
+    later, tally = [], {o: 0 for o in LATER_OUTCOMES}
+    for rec in tracer.iterations[since + 1:]:
+        if not rec['in_window'][e]:
+            continue
+        at = element_at(tracer, rec['i'], e)
+        if rec['runs'] is None:
+            outcome = LATER_ABORTED
+        elif at['candidate']:
+            outcome = (LATER_ASSIGNED if at['run']['accepted']
+                       else LATER_SHORT_RUN)
+        elif not at['within_eps_of_refit']:
+            outcome = LATER_BEYOND_EPS
+        else:
+            outcome = LATER_NOT_FACING
+        tally[outcome] += 1
+        if rec['exit'] == gw.TRACE_ACCEPTED:
+            later.append({'iteration': rec['i'], 'outcome': outcome})
+    n_later = sum(tally.values())
+    return {'since': int(since), 'windows': w,
+            'n_later_seeded_windows': n_later,
+            'R1_never_in_a_seeded_window_again': n_later == 0,
+            'later_by_outcome': tally, 'later_accepting': later}
+
+
+def no_home_report(tracer, cps: list[dict]) -> dict:
+    """Reported, for an e' with no home: R1 or R2 behind S_b's counterparts.
+
+    Per counterpart, over the whole pass: R1 when no window holding it was
+    ever seeded, R2 when one was and the iteration it seeded did not take it.
+    """
+    rows = []
+    for c in cps:
+        if c['counterpart'] is None:
+            continue
+        f = later_fate(tracer, c['counterpart'], -1)
+        rows.append({'member': c['member'], 'counterpart': c['counterpart'],
+                     'rule': 'R1' if f['R1_never_in_a_seeded_window_again']
+                     else 'R2',
+                     'windows': f['windows'],
+                     'n_seeded_windows': f['n_later_seeded_windows'],
+                     'by_outcome': f['later_by_outcome']})
+    return {'n_members': len(cps), 'n_counterparts': len(rows),
+            'n_without_counterpart': len(cps) - len(rows),
+            'n_R1_never_in_a_seeded_window': sum(1 for r in rows
+                                                 if r['rule'] == 'R1'),
+            'n_R2_seed_bins_spent': sum(1 for r in rows if r['rule'] == 'R2'),
+            'seeded_windows_by_outcome': {
+                o: sum(r['by_outcome'][o] for r in rows)
+                for o in LATER_OUTCOMES},
+            'counterparts': rows}
+
+
+def line_quantities(tracer, it: int, i_ref: int, span_x: np.ndarray,
+                    span_y: np.ndarray) -> dict:
+    """Reported: an iteration's refitted line against one wall.
+
+    The angle between the refitted line and the wall's axis, the axis being
+    the tangent of element `i_ref`'s own direction (normals are axis-aligned
+    by construction), folded to [0, 90] degrees. And the along-extent of the
+    iteration's candidates against the span of the wall's elements, all
+    projected on the refitted line's own direction: a candidate more than half
+    a cell past either end of the span is beyond the wall. The FIRST-PASS
+    candidates are the ones the line was fitted to; the refit's own are given
+    beside them.
+    """
+    rec = tracer.iterations[it]
+    theta, d = refit_line_of(rec)
+    el, rho = tracer.el, tracer.rho
+    ux, uy = gw.dir_of(theta)
+    t_all = el['x'] * ux + el['y'] * uy
+    axis = math.degrees(math.atan2(float(el['nx'][i_ref]),
+                                   -float(el['ny'][i_ref])))
+    a = (theta - axis) % 180.0
+    span_t = span_x * ux + span_y * uy
+    s_min, s_max = float(span_t.min()), float(span_t.max())
+
+    def extent(mask):
+        t = t_all[mask]
+        beyond = (t < s_min - rho / 2.0) | (t > s_max + rho / 2.0)
+        return {'n': int(t.size),
+                't_min': float(t.min()) if t.size else None,
+                't_max': float(t.max()) if t.size else None,
+                'n_beyond_span': int(np.count_nonzero(beyond)),
+                'overhang_below_m': float(max(0.0, s_min - t.min()))
+                if t.size else None,
+                'overhang_above_m': float(max(0.0, t.max() - s_max))
+                if t.size else None}
+
+    return {'iteration': int(it), 'theta_first_pass_deg': rec['theta_peak'],
+            'd_first_pass_m': rec['d_peak'], 'theta_refit_deg': theta,
+            'd_refit_m': d, 'degenerate_fit': rec['degenerate'],
+            'angle_to_face_axis_deg': float(min(a, 180.0 - a)),
+            'span': {'n': int(span_t.size), 't_min': s_min, 't_max': s_max},
+            'first_pass_candidates': extent(rec['cand_first']),
+            'refit_candidates': extent(rec['cand'])}
+
+
+def run_gaps(tracer, it: int, e: int) -> list[dict]:
+    """Reported, for R5+R6: what lies in the gaps that cut e''s run.
+
+    One record per end of the run. `neighbour` is None where the run is the
+    first or last of the candidates and no gap cut it there. Otherwise the gap
+    runs between the run's end element and the next candidate along the line,
+    and the elements strictly between them along the line are counted three
+    ways: first-pass candidates the refit left more than eps away; elements of
+    e''s own face line that are alive and more than eps from the refit; and
+    elements of that face line already assigned. `thinned_by_r3` is either of
+    the first two being non-zero.
+    """
+    rec = tracer.iterations[it]
+    at = element_at(tracer, it, e)
+    if at['run'] is None:
+        return []
+    lo, hi = rec['runs'][at['run']['index']]
+    order, t_sorted = rec['order'], rec['t_sorted']
+    theta, d = refit_line_of(rec)
+    el, rho = tracer.el, tracer.rho
+    ux, uy = gw.dir_of(theta)
+    t_all = el['x'] * ux + el['y'] * uy
+    beyond = ~(tracer.distance(theta, d) <= tracer.eps)
+    face = np.zeros(el['n'], dtype=bool)
+    face[face_line_of(el, e)['members']] = True
+    out = []
+    for name, edge, nb in (('below', lo, lo - 1), ('above', hi - 1, hi)):
+        if nb < 0 or nb >= order.size:
+            out.append({'end': name, 'neighbour': None})
+            continue
+        ta, tb = sorted((float(t_sorted[edge]), float(t_sorted[nb])))
+        inside = (t_all > ta) & (t_all < tb)
+        n_lost = int(np.count_nonzero(
+            inside & rec['cand_first'] & ~rec['cand'] & beyond))
+        n_face = int(np.count_nonzero(inside & face & rec['alive'] & beyond))
+        out.append({
+            'end': name, 'neighbour': int(order[nb]),
+            'gap_m': tb - ta - rho, 'g_m': tracer.g,
+            'n_first_pass_candidates_beyond_eps_of_refit': n_lost,
+            'n_on_face_line_alive_beyond_eps_of_refit': n_face,
+            'n_on_face_line_already_assigned': int(np.count_nonzero(
+                inside & face & ~rec['alive'])),
+            'thinned_by_r3': bool(n_lost or n_face)})
+    return out
+
+
+def nearest_assigned_same_dir(el: dict, seg_of: np.ndarray, i: int,
+                              tol: float = FACE_LINE_TOL_M) -> dict | None:
+    """Reported: e''s nearest ASSIGNED same-direction element at k'.
+
+    Nearest by straight-line distance between midpoints, ties to the lowest
+    index, and whether it lies on e''s own face line -- the same across
+    coordinate within `tol`, as `face_line_of` reads it. None when no element
+    of that direction is assigned.
+    """
+    sel = np.nonzero((el['dir'] == el['dir'][i]) & (seg_of >= 0))[0]
+    if sel.size == 0:
+        return None
+    dx, dy = el['x'][sel] - el['x'][i], el['y'][sel] - el['y'][i]
+    dist = np.hypot(dx, dy)
+    n = int(np.lexsort((sel, dist))[0])
+    across = abs(float(dx[n] * el['nx'][i] + dy[n] * el['ny'][i]))
+    return {'index': int(sel[n]), 'segment': int(seg_of[sel[n]]),
+            'dist_m': float(dist[n]), 'across_m': across,
+            'on_e_prime_face_line': bool(across <= tol)}
+
+
+def p15_verdict(events: list[dict], n_expected: int = N_EVENTS,
+                min_r3: int = P15_MIN_R3) -> dict:
+    """P15, exactly as registered: at least 11 of the 22 distinct e' in R3."""
+    assert len(events) == n_expected, len(events)
+    n = sum(1 for e in events if e['class'] == R3_LINE)
+    return {'of': len(events), 'n_R3': n, 'min_required': min_r3,
+            'holds': n >= min_r3,
+            'by_class': {c: sum(1 for e in events if e['class'] == c)
+                         for c in DROP_CLASSES}}
+
+
+def p16_verdict(events: list[dict], n_expected: int = N_EVENTS) -> dict:
+    """P16, exactly as registered: none of the 22 in Other; holds only at 0."""
+    assert len(events) == n_expected, len(events)
+    other = [e for e in events if e['class'] == OTHER]
+    return {'of': len(events), 'n_other': len(other), 'holds': not other,
+            'n_R4': sum(1 for e in events if e['class'] == R4_FACING),
+            'other': [e['key'] for e in other]}
+
+
+def _no_class_in(payload: dict) -> None:
+    """Assert a G9 fail payload carries no class and nothing built on one.
+
+    Exact key names, as `_no_change_in` does it. S10's own quantities are not
+    banned: they are published (spec v0.17) and check 1 is an equality
+    against them.
+    """
+    banned = {'class', 'classes', 'H', 'home', 'at_home', 'line_at_home',
+              'line_at_k', 'run_gaps', 'after_home', 'no_home',
+              'nearest_assigned_same_dir', 'trace', 'trace_tally', 'events',
+              'P15', 'P16',
+              'by_class', 'n_R3', 'n_R4', 'n_other', 'reported',
+              'classes_by_shape', 'classes_by_state', 'segment_units',
+              'verdict'}
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                assert str(k) not in banned, \
+                    f'{path}.{k} is an unseen quantity'
+                walk(v, f'{path}.{k}')
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f'{path}[{i}]')
+
+    walk(payload, '$')
+
+
+def _write_s11(payload: dict, out_dir: Path, prefix: str) -> tuple[Path, str]:
+    """S9's writer under this stage's name: a dated file, never an overwrite."""
+    return _write_s9(payload, out_dir, prefix)
+
+
+def _print_s11(events: list[dict], reported: dict) -> None:
+    """Classes by shape and by S_b's state, then one line per e'."""
+    for title, key, cols in (
+            ('classes by loss shape', 'classes_by_shape', S10_SHAPES),
+            ('classes by state of S_b at k\'', 'classes_by_state',
+             (INTACT, CHANGED))):
+        print(f'\n{title}')
+        print(f'  {"class":<20}' + ''.join(f'{c:>18}' for c in cols)
+              + f'{"total":>8}')
+        for cls in DROP_CLASSES:
+            row = [reported[key][c][cls] for c in cols]
+            print(f'  {cls:<20}' + ''.join(f'{n:>18}' for n in row)
+                  + f'{sum(row):>8}')
+
+    u = reported['per_distinct_s_b']
+    print('\nper distinct S_b, reported not judged: '
+          + '  '.join(f'{c} {n}' for c, n in u['n_units_by_class'].items())
+          + f'  ({u["n_units"]} S_b, {u["n_units_with_two_classes"]} with '
+          'two classes)')
+
+    print('\ndistinct e\' (B, k, k\', e\')')
+    for e in events:
+        at, ln = e['at_home'], e['line_at_home']
+        tail = '  no home' if at is None else (
+            f'  H {e["home"]["H"]}  first pass '
+            f'{at["dist_first_pass_m"]:.4f} m  refit '
+            f'{at["dist_refit_m"]:.4f} m  eps {e["eps_m"]:.4f} m  '
+            f'angle {ln["angle_to_face_axis_deg"]:.3f} deg')
+        print(f'  B=k{e["B"]} {e["step"]} e\' {e["e_prime"]}  S_b '
+              f'{e["seg_b"]}  {e["shape"]}  {e["state"]}  {e["class"]}{tail}')
+
+
+def s11_trace(by_kc: dict, spawn: dict, s10: dict, meta: dict,
+              out_dir: Path = OUT_DIR_DEFAULT, t0: float | None = None,
+              cuts: tuple = CUTS, n_robots: int = N_ROBOTS,
+              n_events: int = N_EVENTS, min_r3: int = P15_MIN_R3,
+              trace_of=trace_stem, s9_sha: str | None = None) -> dict:
+    """The order that keeps every class unseen behind G9.
+
+    Check 1 reproduces S10. Check 2 traces B at k' and at k for each step,
+    tracer off and on, and compares. Check 3's first half reads e' in the
+    traced run. Only then is anything classified, and check 3's second half
+    -- every e' in exactly one class -- is read off the result before a class
+    is printed or written. On any failure the stage writes the G9 comparisons
+    and stops at exit 2; the fail payload is walked for a class first.
+
+    Reads no file and resolves no spawn; `run_s11` is this function plus the
+    corpus I/O. `trace_of(side)` is how a map is traced, so the whole
+    pipeline runs on hand-built grids.
+    """
+    t0 = time.monotonic() if t0 is None else t0
+
+    # ── G9 check 1: S10, through the functions its stage calls ─────────────
+    c1, derived = g9_s10_reproduces(by_kc, spawn, s10, cuts, n_robots,
+                                    n_events, s9_sha)
+
+    # ── G9 check 2: each map of each step, tracer off and on ───────────────
+    traced, c2, c3a = {}, None, None
+    if c1['ok']:
+        for (b, k, kp) in sorted({(e['B'], e['k'], e['kp'])
+                                  for e in derived['events']}):
+            for c in (kp, k):
+                if (b, c) not in traced:
+                    traced[(b, c)] = trace_of(by_kc[(b, c)])
+        c2 = g9_non_interference(by_kc, traced)
+
+    # ── G9 check 3, first half: e' unassigned in the traced run ────────────
+    if c2 is not None and c2['ok']:
+        c3a = g9_unassigned(traced, derived['events'])
+
+    g9 = {'1_s10_reproduces': c1, '2_non_interference': c2,
+          '3_e_prime_unassigned_in_one_class': {'unassigned': c3a,
+                                                'one_class': None},
+          'parts': {'1_s10_reproduces': c1['ok'],
+                    '2_non_interference': bool(c2 and c2['ok']),
+                    '3_e_prime_unassigned_in_one_class':
+                        bool(c3a and c3a['ok'])}}
+
+    def gate_line():
+        g9['all_ok'] = all(g9['parts'].values())
+        print('G9: ' + '  '.join(
+            f'check {n.split("_")[0]} {"HOLD" if ok else "FAIL"}'
+            for n, ok in g9['parts'].items())
+            + f'   {"HOLD" if g9["all_ok"] else "FAIL"}')
+
+    def refuse(why: str):
+        for label, bad in (
+                ('S10 sections differing', c1['sections_differing']),
+                ('S10 derivation', c1['derivation_asserted']),
+                ('maps', None if c2 is None else
+                 [r['map'] for r in c2['not_ok']]),
+                ('e\' assigned in the traced run', None if c3a is None
+                 else c3a['not_ok'][:10])):
+            if bad:
+                print(f'  {label}: {bad}')
+        fail = dict(meta)
+        fail.update({'stage': 's11_g9_fail',
+                     'seconds': time.monotonic() - t0, 'G9': g9})
+        _no_class_in(fail)
+        path, _ = _write_s11(fail, out_dir, 's11_g9_fail')
+        die(f'G9 failed; {why} {path}')
+
+    if not all(g9['parts'].values()):
+        gate_line()
+        refuse('nothing was classified, and no class was computed, written '
+               'or printed.')
+
+    # ── counterparts, H and the class, per distinct e' ─────────────────────
+    cps_of: dict[tuple, list] = {}
+    events = []
+    for e in derived['events']:
+        b, k, kp, j = e['key']
+        side_k, side_kp = by_kc[(b, k)], by_kc[(b, kp)]
+        tr_kp, tr_k = traced[(b, kp)]['tracer'], traced[(b, k)]['tracer']
+        unit = (b, k, kp, e['seg_b'])
+        if unit not in cps_of:
+            cps_of[unit] = counterparts(side_k, side_kp, e['seg_b'])
+        cps = cps_of[unit]
+        home = home_iteration(tr_kp.assigned_in(), cps)
+        h = home['H']
+        at_home = None if h is None else element_at(tr_kp, h, j)
+        cls = classify_drop(h, at_home)
+
+        members = np.array([c['member'] for c in cps], dtype=np.int64)
+        span_x, span_y = side_k['el']['x'][members], side_k['el']['y'][members]
+        it_b = int(tr_k.assigned_in()[e['b_index']])
+        # the registered record of e', iteration by iteration: in full for H
+        # and every accepting iteration -- the only ones that could have
+        # taken it -- and tallied for the rest
+        rows_j = [element_at(tr_kp, rec['i'], j) for rec in tr_kp.iterations
+                  if rec['i'] == h or rec['exit'] == gw.TRACE_ACCEPTED]
+        tally_j = {
+            'n_iterations': tr_kp.n_iter,
+            'n_voted_in_seed_window': sum(
+                1 for rec in tr_kp.iterations if rec['in_window'][j]),
+            'n_candidate_first_pass': sum(
+                1 for rec in tr_kp.iterations
+                if rec['cand_first'] is not None and rec['cand_first'][j]),
+            'n_candidate_of_refit': sum(
+                1 for rec in tr_kp.iterations
+                if rec['cand'] is not None and rec['cand'][j]),
+            'iterations_by_exit': {
+                x: sum(1 for rec in tr_kp.iterations if rec['exit'] == x)
+                for x in gw.TRACE_ABORTS + (gw.TRACE_ACCEPTED,)}}
+        events.append({
+            **{f: e[f] for f in ('key', 'B', 'k', 'kp', 'step', 'e_prime',
+                                 'b_index', 'b_dir', 'seg_b', 'shape',
+                                 'state', 'n_losses', 'map_at_k',
+                                 'map_at_kp')},
+            'class': cls, 'home': home, 'at_home': at_home,
+            'eps_m': tr_kp.eps, 'l_min_m': tr_kp.l_min,
+            'line_at_home': None if h is None else line_quantities(
+                tr_kp, h, j, span_x, span_y),
+            'line_at_k': {
+                **line_quantities(tr_k, it_b, e['b_index'], span_x, span_y),
+                'b': element_at(tr_k, it_b, e['b_index']),
+                'eps_m': tr_k.eps},
+            'run_gaps': run_gaps(tr_kp, h, j) if cls == R56_SHORT_RUN
+            else None,
+            'after_home': None if h is None else later_fate(tr_kp, j, h),
+            'no_home': no_home_report(tr_kp, cps) if h is None else None,
+            'nearest_assigned_same_dir': nearest_assigned_same_dir(
+                side_kp['el'], side_kp['seg_of'], j),
+            'trace_tally': tally_j, 'trace': rows_j})
+
+    # ── G9 check 3, second half, before any class is shown ─────────────────
+    c3b = g9_one_class([e['class'] for e in events], n_events)
+    g9['3_e_prime_unassigned_in_one_class']['one_class'] = c3b
+    g9['parts']['3_e_prime_unassigned_in_one_class'] = bool(
+        c3a['ok'] and c3b['ok'])
+    gate_line()
+    if not g9['all_ok']:
+        refuse('an e\' did not land in exactly one class; no class was '
+               'written or printed.')
+
+    # ── the two verdicts, judged on the distinct e' ────────────────────────
+    p15 = p15_verdict(events, n_events, min_r3)
+    p16 = p16_verdict(events, n_events)
+    print(f'P15: {"HOLD" if p15["holds"] else "FAIL"}  {p15["n_R3"]}/'
+          f'{p15["of"]} distinct e\' in R3, {p15["min_required"]} required')
+    print(f'P16: {"HOLD" if p16["holds"] else "FAIL"}  {p16["n_other"]}/'
+          f'{p16["of"]} distinct e\' in Other, 0 required  '
+          f'(R4, reported: {p16["n_R4"]})')
+
+    # ── reported, not tested ───────────────────────────────────────────────
+    units = distinct_groups(events, UNIT_FIELDS)
+    per_unit = [{'key': u['key'], 'state': u['rows'][0]['state'],
+                 'e_primes': [r['e_prime'] for r in u['rows']],
+                 'classes': [r['class'] for r in u['rows']]} for u in units]
+    reported = {
+        'classes_by_shape': {
+            s: {c: sum(1 for e in events
+                       if e['shape'] == s and e['class'] == c)
+                for c in DROP_CLASSES} for s in S10_SHAPES},
+        'classes_by_state': {
+            s: {c: sum(1 for e in events
+                       if e['state'] == s and e['class'] == c)
+                for c in DROP_CLASSES} for s in (INTACT, CHANGED)},
+        'per_distinct_s_b': {
+            'note': 'counts per distinct (B, k, k\', S_b), reported beside '
+                    'the verdicts and never judged; an S_b whose e\' fall '
+                    'in two classes counts in both',
+            'n_units': len(per_unit),
+            'n_units_with_two_classes': sum(
+                1 for u in per_unit if len(set(u['classes'])) > 1),
+            'n_units_by_class': {
+                c: sum(1 for u in per_unit if c in u['classes'])
+                for c in DROP_CLASSES},
+            'units': per_unit},
+        'per_e_prime': 'events[*]: at_home and line_at_home (H\'s line '
+                       'against the wall\'s axis, e\'\'s two distances, the '
+                       'candidates\' extent against S_b\'s span), line_at_k '
+                       '(the same for the iteration that assigned b), '
+                       'run_gaps (R5+R6), after_home, no_home and '
+                       'nearest_assigned_same_dir'}
+    _print_s11(events, reported)
+
+    payload = dict(meta)
+    payload.update({
+        'seconds': time.monotonic() - t0, 'rho_m': s10['rho_m'],
+        'n_events': len(events), 'n_maps_traced': len(traced),
+        'G9': g9, 'events': events, 'P15': p15, 'P16': p16,
+        'reported': reported})
+    path, sha = _write_s11(payload, out_dir, 's11_trace')
+    out = dict(payload)
+    out['written'] = {'path': str(path), 'sha256': sha}
+    return out
+
+
+def run_s11(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+            ) -> dict:
+    """S11: the rule that drops each e'. Spec v0.17.
+
+    G9 against S10, then P15 and P16, judged separately.
+
+    The gates, in this order and each before anything it could mislead:
+
+    1. REFUSES ON AN EDITED TREE, before anything is loaded, as S5 to S10 do.
+    2. REGISTRATION BEFORE RESULT: `dc754de`, the commit that registered P15
+       and P16, must be an ancestor of HEAD, and the spec at HEAD must carry
+       both "REGISTERED" headers.
+    3. The two paragraphs are read from the spec AT HEAD by script and stored
+       verbatim, never retyped.
+    4. THE S10 FILE IS PINNED BY HASH. G9 check 1 is an equality against it.
+
+    NOTHING IS LOADED UNTIL ALL FOUR HOLD. Sides come from `load_side`, and
+    each traced map is rebuilt by `trace_stem` the same way: `g` from that
+    map's own graph JSON, and the map's sha256 checked against it.
+    """
+    t0 = time.monotonic()
+
+    porcelain = _git('status', '--porcelain').splitlines()
+    dirty = [ln for ln in porcelain if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    if not _is_ancestor(S11_REGISTRATION):
+        die(f'{S11_REGISTRATION} registered P15 and P16 and is not an '
+            f'ancestor of HEAD {head[:7] or "(unknown)"}; the registration '
+            'must be in history behind the code that tests it')
+    spec_text = _git('show', f'HEAD:{SPEC_REL}')
+    for gate in (P15_GATE_TEXT, P16_GATE_TEXT):
+        if gate not in spec_text:
+            die(f'the spec at HEAD carries no "{gate}"; S11 evaluates two '
+                'registered predictions or it does not run')
+    verbatim = {'P15': spec_paragraph(spec_text, P15_HEADER),
+                'P16': spec_paragraph(spec_text, P16_HEADER)}
+    spec_rev = _git('log', '-1', '--format=%h', '--', SPEC_REL)
+
+    s10_path = out_dir / S10_RESULT
+    if not s10_path.is_file():
+        die(f'{s10_path} is missing; G9 check 1 reproduces its values and '
+            'the units are the 22 e\' it holds')
+    s10_sha = _sha256(s10_path)
+    if s10_sha != S10_SHA256:
+        die(f'{s10_path.name} has sha256 {s10_sha}, not the {S10_SHA256} G9 '
+            'is stated against; that is a different S10 run')
+    s10 = json.loads(s10_path.read_text())
+
+    import fit_world_transform as fwt                       # noqa: PLC0415
+    import robot_divergence as rd                           # noqa: PLC0415
+
+    stems = corpus_stems(variant)
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    by_kc = {}
+    for s in stems:
+        k, c = gw._k_and_cut(s, 'S11 needs the robot and the cut')
+        by_kc[(k, c)] = load_side(s)
+
+    meta = {'stage': 's11', 'head': head, 'spec_rev': spec_rev,
+            'tree_dirty': bool(dirty),
+            'untracked': sum(1 for ln in porcelain if ln.startswith('??')),
+            'variant': variant, 't2': False,
+            'spec': 'SPEC_b2_divergence_walls v0.17, G9/P15/P16',
+            'predictions_verbatim': verbatim,
+            'cell_centre': CELL_CENTRE_OFFSET,
+            'sources': {'s10': {'file': s10_path.name, 'sha256': s10_sha,
+                                'head': s10.get('head')}},
+            'note': 'each map is extracted with the tracer off and on, with '
+                    'Params(g) from its own graph JSON; the class is read at '
+                    'H against the iteration\'s own refit; a counterpart is '
+                    'found by position with trinary_map.cell_index and never '
+                    'with trinary_map.sample. No viewpoint weight is computed'}
+    return s11_trace(by_kc, spawn, s10, meta, out_dir, t0, s9_sha=S9_SHA256)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--stage',
-                    choices=('g2', 's5', 's6', 's7', 's8', 's9', 's10'),
+                    choices=('g2', 's5', 's6', 's7', 's8', 's9', 's10',
+                             's11'),
                     default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
                          'the segment guard on the 20 maps; s5 evaluates G3, '
@@ -4291,7 +5274,9 @@ def main() -> int:
                          'losses into segmentation or geometry, gates them on '
                          'S8 with G7, and tests P12; s10 reads the segment b '
                          'belonged to at k, gates it on S9 with G8, and tests '
-                         'P13a, P13b and P14')
+                         'P13a, P13b and P14; s11 traces which rule of the '
+                         'extraction drops each e\', gates it on S10 with '
+                         'G9, and tests P15 and P16')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -4324,6 +5309,9 @@ def main() -> int:
         return 0
     if args.stage == 's10':
         run_s10(args.out_dir)
+        return 0
+    if args.stage == 's11':
+        run_s11(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')

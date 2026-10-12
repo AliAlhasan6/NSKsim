@@ -3604,6 +3604,987 @@ def test_s10_the_unchanged_recompute_is_the_one_s9_committed():
     assert 'pure extraction' in doc
 
 
+# ─────── S11: the rule that drops each e' (the T series) ────────────────────
+#
+# SYNTHETIC ONLY. Nothing here traces or classifies an element of a real map,
+# and nothing reads experiments/logs/.
+
+def hand_el(points, dirs=3):
+    """Elements placed by hand: `(x, y)` each, with one direction or one each.
+
+    DIRS[3] is '-y', normal (0, -1): such an element faces the line at theta
+    180 and sits at d = -y on it, with along = -x. DIRS[0] is '+x', normal
+    (1, 0), which is at right angles to that line and does not face it.
+    """
+    n = len(points)
+    d = np.full(n, dirs, dtype=np.int64) if np.isscalar(dirs) else \
+        np.array(dirs, dtype=np.int64)
+    return {'n': n,
+            'x': np.array([p[0] for p in points], float),
+            'y': np.array([p[1] for p in points], float),
+            'nx': np.array([gw.DIRS[k][2] for k in d], float),
+            'ny': np.array([gw.DIRS[k][3] for k in d], float),
+            'dir': d, 'row': np.zeros(n, dtype=np.int64),
+            'col': np.arange(n, dtype=np.int64)}
+
+
+def hand_trace(el, d_peak, theta_line, d_line, theta_peak=180.0):
+    """One iteration, replayed through the tracer's own calls on chosen lines.
+
+    The loop body's own steps, in its order and through its functions --
+    `line_candidates` twice, the sort along the refitted line, `split_runs`,
+    the l_min test -- with the first-pass line and the refit GIVEN rather than
+    found, so a case can put an element a stated distance from each.
+    """
+    p = gw.Params()
+    eps = p.eps(RHO)
+    hough = gw.Hough(el, RHO, p)
+    alive = np.ones(el['n'], dtype=bool)
+    tracer = gw.Tracer()
+    tracer.begin(el, hough, alive, p, RHO, eps, p.l_min / (math.sqrt(2) * RHO))
+    j = int(np.nonzero(hough.thetas == theta_peak)[0][0])
+    in_window = alive & hough.vote[:, j]
+    cand_first = gw.line_candidates(el, alive, theta_peak, d_peak, eps, True)
+    cand = gw.line_candidates(el, alive, theta_line, d_line, eps, True)
+    ux, uy = gw.dir_of(theta_line)
+    t_all = el['x'] * ux + el['y'] * uy
+    idx = np.nonzero(cand)[0]
+    idx = idx[np.argsort(t_all[idx], kind='stable')]
+    t_sorted = t_all[idx]
+    runs = gw.split_runs(t_sorted, RHO, p.g)
+    accepted = [(lo, hi, idx[lo:hi]) for lo, hi in runs
+                if float(t_sorted[hi - 1] - t_sorted[lo] + RHO) >= p.l_min]
+    tracer.iteration(
+        gw.TRACE_ACCEPTED if accepted else gw.TRACE_NO_ACCEPTED_RUN, j, 0,
+        int(in_window.sum()), alive, in_window, d_peak=d_peak,
+        cand_first=cand_first, theta_line=theta_line, d_line=d_line,
+        degenerate=False, cand=cand, idx=idx, t_sorted=t_sorted, runs=runs,
+        accepted=accepted)
+    seg_of = np.full(el['n'], -1, dtype=np.int64)
+    if accepted:
+        ids = {lo: k for k, (lo, _hi, _m) in enumerate(accepted)}
+        for lo, _hi, m in accepted:
+            seg_of[m] = ids[lo]
+        tracer.removed(hough, ids)
+    tracer.end(hough, seg_of, 1)
+    return tracer
+
+
+def wall_points(cols, y=0.0):
+    return [(RHO * c, y) for c in cols]
+
+
+def at_home(within=True, faces=True, candidate=True, accepted=False,
+            run=True):
+    """The facts `classify_drop` reads at H, stated outright."""
+    return {'within_eps_of_refit': within, 'faces_refit': faces,
+            'candidate': candidate,
+            'run': {'accepted': accepted} if run else None}
+
+
+def test_s11_every_class_and_the_first_that_applies_wins():
+    """T1: No home, R3, R4, R5+R6 and Other, in the registered order."""
+    # no home is decided before anything at H is read at all
+    assert dw.classify_drop(None, None) == dw.NO_HOME
+    assert dw.classify_drop(None, at_home(within=False)) == dw.NO_HOME
+
+    assert dw.classify_drop(0, at_home(within=False, candidate=False,
+                                       run=False)) == dw.R3_LINE
+    assert dw.classify_drop(0, at_home(faces=False, candidate=False,
+                                       run=False)) == dw.R4_FACING
+    assert dw.classify_drop(0, at_home()) == dw.R56_SHORT_RUN
+    # a candidate in an ACCEPTED run would have been assigned: Other
+    assert dw.classify_drop(0, at_home(accepted=True)) == dw.OTHER
+    # within eps, facing, and yet not a candidate: Other too
+    assert dw.classify_drop(0, at_home(candidate=False,
+                                       run=False)) == dw.OTHER
+
+    # the first that applies wins: R3 before R4, R4 before R5+R6
+    assert dw.classify_drop(0, at_home(within=False, faces=False,
+                                       candidate=False,
+                                       run=False)) == dw.R3_LINE
+    assert dw.classify_drop(0, at_home(within=False)) == dw.R3_LINE
+    assert dw.classify_drop(0, at_home(faces=False)) == dw.R4_FACING
+    # H = 0 is an iteration, not "no home"
+    assert dw.classify_drop(0, at_home()) != dw.NO_HOME
+    assert set(dw.DROP_CLASSES) == {dw.NO_HOME, dw.R3_LINE, dw.R4_FACING,
+                                    dw.R56_SHORT_RUN, dw.OTHER}
+
+
+def test_s11_r3_is_read_against_the_refit_not_the_first_pass_line():
+    """T2: outside eps of the first-pass line, inside eps of the refit.
+
+    A six-cell wall at y = 0 and one more '-y' element 0.25 m below it. The
+    first-pass line is the wall itself, d = 0, and the element is 0.25 m off
+    it, past eps = 0.1707 m. The refit sits at d = 0.12, so the element is
+    0.13 m off THAT and a candidate: not R3. It is two metres along from the
+    wall, alone in its run, so the run is short: R5+R6.
+
+    And the mirror: inside eps of the first-pass line, outside eps of the
+    refit, is R3.
+    """
+    el = hand_el(wall_points(range(6)) + [(2.6, -0.25)])
+    e = 6
+    tr = hand_trace(el, d_peak=0.0, theta_line=180.0, d_line=0.12)
+    at = dw.element_at(tr, 0, e)
+    assert at['dist_first_pass_m'] == pytest.approx(0.25)
+    assert at['dist_first_pass_m'] > EPS and not at['candidate_first_pass']
+    assert at['dist_refit_m'] == pytest.approx(0.13)
+    assert at['within_eps_of_refit'] and at['candidate']
+    assert at['run']['accepted'] is False and at['run']['n_elements'] == 1
+    assert dw.classify_drop(0, at) == dw.R56_SHORT_RUN
+
+    tr = hand_trace(el, d_peak=0.12, theta_line=180.0, d_line=0.0)
+    at = dw.element_at(tr, 0, e)
+    assert at['dist_first_pass_m'] == pytest.approx(0.13)
+    assert at['candidate_first_pass'] is True
+    assert at['dist_refit_m'] == pytest.approx(0.25)
+    assert not at['within_eps_of_refit'] and at['run'] is None
+    assert dw.classify_drop(0, at) == dw.R3_LINE
+
+
+def test_s11_the_class_uses_the_iterations_refit_not_the_reported_line(
+        monkeypatch):
+    """T3: the refit and `_segment`'s reported line differ, and R3 follows
+    the refit. Mutation-checked.
+
+    A six-cell wall at y = 0, and e' 0.10 m to its far side. The iteration
+    cuts on a refit at d = 0.10: the wall is 0.10 m off it, within eps, and
+    its run is accepted; e' is 0.20 m off it, beyond eps, and is R3.
+    `_segment` then refits the accepted run to its own six elements and
+    reports the wall itself, d = 0 -- a line e' is only 0.10 m from.
+
+    THE MUTATION: reading the reported line where the refit belongs puts e'
+    within eps, and the class stops being R3.
+    """
+    el = hand_el(wall_points(range(6)) + [(0.25, 0.10)])
+    e = 6
+    tr = hand_trace(el, d_peak=0.0, theta_line=180.0, d_line=0.10)
+    seg = gw._segment(blank(4, 8, FREE), RHO, ORIGIN, el,
+                      tr.iterations[0]['members'][0], 0, 180.0, 0.10,
+                      gw.Params().b(RHO), gw.Params())
+    assert seg['line_source'] == 'own_tls'
+    reported_d = float(el['x'][0] * seg['normal'][0]
+                       + el['y'][0] * seg['normal'][1])
+    assert reported_d == pytest.approx(0.0, abs=1e-9)       # the wall itself
+    assert dw.refit_line_of(tr.iterations[0]) == (180.0, 0.10)
+
+    at = dw.element_at(tr, 0, e)
+    assert at['dist_refit_m'] == pytest.approx(0.20) and at['faces_refit']
+    assert dw.classify_drop(0, at) == dw.R3_LINE
+
+    monkeypatch.setattr(dw, 'refit_line_of',
+                        lambda rec: (seg['theta'], reported_d))
+    mutated = dw.element_at(tr, 0, e)
+    assert mutated['dist_refit_m'] == pytest.approx(0.10)
+    assert mutated['within_eps_of_refit']
+    assert dw.classify_drop(0, mutated) != dw.R3_LINE, \
+        'the reported line must not be what R3 is read against'
+
+
+def test_s11_r4_is_the_facing_test_alone():
+    """T4: on the line and not facing it is R4; off it as well is R3."""
+    el = hand_el(wall_points(range(6)) + [(0.25, 0.0), (0.25, -0.30)],
+                 dirs=[3] * 6 + [0, 0])
+    tr = hand_trace(el, d_peak=0.0, theta_line=180.0, d_line=0.0)
+    on_line = dw.element_at(tr, 0, 6)
+    assert on_line['within_eps_of_refit'] and not on_line['faces_refit']
+    assert on_line['facing_dot_refit'] == pytest.approx(0.0, abs=1e-12)
+    assert on_line['candidate'] is False and on_line['run'] is None
+    assert dw.classify_drop(0, on_line) == dw.R4_FACING
+    off_line = dw.element_at(tr, 0, 7)
+    assert not off_line['within_eps_of_refit'] and not off_line['faces_refit']
+    assert dw.classify_drop(0, off_line) == dw.R3_LINE
+
+
+def test_s11_home_is_the_iteration_with_most_counterparts_ties_earliest():
+    """T5: most counterparts wins, ties go to the earliest, none is no home."""
+    def cps(*js):
+        return [{'member': m, 'counterpart': j} for m, j in enumerate(js)]
+
+    #                    element:  0  1  2  3  4  5   6
+    assigned_in = np.array([7, 7, 3, 3, 3, -1, 9], dtype=np.int64)
+    h = dw.home_iteration(assigned_in, cps(0, 1, 2, 3, 4, 5))
+    assert h['H'] == 3 and h['n_counterparts_assigned_by_H'] == 3
+    assert h['counterparts_by_iteration'] == [[3, 3], [7, 2]]
+    assert (h['n_members'], h['n_counterparts'],
+            h['n_counterparts_assigned']) == (6, 6, 5)
+
+    # a tie, 2 and 2: the earlier iteration, whichever is met first
+    assert dw.home_iteration(assigned_in, cps(0, 1, 2, 3))['H'] == 3
+    assert dw.home_iteration(assigned_in, cps(2, 3, 0, 1))['H'] == 3
+    # a later iteration with more beats an earlier one with fewer
+    assert dw.home_iteration(assigned_in, cps(0, 1, 2))['H'] == 7
+    # a member with no counterpart, and an unassigned counterpart, count
+    # for nothing
+    h = dw.home_iteration(assigned_in, cps(None, 5, 6))
+    assert h['H'] == 9 and h['n_counterparts'] == 2
+    # no counterpart assigned at all: no home
+    for none in (cps(5), cps(None, None), []):
+        assert dw.home_iteration(assigned_in, none)['H'] is None
+    assert dw.classify_drop(dw.home_iteration(assigned_in, cps(5))['H'],
+                            None) == dw.NO_HOME
+
+
+def s11_side(grid, stem, params=None):
+    """A side straight from the real extractor, so a trace of it is its own."""
+    graph, el, seg_of = gw.extract_with_elements(
+        grid, RHO, ORIGIN, gw.Params() if params is None else params)
+    return {'stem': stem, 'el': el, 'seg_of': seg_of, 'grid': grid,
+            'rho': RHO, 'origin': ORIGIN, 'shape': grid.shape,
+            'segments': graph['segments']}
+
+
+def split_wall():
+    """Row 6, cols 0..3 and 8..12, with cols 4..7 freed: 0.4 m and 0.5 m."""
+    g = two_runs({6: (0, 12)})
+    g[6, 4:8] = FREE
+    return g
+
+
+def test_s11_counterparts_are_found_by_position_and_direction():
+    """T6: a member's counterpart is the element in ITS cell, facing ITS way."""
+    side_k = s11_side(two_runs({6: (0, 12)}), 'B_k')
+    assert side_k['segments'][0]['n_elements'] == 14       # 13 '-y', one '+x'
+    side_kp = s11_side(split_wall(), 'B_kp')
+    cps = dw.counterparts(side_k, side_kp, 0)
+    assert len(cps) == 14
+    for c in cps:
+        m, j = c['member'], c['counterpart']
+        col, d = int(side_k['el']['col'][m]), int(side_k['el']['dir'][m])
+        if d == 3 and 4 <= col <= 7:
+            assert j is None                       # the wall cell is gone
+        else:
+            assert int(side_kp['el']['col'][j]) == col
+            assert int(side_kp['el']['row'][j]) == 6
+            assert int(side_kp['el']['dir'][j]) == d
+    # the same wall on a lattice five metres to the right: every cell off grid
+    away = dict(side_kp, origin=(5.0, 0.0))
+    assert all(c['counterpart'] is None
+               for c in dw.counterparts(side_k, away, 0))
+    # a half-cell lattice shift still lands each centre in one cell
+    shifted = dict(side_kp, origin=(0.04, 0.03))
+    assert sum(c['counterpart'] is not None
+               for c in dw.counterparts(side_k, shifted, 0)) == 10
+
+
+def test_s11_the_counterpart_lookup_never_calls_trinary_map_sample(
+        monkeypatch):
+    """T7: a spy on `sample` that raises, over the counterpart lookup."""
+    side_k = s11_side(two_runs({6: (0, 12)}), 'B_k')
+    side_kp = s11_side(split_wall(), 'B_kp')
+    tm = importlib.import_module('trinary_map')
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(a)
+        raise AssertionError('trinary_map.sample was called for a lookup')
+
+    monkeypatch.setattr(tm, 'sample', boom)
+    monkeypatch.setattr(gw, 'sample', boom)
+    assert not hasattr(dw, 'sample')
+    index_calls = []
+    real_index = dw.cell_index
+    monkeypatch.setattr(dw, 'cell_index', lambda *a: (
+        index_calls.append(a), real_index(*a))[1])
+
+    cps = dw.counterparts(side_k, side_kp, 0)
+    assert sum(c['counterpart'] is not None for c in cps) == 10
+    assert calls == []
+    assert len(index_calls) == 2 * len(cps)        # x and y, once per member
+
+
+def _classed(*classes):
+    return [{'key': [1, 60, 120, i], 'class': c}
+            for i, c in enumerate(classes)]
+
+
+@pytest.mark.parametrize('n_r3,holds', [(0, False), (10, False), (11, True),
+                                        (12, True), (22, True)])
+def test_s11_p15_holds_from_11_of_22(n_r3, holds):
+    """T8: "at least 11 of the 22 distinct e' are in R3", at its edge."""
+    ev = _classed(*([dw.R3_LINE] * n_r3
+                    + [dw.R56_SHORT_RUN] * (22 - n_r3)))
+    out = dw.p15_verdict(ev)
+    assert (out['holds'], out['n_R3'], out['of']) == (holds, n_r3, 22)
+    assert out['min_required'] == 11 == dw.P15_MIN_R3
+    assert sum(out['by_class'].values()) == 22
+    with pytest.raises(AssertionError):                  # 22 is registered
+        dw.p15_verdict(ev[:21])
+
+
+@pytest.mark.parametrize('n_other,holds', [(0, True), (1, False),
+                                           (22, False)])
+def test_s11_p16_holds_only_at_0_of_22(n_other, holds):
+    """T9: none in Other; and R4 and No home are not Other."""
+    ev = _classed(*([dw.OTHER] * n_other + [dw.R3_LINE] * (22 - n_other)))
+    out = dw.p16_verdict(ev)
+    assert (out['holds'], out['n_other'], out['of']) == (holds, n_other, 22)
+    assert len(out['other']) == n_other
+    with pytest.raises(AssertionError):
+        dw.p16_verdict(ev[:21])
+
+    spared = _classed(*([dw.R4_FACING] * 5 + [dw.NO_HOME] * 6
+                        + [dw.R56_SHORT_RUN] * 11))
+    out = dw.p16_verdict(spared)
+    assert out['holds'] and out['n_R4'] == 5
+    assert dw.p15_verdict(spared)['holds'] is False      # judged separately
+
+
+def test_s11_exactly_one_class_is_a_count_and_a_label():
+    """T10: G9 check 3's second half."""
+    ok = [dw.R3_LINE, dw.NO_HOME, dw.OTHER]
+    assert dw.g9_one_class(ok, 3)['ok']
+    assert not dw.g9_one_class(ok, 4)['ok']               # one e' short
+    assert not dw.g9_one_class(ok + [None], 4)['ok']      # one with no class
+    assert not dw.g9_one_class(ok + ['R3'], 4)['ok']      # not a label
+
+
+def test_s11_the_line_quantities_at_an_iteration():
+    """T11: the angle to the wall's axis, and candidates past the wall's span.
+
+    A refit at 183 degrees over a '-y' wall is 3 degrees off its axis, and
+    over a '+x' face 87. With the span set to the first three cells, the
+    other three candidates lie beyond it, 0.3 m past its end.
+    """
+    el = hand_el(wall_points(range(6)) + [(0.25, 0.0)], dirs=[3] * 6 + [0])
+    tr = hand_trace(el, d_peak=0.0, theta_line=183.0, d_line=0.0)
+    span = slice(0, 3)
+    q = dw.line_quantities(tr, 0, 0, el['x'][span], el['y'][span])
+    assert q['angle_to_face_axis_deg'] == pytest.approx(3.0)
+    assert q['theta_refit_deg'] == 183.0 and q['theta_first_pass_deg'] == 180.0
+    assert q['span']['n'] == 3
+    assert q['first_pass_candidates']['n'] == 6
+    assert q['first_pass_candidates']['n_beyond_span'] == 3
+    assert max(q['first_pass_candidates']['overhang_below_m'],
+               q['first_pass_candidates']['overhang_above_m']
+               ) == pytest.approx(0.3 * math.cos(math.radians(3.0)))
+    assert dw.line_quantities(tr, 0, 6, el['x'][span], el['y'][span])[
+        'angle_to_face_axis_deg'] == pytest.approx(87.0)
+    whole = dw.line_quantities(tr, 0, 0, el['x'][:6], el['y'][:6])
+    assert whole['first_pass_candidates']['n_beyond_span'] == 0
+
+
+def test_s11_a_run_cut_where_the_refit_thinned_the_candidates():
+    """T12: R5+R6, and the gap that cut the run is R3's doing.
+
+    Cols 0..2 and 6..12 of a wall at y = 0, and cols 3..5 at y = +0.15. The
+    first-pass line, d = 0, takes all thirteen: the three are 0.15 m off it.
+    The refit, d = 0.05, leaves them 0.20 m off and drops them, which opens a
+    0.3 m gap -- past g -- and strands cols 0..2 as a 0.3 m run.
+    """
+    el = hand_el(wall_points(range(0, 3)) + wall_points(range(3, 6), 0.15)
+                 + wall_points(range(6, 13)))
+    tr = hand_trace(el, d_peak=0.0, theta_line=180.0, d_line=0.05)
+    rec = tr.iterations[0]
+    assert rec['cand_first'].all() and not rec['cand'][3:6].any()
+    at = dw.element_at(tr, 0, 1)
+    assert dw.classify_drop(0, at) == dw.R56_SHORT_RUN
+    assert at['run']['length_m'] == pytest.approx(0.3)
+    assert dw.classify_drop(0, dw.element_at(tr, 0, 4)) == dw.R3_LINE
+
+    gaps = {g['end']: g for g in dw.run_gaps(tr, 0, 1)}
+    # along is -x on a line at 180 degrees, so the far run is "below"
+    cut = gaps['below']
+    assert gaps['above']['neighbour'] is None
+    assert cut['neighbour'] == 6
+    assert cut['gap_m'] == pytest.approx(0.3) and cut['gap_m'] >= cut['g_m']
+    assert cut['n_first_pass_candidates_beyond_eps_of_refit'] == 3
+    assert cut['thinned_by_r3'] is True
+
+    # the same gap with nothing in it is a gap in the map, not R3's
+    bare = hand_el(wall_points(range(0, 3)) + wall_points(range(6, 13)))
+    tr = hand_trace(bare, d_peak=0.0, theta_line=180.0, d_line=0.05)
+    cut = {g['end']: g for g in dw.run_gaps(tr, 0, 1)}['below']
+    assert cut['gap_m'] == pytest.approx(0.3)
+    assert cut['thinned_by_r3'] is False
+    assert dw.run_gaps(tr, 0, 3) == [] or dw.element_at(tr, 0, 3)['run']
+
+
+def test_s11_the_nearest_assigned_same_direction_element():
+    """T13: nearest by distance, ties to the lowest index, and its face line."""
+    el = hand_el([(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (0.5, 0.3), (0.5, -0.1)],
+                 dirs=[3, 3, 3, 3, 0])
+    seg_of = np.array([0, -1, 0, -1, 2], dtype=np.int64)
+    near = dw.nearest_assigned_same_dir(el, seg_of, 1)
+    assert (near['index'], near['segment']) == (0, 0)     # 0 and 2 tie at 0.5
+    assert near['dist_m'] == pytest.approx(0.5)
+    assert near['on_e_prime_face_line'] is True
+    # the '+x' element 0.1 m away is nearer and is not the same direction
+    off = dw.nearest_assigned_same_dir(el, np.array([-1, -1, -1, 1, 2]), 1)
+    assert off['index'] == 3 and off['on_e_prime_face_line'] is False
+    assert dw.nearest_assigned_same_dir(
+        el, np.full(5, -1, dtype=np.int64), 1) is None
+
+
+# ── G9 check 2, and what a tracer that touches its arguments does to it ─────
+
+def two_line_side():
+    """Two walls, so the pass accepts in two iterations and order matters."""
+    return s11_side(two_runs({2: (0, 12), 6: (0, 12)}), 'B_k1_cut120')
+
+
+class _KillsAliveAtBegin(gw.Tracer):
+    def begin(self, el, hough, alive, *a):
+        super().begin(el, hough, alive, *a)
+        alive[:] = False
+
+
+class _KillsAliveInAnIteration(gw.Tracer):
+    def iteration(self, exit_, j, bin_idx, votes, alive, in_window, **kw):
+        super().iteration(exit_, j, bin_idx, votes, alive, in_window, **kw)
+        alive[:] = False
+
+
+class _DropsAnAcceptedRun(gw.Tracer):
+    def iteration(self, exit_, j, bin_idx, votes, alive, in_window, **kw):
+        super().iteration(exit_, j, bin_idx, votes, alive, in_window, **kw)
+        if kw.get('accepted'):
+            del kw['accepted'][:]
+
+
+class _RewritesTheMembers(gw.Tracer):
+    def iteration(self, exit_, j, bin_idx, votes, alive, in_window, **kw):
+        super().iteration(exit_, j, bin_idx, votes, alive, in_window, **kw)
+        if kw.get('idx') is not None:
+            kw['idx'][:] = kw['idx'][0]         # the runs' members are views
+
+
+class _EmptiesTheAccumulator(gw.Tracer):
+    def removed(self, hough, run_seg_id):
+        super().removed(hough, run_seg_id)
+        hough.A[:] = 0
+
+
+def test_s11_g9_check_2_holds_on_an_honest_tracer():
+    """T14a: off equals on, and the off run is the loaded side."""
+    side = two_line_side()
+    assert len(side['segments']) >= 2
+    assert len({s['theta'] for s in side['segments']}) >= 2    # two lines
+    by_kc = {(1, 120): side}
+    c2 = dw.g9_non_interference(by_kc, {(1, 120): dw.trace_grid(side)})
+    assert c2['ok'] and c2['n'] == c2['n_ok'] == 1
+    row = c2['rows'][0]
+    assert row['seg_of_equal'] and row['segments_equal']
+    assert row['whole_graph_equal'] and row['off_is_the_loaded_side']
+    assert row['trace_self_check']['ok']
+    assert not dw.g9_non_interference(by_kc, {})['ok']     # nothing traced
+
+
+@pytest.mark.parametrize('tracer', [_KillsAliveAtBegin,
+                                    _KillsAliveInAnIteration,
+                                    _DropsAnAcceptedRun, _RewritesTheMembers,
+                                    _EmptiesTheAccumulator])
+def test_s11_a_tracer_that_alters_what_it_is_handed_fails_g9_check_2(tracer):
+    """T14b: MUTATION. Each of these writes to one argument and nothing else.
+
+    `alive`, before the loop and inside it; the list of accepted runs; the
+    index array the runs' members are views of; and the accumulator after a
+    removal. Every one changes `seg_of` or the segment list, and check 2 --
+    the registered comparison, not the trace's self-check -- says so.
+    """
+    side = two_line_side()
+    t = dw.trace_grid(side, tracer_factory=tracer)
+    c2 = dw.g9_non_interference({(1, 120): side}, {(1, 120): t})
+    assert not c2['ok']
+    row = c2['rows'][0]
+    assert not (row['seg_of_equal'] and row['segments_equal'])
+    assert row['off_is_the_loaded_side']         # the off run is untouched
+    assert c2['not_ok'] == [row]
+
+
+def test_s11_g9_check_2_needs_the_off_run_to_be_the_loaded_side():
+    """T14c: a trace of another extraction is not a trace of this side."""
+    side = two_line_side()
+    t = dw.trace_grid(side, params=gw.Params(l_min=2.0))   # nothing is long
+    c2 = dw.g9_non_interference({(1, 120): side}, {(1, 120): t})
+    row = c2['rows'][0]
+    assert row['seg_of_equal'] and row['segments_equal']   # off == on, and
+    assert not row['off_is_the_loaded_side'] and not c2['ok']   # still no
+
+
+# ── the end-to-end synthetic corpus ─────────────────────────────────────────
+#
+# Two robots, four cuts, EVERY side straight from the real extractor, so that
+# the trace of a map is the trace of the run that made its `seg_of`:
+#
+#   A (k0), every cut    row 6 OCC cols 0..12, one segment of 14
+#   B (k1) at cut60      the same                       -> A corroborated
+#   B (k1) at cut120     cols 0..3 and 8..12, cols 4..7 freed
+#   B (k1) at cut240     row 6 OCC cols 0..12 again
+#   B (k1) at cut1200    cols 0..3 only
+#
+# At 60 -> 120 the extractor's one accepting iteration takes cols 8..12 (0.5
+# m) and leaves cols 0..3 (0.4 m, short of l_min) unassigned. Their cells are
+# unchanged, so those four are segmentation losses, inside a metre of an
+# assigned element. H is that iteration -- it assigned six counterparts of
+# S_b -- and at H each e' is on the line, facing it, a candidate, in the
+# rejected run: R5+R6.
+#
+# At 240 -> 1200 nothing is long enough and nothing is assigned: the same
+# four cells are losses with no assigned element within a metre, no
+# counterpart of S_b is assigned, and each e' has NO HOME.
+
+S11_N_EVENTS = 8
+
+
+def s11_sides():
+    full = two_runs({6: (0, 12)})
+    by_kc, spawn = {}, {0: (0.0, 0.0), 1: (0.0, 0.0)}
+    for c in dw.CUTS:
+        by_kc[(0, c)] = s11_side(full, f'A_k0_cut{c}')
+    by_kc[(1, 60)] = s11_side(full, 'B_k1_cut60')
+    by_kc[(1, 120)] = s11_side(split_wall(), 'B_k1_cut120')
+    by_kc[(1, 240)] = s11_side(full, 'B_k1_cut240')
+    by_kc[(1, 1200)] = s11_side(two_runs({6: (0, 3)}), 'B_k1_cut1200')
+    return by_kc, spawn
+
+
+def s11_fake_s10(by_kc, spawn, tmp_path, capsys):
+    """An S10 result for the corpus, written and read back as S10's file is."""
+    s9 = s10_fake_s9(by_kc, spawn)
+    out = dw.s10_segments(by_kc, spawn, s9, {'stage': 's10',
+                                             'head': 'synthetic'},
+                          tmp_path / 's10', n_robots=2, **_s10_counts(s9))
+    capsys.readouterr()                         # S10's own prints, dropped
+    return json.loads(open(out['written']['path']).read())
+
+
+def _s11_spies(monkeypatch):
+    """Spies on everything that reads a class or a step towards one."""
+    seen = {'counterparts': 0, 'home_iteration': 0, 'element_at': 0,
+            'classify_drop': 0}
+
+    def spy(name):
+        real = getattr(dw, name)
+
+        def wrapped(*a, **k):
+            seen[name] += 1
+            return real(*a, **k)
+
+        monkeypatch.setattr(dw, name, wrapped)
+
+    for name in list(seen):
+        spy(name)
+    return seen
+
+
+def _s11_run(by_kc, spawn, s10, out_dir, **kw):
+    kw.setdefault('trace_of', dw.trace_grid)
+    return dw.s11_trace(by_kc, spawn, s10, {'stage': 's11',
+                                            'head': 'synthetic'}, out_dir,
+                        n_robots=2, n_events=S11_N_EVENTS, **kw)
+
+
+def test_s11_g9_holding_classifies_every_e_prime(tmp_path, capsys,
+                                                 monkeypatch):
+    """T15: the whole pipeline on real extractions, both classes, one file."""
+    by_kc, spawn = s11_sides()
+    s10 = s11_fake_s10(by_kc, spawn, tmp_path, capsys)
+    assert s10['n_events'] == S11_N_EVENTS
+    assert {e['shape'] for e in s10['events']} == set(dw.S10_SHAPES)
+
+    seen = _s11_spies(monkeypatch)
+    traced = []
+    out = _s11_run(by_kc, spawn, s10, tmp_path / 's11', min_r3=4,
+                   trace_of=lambda side: (traced.append(side['stem']),
+                                          dw.trace_grid(side))[1])
+    # each map of each step once: B at k' and at k, never A
+    assert sorted(traced) == ['B_k1_cut120', 'B_k1_cut1200', 'B_k1_cut240',
+                              'B_k1_cut60']
+    assert out['n_maps_traced'] == 4
+    # the positive control for T16's zeroes: one class per distinct e', and
+    # counterparts once per distinct S_b
+    assert seen['classify_drop'] == S11_N_EVENTS
+    assert seen['home_iteration'] == S11_N_EVENTS
+    assert seen['counterparts'] == 2
+
+    g9 = out['G9']
+    assert g9['all_ok'] and all(g9['parts'].values())
+    assert g9['1_s10_reproduces']['sections_differing'] == []
+    assert [(r['section'], r['equal'])
+            for r in g9['1_s10_reproduces']['sections_compared']] == [
+        (name, True) for name in dw.S10_COMPARED]
+    assert g9['2_non_interference']['n_ok'] == 4
+    c3 = g9['3_e_prime_unassigned_in_one_class']
+    assert c3['unassigned']['n_ok'] == S11_N_EVENTS and c3['one_class']['ok']
+
+    by_step = {}
+    for e in out['events']:
+        by_step.setdefault(e['step'], []).append(e)
+    hole, far = by_step['cut60->cut120'], by_step['cut240->cut1200']
+    assert len(hole) == len(far) == 4
+
+    for e in hole:
+        assert e['class'] == dw.R56_SHORT_RUN and e['shape'] == dw.SHAPE_HOLE
+        assert e['home']['H'] == 0
+        assert (e['home']['n_members'], e['home']['n_counterparts'],
+                e['home']['n_counterparts_assigned_by_H']) == (14, 10, 6)
+        at = e['at_home']
+        assert at['voted_in_seed_window'] and at['candidate']
+        assert at['dist_refit_m'] <= e['eps_m'] and at['faces_refit']
+        assert at['run']['accepted'] is False
+        assert at['run']['length_m'] < e['l_min_m'] == 0.5
+        # the gap that cut the run is the freed cells, not R3
+        cut = [g for g in e['run_gaps'] if g['neighbour'] is not None]
+        assert len(cut) == 1 and cut[0]['gap_m'] >= cut[0]['g_m']
+        assert cut[0]['thinned_by_r3'] is False
+        # after H its windows went on being seeded, and each run was short
+        after = e['after_home']
+        assert after['R1_never_in_a_seeded_window_again'] is False
+        assert (after['later_by_outcome'][dw.LATER_SHORT_RUN]
+                == after['n_later_seeded_windows'] > 0)
+        assert after['later_accepting'] == []
+        w = after['windows']
+        assert w['exhausted_after'] == after['n_later_seeded_windows']
+        assert sum(v for k, v in w.items() if k != 'n_windows') == w[
+            'n_windows']
+        assert e['no_home'] is None
+        assert e['nearest_assigned_same_dir']['on_e_prime_face_line'] is True
+        assert e['line_at_home']['angle_to_face_axis_deg'] < 1.0
+        assert e['line_at_home']['first_pass_candidates'][
+            'n_beyond_span'] == 0
+        # the registered record of e' at H is in the file's trace
+        assert [r['iteration'] for r in e['trace']] == [0]
+        assert e['trace'][0] == at
+        assert (e['trace_tally']['n_iterations']
+                == sum(e['trace_tally']['iterations_by_exit'].values()))
+
+    for e in far:
+        assert e['class'] == dw.NO_HOME and e['shape'] == dw.SHAPE_FAR
+        assert e['home']['H'] is None and e['at_home'] is None
+        assert e['line_at_home'] is None and e['after_home'] is None
+        assert e['run_gaps'] is None
+        nh = e['no_home']
+        assert (nh['n_counterparts'], nh['n_without_counterpart']) == (4, 10)
+        assert (nh['n_R1_never_in_a_seeded_window'],
+                nh['n_R2_seed_bins_spent']) == (0, 4)
+        assert e['nearest_assigned_same_dir'] is None
+        assert e['trace'] == []                 # no H, no accepting iteration
+
+    # b at k, in every event: assigned by iteration 0, a candidate of it
+    for e in out['events']:
+        k = e['line_at_k']
+        assert k['iteration'] == 0 and k['b']['run']['accepted'] is True
+        assert k['b']['dist_refit_m'] <= k['eps_m']
+        assert k['span']['n'] == 14
+
+    assert (out['P15']['n_R3'], out['P15']['of']) == (0, S11_N_EVENTS)
+    assert out['P15']['holds'] is False and out['P15']['min_required'] == 4
+    assert out['P15']['by_class'] == {
+        dw.NO_HOME: 4, dw.R3_LINE: 0, dw.R4_FACING: 0, dw.R56_SHORT_RUN: 4,
+        dw.OTHER: 0}
+    assert out['P16']['holds'] and out['P16']['n_other'] == 0
+
+    rep = out['reported']
+    assert rep['classes_by_shape'][dw.SHAPE_HOLE][dw.R56_SHORT_RUN] == 4
+    assert rep['classes_by_shape'][dw.SHAPE_FAR][dw.NO_HOME] == 4
+    assert rep['classes_by_state'][dw.CHANGED] == out['P15']['by_class']
+    assert sum(rep['classes_by_state'][dw.INTACT].values()) == 0
+    per = rep['per_distinct_s_b']
+    assert (per['n_units'], per['n_units_with_two_classes']) == (2, 0)
+    assert per['n_units_by_class'][dw.R56_SHORT_RUN] == 1
+    assert per['n_units_by_class'][dw.NO_HOME] == 1
+
+    printed = capsys.readouterr().out
+    assert 'G9: check 1 HOLD  check 2 HOLD  check 3 HOLD   HOLD' in printed
+    assert 'P15: FAIL  0/8' in printed and 'P16: HOLD  0/8' in printed
+
+    # one new dated S11 file, and no second S10 file anywhere
+    written = list((tmp_path / 's11').glob('*.json'))
+    assert [p.name[:10] for p in written] == ['s11_trace_']
+    assert len(list((tmp_path / 's10').glob('*.json'))) == 1
+    payload = json.loads(written[0].read_text())
+    assert len(payload['events']) == S11_N_EVENTS
+    assert payload['G9']['all_ok'] is True
+    assert out['written']['sha256'] == hashlib.sha256(
+        written[0].read_bytes()).hexdigest()
+
+
+def _assert_s11_fail_file(out_dir, capsys):
+    """The fail file holds the G9 comparisons and no class; nor does stdout."""
+    assert not list(out_dir.glob('s11_trace_*.json'))
+    written = list(out_dir.glob('s11_g9_fail_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert set(payload) >= {'G9', 'stage', 'seconds'}
+
+    def keys_of(node):
+        if isinstance(node, dict):
+            return set(node) | set().union(*(keys_of(v) for v in node.values())
+                                           or [set()])
+        if isinstance(node, list):
+            return set().union(*(keys_of(v) for v in node) or [set()])
+        return set()
+
+    assert not (keys_of(payload) & {'class', 'classes', 'H', 'home', 'at_home',
+                                    'events', 'P15', 'P16', 'by_class',
+                                    'reported', 'trace', 'after_home',
+                                    'no_home', 'run_gaps'})
+    text = written[0].read_text()
+    out = capsys.readouterr().out
+    assert 'G9' in out and 'FAIL' in out
+    for word in ('P15', 'P16', 'no home') + tuple(dw.DROP_CLASSES):
+        assert word not in out, word
+    for word in dw.DROP_CLASSES:
+        assert f'"{word}"' not in text, word
+    return payload
+
+
+@pytest.mark.parametrize('check', ['1_s10_reproduces', '2_non_interference',
+                                   '3_e_prime_unassigned_in_one_class'])
+def test_s11_a_failure_at_any_g9_check_classifies_nothing(check, tmp_path,
+                                                          capsys, monkeypatch):
+    """T16: exit 2, and no counterpart, no H and no class anywhere.
+
+    CHECK 3 IS DRIVEN BY A PATCH, deliberately: with checks 1 and 2 holding,
+    an e' assigned in the traced run cannot arise -- check 1 reproduced G8's
+    "e' unassigned at k'" on the loaded side, and check 2 held the traced run
+    equal to it -- so the tracer is made to answer as it would if that broke.
+    """
+    by_kc, spawn = s11_sides()
+    s10 = s11_fake_s10(by_kc, spawn, tmp_path, capsys)
+    trace_of, traced = dw.trace_grid, []
+
+    if check == '1_s10_reproduces':
+        # one stored state flipped: S10 no longer reproduces
+        s10['events'][0]['state'] = dw.INTACT
+    elif check == '2_non_interference':
+        # at `begin`, because this corpus's maps accept in one iteration at
+        # most and a change made after it would reach no output
+        def trace_of(side):                               # noqa: F811
+            return dw.trace_grid(side, tracer_factory=_KillsAliveAtBegin)
+    else:
+        e_prime = s10['events'][0]['e_prime']
+
+        def trace_of(side):                               # noqa: F811
+            t = dw.trace_grid(side)
+            if side['stem'] == 'B_k1_cut120':
+                said = t['tracer'].assigned_in()
+                said[e_prime] = 0
+                t['tracer'].assigned_in = lambda: said
+            return t
+
+    def counting(side):
+        traced.append(side['stem'])
+        return trace_of(side)
+
+    seen = _s11_spies(monkeypatch)
+    out_dir = tmp_path / 's11'
+    with pytest.raises(SystemExit) as e:
+        _s11_run(by_kc, spawn, s10, out_dir, trace_of=counting)
+    assert e.value.code == 2
+    assert seen == {'counterparts': 0, 'home_iteration': 0, 'element_at': 0,
+                    'classify_drop': 0}
+    payload = _assert_s11_fail_file(out_dir, capsys)
+    parts = payload['G9']['parts']
+    assert parts[check] is False
+    order = ['1_s10_reproduces', '2_non_interference',
+             '3_e_prime_unassigned_in_one_class']
+    for earlier in order[:order.index(check)]:
+        assert parts[earlier] is True
+    if check == '1_s10_reproduces':
+        assert traced == []                     # no map was traced at all
+        assert payload['G9']['2_non_interference'] is None
+        assert payload['G9']['1_s10_reproduces']['sections_differing'] == [
+            'events']
+    if check != '3_e_prime_unassigned_in_one_class':
+        assert payload['G9']['3_e_prime_unassigned_in_one_class'][
+            'unassigned'] is None
+
+
+def test_s11_an_e_prime_outside_the_classes_prints_and_writes_none(
+        tmp_path, capsys, monkeypatch):
+    """T17: check 3's second half fails AFTER classifying, and shows nothing."""
+    by_kc, spawn = s11_sides()
+    s10 = s11_fake_s10(by_kc, spawn, tmp_path, capsys)
+    real = dw.classify_drop
+    calls = []
+
+    def sometimes_nothing(home, at):
+        calls.append(home)
+        return None if len(calls) == 3 else real(home, at)
+
+    monkeypatch.setattr(dw, 'classify_drop', sometimes_nothing)
+    out_dir = tmp_path / 's11'
+    with pytest.raises(SystemExit) as e:
+        _s11_run(by_kc, spawn, s10, out_dir)
+    assert e.value.code == 2
+    assert len(calls) == S11_N_EVENTS
+    payload = _assert_s11_fail_file(out_dir, capsys)
+    c3 = payload['G9']['3_e_prime_unassigned_in_one_class']
+    assert c3['unassigned']['ok'] is True
+    assert c3['one_class'] == {'n': 8, 'n_expected': 8,
+                               'n_not_a_registered_label': 1, 'ok': False}
+    assert payload['G9']['parts'] == {
+        '1_s10_reproduces': True, '2_non_interference': True,
+        '3_e_prime_unassigned_in_one_class': False}
+
+
+def test_s11_check_1_ignores_row_order_and_nothing_else(tmp_path, capsys):
+    """T18: S10's rows in another order reproduce; one value moved does not."""
+    by_kc, spawn = s11_sides()
+    s10 = s11_fake_s10(by_kc, spawn, tmp_path, capsys)
+    check, derived = dw.g9_s10_reproduces(by_kc, spawn, s10, n_robots=2,
+                                          n_events=S11_N_EVENTS)
+    assert check['ok'] and derived is not None
+    assert check['wrote_an_s10_file'] is False
+
+    shuffled = json.loads(json.dumps(s10))
+    shuffled['losses'].reverse()
+    shuffled['events'][0]['losses'].reverse()
+    shuffled['G8']['2_b_assigned_e_prime_unassigned']['rows'].reverse()
+    assert dw.g9_s10_reproduces(by_kc, spawn, shuffled, n_robots=2,
+                                n_events=S11_N_EVENTS)[0]['ok']
+
+    for path, value in ((('P13a', 'n'), 99), (('losses', 0, 'seg_b'), 7),
+                        (('reported', 'base_rate', 0, 'n_changed'), 99),
+                        (('segment_units', 0, 'length_m'), math.nextafter(
+                            s10['segment_units'][0]['length_m'], math.inf))):
+        moved = json.loads(json.dumps(s10))
+        node = moved
+        for key in path[:-1]:
+            node = node[key]
+        node[path[-1]] = value
+        check = dw.g9_s10_reproduces(by_kc, spawn, moved, n_robots=2,
+                                     n_events=S11_N_EVENTS)[0]
+        assert not check['ok'] and check['sections_differing'] == [path[0]]
+
+    # a row dropped is a row missing, whatever the order
+    short = json.loads(json.dumps(s10))
+    short['losses'].pop()
+    assert not dw.g9_s10_reproduces(by_kc, spawn, short, n_robots=2,
+                                    n_events=S11_N_EVENTS)[0]['ok']
+    # the S9 hash S10's file names is part of check 1 when one is expected
+    named = json.loads(json.dumps(s10))
+    named['sources'] = {'s9': {'sha256': 'abc'}}
+    assert dw.g9_s10_reproduces(by_kc, spawn, named, n_robots=2,
+                                n_events=S11_N_EVENTS, s9_sha='abc')[0]['ok']
+    assert not dw.g9_s10_reproduces(by_kc, spawn, named, n_robots=2,
+                                    n_events=S11_N_EVENTS,
+                                    s9_sha=dw.S9_SHA256)[0]['ok']
+
+
+def test_s11_reproduces_s10_through_s10s_own_statements():
+    """T19: `s10_derive` is what S10 runs, not a copy S11 keeps beside it."""
+    import inspect
+    s10_src = inspect.getsource(dw.s10_segments)
+    assert 's10_derive(' in s10_src
+    for gone in ('segment_change(', 'is_flanked(', 'base_rate(',
+                 'p13_verdict(', 'p14_verdict('):
+        assert gone not in s10_src
+    g9_src = inspect.getsource(dw.g9_s10_reproduces)
+    for used in ('recompute_s9_rows(', 'loss_rows(', 'g8_assignments(',
+                 'g8_segments(', 's10_derive('):
+        assert used in g9_src
+    for src in (g9_src, inspect.getsource(dw.s11_trace),
+                inspect.getsource(dw.s10_derive)):
+        assert '_write_s10(' not in src and 's10_segments(' not in src
+
+
+def _s11_refusal_spies(monkeypatch):
+    """Spies on everything `run_s11` could read: the corpus and the S10 file."""
+    seen = {'load_side': 0, 'trace_stem': 0, 'sha256': 0}
+    real = dw._sha256
+
+    def load_side(*a, **k):
+        seen['load_side'] += 1
+        raise AssertionError('run_s11 loaded a map past a refusal')
+
+    def trace_stem(*a, **k):
+        seen['trace_stem'] += 1
+        raise AssertionError('run_s11 traced a map past a refusal')
+
+    def sha256(path):
+        seen['sha256'] += 1
+        return real(path)
+
+    monkeypatch.setattr(dw, 'load_side', load_side)
+    monkeypatch.setattr(dw, 'trace_stem', trace_stem)
+    monkeypatch.setattr(dw, '_sha256', sha256)
+    return seen
+
+
+S11_SPEC_TEXT = ('## The rule that drops each e\'\n\n'
+                 '**P15. REGISTERED 11 Oct 2026.** At least 11.\n\n'
+                 '**P16. REGISTERED 11 Oct 2026.** None in Other.\n')
+
+
+def test_s11_refuses_a_dirty_tree(monkeypatch):
+    """T20a: a result file must not name a commit it was not produced by."""
+    seen = _s11_refusal_spies(monkeypatch)
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/graph_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s11()
+    assert e.value.code == 2
+    assert seen == {'load_side': 0, 'trace_stem': 0, 'sha256': 0}
+
+
+def test_s11_refuses_when_the_registration_is_not_an_ancestor(monkeypatch):
+    """T20b: dc754de registered P15 and P16 and must be behind the code."""
+    seen = _s11_refusal_spies(monkeypatch)
+    asked = []
+
+    def fake(*a):
+        asked.append(a)
+        return '' if a[0] in ('status', 'merge-base') else 'deadbeef'
+
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s11()
+    assert e.value.code == 2
+    assert ('merge-base', 'dc754de', 'HEAD') in asked
+    assert dw.S11_REGISTRATION == 'dc754de'
+    assert seen == {'load_side': 0, 'trace_stem': 0, 'sha256': 0}
+
+
+@pytest.mark.parametrize('present', ['', 'P15', 'P16'])
+def test_s11_refuses_when_the_spec_at_head_lacks_a_registration(present,
+                                                                monkeypatch):
+    """T20c: both headers, not one of them -- each is judged separately."""
+    seen = _s11_refusal_spies(monkeypatch)
+    text = '## 9\n\n**P14. REGISTERED 10 Oct 2026.** something\n'
+    if present:
+        text += f'\n**{present}. REGISTERED 11 Oct 2026.** something\n'
+
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return text
+        return 'c0ffee'                       # merge-base == rev-parse
+
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s11()
+    assert e.value.code == 2
+    assert seen == {'load_side': 0, 'trace_stem': 0, 'sha256': 0}
+
+
+def test_s11_refuses_a_missing_or_wrong_s10_file(tmp_path, monkeypatch):
+    """T20d: G9 check 1 is an equality against ONE S10 run, so it is pinned."""
+    seen = _s11_refusal_spies(monkeypatch)
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] == 'status' else S11_SPEC_TEXT if a[0] == 'show'
+        else 'c0ffee'))
+    with pytest.raises(SystemExit) as e:
+        dw.run_s11(tmp_path)                    # no S10 file there at all
+    assert e.value.code == 2
+    assert seen == {'load_side': 0, 'trace_stem': 0, 'sha256': 0}
+
+    (tmp_path / dw.S10_RESULT).write_text('{"events": [], "rho_m": 0.1}')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s11(tmp_path)
+    assert e.value.code == 2
+    assert seen['load_side'] == 0 and seen['trace_stem'] == 0
+    assert seen['sha256'] == 1               # and it did hash the named file
+    assert dw.S10_RESULT == 's10_segments_20261011T134922Z.json'
+    assert dw.S10_SHA256 == ('fa750aa97fc08c5a1f177b78019832c3c5794ef42a8898d9'
+                             'd8f6d1d7127407e2')
+
+
 # ──────────────────────────── the named breaks ───────────────────────────────
 
 def test_x1_frame_sign_flip_fails_g1_and_collapses_corroboration():

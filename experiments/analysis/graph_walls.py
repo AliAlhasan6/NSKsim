@@ -885,6 +885,205 @@ def components_8(mask: np.ndarray, rho: float,
     return out
 
 
+# ─────────────────────────────── the tracer ──────────────────────────────────
+
+# How one peak iteration of extract_with_elements left its body. The four aborts
+# are its four `continue`s, in order; they end an iteration early and leave its
+# seed bin spent (R7 feeding R2, in SPEC_b2_divergence_walls's v0.16 audit).
+TRACE_NO_LIVE_VOTE = 'abort_no_live_vote_in_window'
+TRACE_NO_FIRST_PASS = 'abort_no_first_pass_candidate'
+TRACE_NO_REFIT_CANDIDATE = 'abort_no_refit_candidate'
+TRACE_NO_ACCEPTED_RUN = 'abort_no_accepted_run'
+TRACE_ACCEPTED = 'accepted'
+TRACE_ABORTS = (TRACE_NO_LIVE_VOTE, TRACE_NO_FIRST_PASS,
+                TRACE_NO_REFIT_CANDIDATE, TRACE_NO_ACCEPTED_RUN)
+
+
+class Tracer:
+    """A read-only record of every peak iteration of one extraction.
+
+    Handed to extract_with_elements, which calls it at fixed points and does
+    nothing else differently: `begin` before the loop, `iteration` once on every
+    exit path of the loop body -- each of the four aborts and the accepting one
+    -- `removed` after an accepting iteration took its elements out of the
+    accumulator, and `end` after the loop.
+
+    IT IS HANDED THE LIVE STATE AND MUST NOT CHANGE IT. `alive`, the candidate
+    masks and the accumulator are mutated in place later in the same call, so
+    everything kept here is a COPY taken at the call; a stored reference would
+    read some later iteration. Nothing here writes to an argument, re-enters
+    `Hough.peaks` (a generator that marks a bin exhausted before yielding it,
+    so the seed recorded is the one the loop was handed) or reads
+    `params.tie_break_seed`.
+
+    Members are read inside the loop, off the accepted runs: `_finish` strips
+    `_members` from every segment before the graph is returned.
+
+    BINS. A seed bin leaves the pass in one of two ways, and both are recorded
+    with the iteration that did it. It is EXHAUSTED when `peaks` yields it,
+    which is the iteration it seeds (`spent_at`). Or its live window sum falls
+    below `vote_min` when an accepting iteration removes its elements, after
+    which `peaks` drops it unyielded (`fell_at`); votes only decrease, so that
+    is final. A bin whose window never reached `vote_min` was never seedable.
+    """
+
+    def __init__(self):
+        self.iterations: list[dict] = []
+        self.el = None
+        self.seg_of = None
+        self.n_iter = None
+
+    def begin(self, el: dict, hough: 'Hough', alive: np.ndarray,
+              params: Params, rho: float, eps: float,
+              vote_min: float) -> None:
+        self.el = {k: (v.copy() if isinstance(v, np.ndarray) else v)
+                   for k, v in el.items()}
+        self.rho, self.eps, self.vote_min = rho, eps, vote_min
+        self.l_min, self.g = params.l_min, params.g
+        self.enforce_facing = params.enforce_facing
+        self.half = hough.half
+        self.n_d = hough.n_d
+        self.thetas = hough.thetas.copy()
+        self.bins = hough.bins.copy()
+        self.vote = hough.vote.copy()
+        self.alive_at_start = alive.copy()
+        live = hough.window_all() >= vote_min
+        self.seedable = live.copy()
+        self._live = live
+        self.spent_at = np.full(live.shape, -1, dtype=np.int64)
+        self.fell_at = np.full(live.shape, -1, dtype=np.int64)
+
+    def iteration(self, exit_: str, j: int, bin_idx: int, votes: int,
+                  alive: np.ndarray, in_window: np.ndarray, *,
+                  d_peak: float | None = None,
+                  cand_first: np.ndarray | None = None,
+                  theta_line: float | None = None,
+                  d_line: float | None = None,
+                  degenerate: bool | None = None,
+                  cand: np.ndarray | None = None,
+                  idx: np.ndarray | None = None,
+                  t_sorted: np.ndarray | None = None,
+                  runs: list | None = None,
+                  accepted: list | None = None) -> None:
+        i = len(self.iterations)
+        self.spent_at[int(j), int(bin_idx)] = i
+        rec = {
+            'i': i, 'exit': exit_,
+            'theta_index': int(j), 'd_bin': int(bin_idx), 'votes': int(votes),
+            'theta_peak': float(self.thetas[int(j)]),
+            'alive': alive.copy(), 'in_window': in_window.copy(),
+            'd_peak': None if d_peak is None else float(d_peak),
+            'cand_first': None if cand_first is None else cand_first.copy(),
+            'theta_line': None if theta_line is None else float(theta_line),
+            'd_line': None if d_line is None else float(d_line),
+            'degenerate': None if degenerate is None else bool(degenerate),
+            'cand': None if cand is None else cand.copy(),
+            'order': None if idx is None else idx.copy(),
+            't_sorted': None if t_sorted is None else t_sorted.copy(),
+            'runs': None, 'run_length': None, 'run_accepted': None,
+            'run_seg': None, 'fell_below': [],
+        }
+        if runs is not None:
+            taken = {int(lo) for lo, _hi, _m in (accepted or [])}
+            rec['runs'] = [(int(lo), int(hi)) for lo, hi in runs]
+            # the loop's own expression for a run's length
+            rec['run_length'] = [
+                float(t_sorted[hi - 1] - t_sorted[lo] + self.rho)
+                for lo, hi in runs]
+            rec['run_accepted'] = [int(lo) in taken for lo, _hi in runs]
+            rec['run_seg'] = [None] * len(runs)
+            rec['members'] = [m.copy() for _lo, _hi, m in (accepted or [])]
+        self.iterations.append(rec)
+
+    def removed(self, hough: 'Hough', run_seg_id: dict) -> None:
+        rec = self.iterations[-1]
+        rec['run_seg'] = [run_seg_id.get(lo) for lo, _hi in rec['runs']]
+        live = hough.window_all() >= self.vote_min
+        fell = self._live & ~live
+        self.fell_at[fell] = rec['i']
+        rec['fell_below'] = [(int(j), int(b)) for j, b in np.argwhere(fell)]
+        self._live = live
+
+    def end(self, hough: 'Hough', seg_of: np.ndarray, n_iter: int) -> None:
+        self.seg_of = seg_of.copy()
+        self.n_iter = int(n_iter)
+        self.exhausted = hough.exhausted.copy()
+
+    # ── reading the record; nothing below is called by the extraction ───────
+
+    def distance(self, theta: float, d: float) -> np.ndarray:
+        """Every element's distance off `L(theta, d)`: line_candidates' own."""
+        nx, ny = normal_of(theta)
+        return np.abs(self.el['x'] * nx + self.el['y'] * ny - d)
+
+    def facing(self, theta: float) -> np.ndarray:
+        """Every element's `n(theta) . n_e`, the left side of W4's test."""
+        nx, ny = normal_of(theta)
+        return self.el['nx'] * nx + self.el['ny'] * ny
+
+    def assigned_in(self) -> np.ndarray:
+        """Per element, the iteration that assigned it, or -1."""
+        out = np.full(self.el['n'], -1, dtype=np.int64)
+        for rec in self.iterations:
+            for m in rec.get('members', []):
+                out[m] = rec['i']
+        return out
+
+    def self_check(self) -> dict:
+        """Does the record agree with itself and with what the loop returned?
+
+        Every seed is distinct and is exactly the set `peaks` exhausted; every
+        seedable bin was either yielded or fell below `vote_min`; the iteration
+        count is the loop's `n_iter`; the elements the accepted runs hold are
+        exactly the assigned ones, each with its segment id; and each candidate
+        mask is `alive`, within eps and facing, recomputed from the recorded
+        line -- which is what lets R3 and R4 be told apart afterwards.
+        """
+        seeds = {(r['theta_index'], r['d_bin']) for r in self.iterations}
+        spent = self.spent_at >= 0
+        seg_of = np.full(self.el['n'], -1, dtype=np.int64)
+        masks_ok = True
+        for rec in self.iterations:
+            for lo_hi, seg, ok in zip(rec['runs'] or [], rec['run_seg'] or [],
+                                      rec['run_accepted'] or []):
+                if ok and seg is not None:
+                    seg_of[rec['order'][lo_hi[0]:lo_hi[1]]] = seg
+            for theta, d, mask in ((rec['theta_peak'], rec['d_peak'],
+                                    rec['cand_first']),
+                                   (rec['theta_line'], rec['d_line'],
+                                    rec['cand'])):
+                if mask is None:
+                    continue
+                want = rec['alive'] & (self.distance(theta, d) <= self.eps)
+                if self.enforce_facing:
+                    want = want & (self.facing(theta) > FACING_MIN)
+                masks_ok = masks_ok and bool(np.array_equal(want, mask))
+        out = {
+            'n_iterations': len(self.iterations), 'n_iter': self.n_iter,
+            'iteration_count_equal': len(self.iterations) == self.n_iter,
+            'seeds_distinct': len(seeds) == len(self.iterations),
+            'seeds_are_the_exhausted_bins': bool(
+                np.array_equal(spent, self.exhausted)),
+            'n_seedable_bins': int(np.count_nonzero(self.seedable)),
+            'n_bins_exhausted': int(np.count_nonzero(spent)),
+            'n_bins_dropped': int(np.count_nonzero(
+                self.seedable & ~spent & (self.fell_at >= 0))),
+            'n_bins_unaccounted': int(np.count_nonzero(
+                self.seedable & ~spent & (self.fell_at < 0))),
+            'seeds_were_seedable': bool(np.all(self.seedable[spent])),
+            'members_are_the_assigned': bool(
+                np.array_equal(seg_of, self.seg_of)),
+            'candidate_masks_recompute': masks_ok,
+        }
+        out['ok'] = bool(
+            out['iteration_count_equal'] and out['seeds_distinct']
+            and out['seeds_are_the_exhausted_bins']
+            and out['n_bins_unaccounted'] == 0 and out['seeds_were_seedable']
+            and out['members_are_the_assigned']
+            and out['candidate_masks_recompute'])
+        return out
+
+
 # ─────────────────────────────── extraction ──────────────────────────────────
 
 def extract(grid: np.ndarray, rho: float, origin: tuple[float, float],
@@ -899,7 +1098,8 @@ def extract(grid: np.ndarray, rho: float, origin: tuple[float, float],
 
 def extract_with_elements(grid: np.ndarray, rho: float,
                           origin: tuple[float, float],
-                          params: Params) -> tuple[dict, dict, np.ndarray]:
+                          params: Params, tracer: Tracer | None = None
+                          ) -> tuple[dict, dict, np.ndarray]:
     """extract(), plus the element table and `seg_of` behind it.
 
     A8 and A10 are statements about ELEMENTS, and the per-map JSON holds
@@ -908,6 +1108,9 @@ def extract_with_elements(grid: np.ndarray, rho: float,
     reconstruction by distance would quietly include unassigned elements that
     happen to lie within eps of some segment's line, which is precisely the
     population A8 is measuring.
+
+    `tracer`, when given, is told about every peak iteration (see Tracer). With
+    None, the default, the only difference is the None checks themselves.
     """
     eps = params.eps(rho)
     b = params.b(rho)
@@ -922,6 +1125,8 @@ def extract_with_elements(grid: np.ndarray, rho: float,
     lines: list[dict] = []
     n_iter = 0
     degenerate_fits = 0
+    if tracer is not None:
+        tracer.begin(el, hough, alive, params, rho, eps, vote_min)
 
     for j, bin_idx, votes in hough.peaks(vote_min, params.tie_break_seed):
         n_iter += 1
@@ -931,6 +1136,9 @@ def extract_with_elements(grid: np.ndarray, rho: float,
         in_window = (alive & hough.vote[:, j]
                      & (np.abs(hough.bins[:, j] - bin_idx) <= hough.half))
         if not in_window.any():
+            if tracer is not None:
+                tracer.iteration(TRACE_NO_LIVE_VOTE, j, bin_idx, votes, alive,
+                                 in_window)
             continue
         d_peak = float(hough.d[in_window, j].mean())
 
@@ -938,12 +1146,21 @@ def extract_with_elements(grid: np.ndarray, rho: float,
         cand = line_candidates(el, alive, theta_peak, d_peak, eps,
                                params.enforce_facing)
         if not cand.any():
+            if tracer is not None:
+                tracer.iteration(TRACE_NO_FIRST_PASS, j, bin_idx, votes, alive,
+                                 in_window, d_peak=d_peak, cand_first=cand)
             continue
+        cand_first = cand
         theta_line, d_line, degen = _refit(el, cand, theta_peak, d_peak)
         degenerate_fits += int(degen)
         cand = line_candidates(el, alive, theta_line, d_line, eps,
                                params.enforce_facing)
         if not cand.any():
+            if tracer is not None:
+                tracer.iteration(TRACE_NO_REFIT_CANDIDATE, j, bin_idx, votes,
+                                 alive, in_window, d_peak=d_peak,
+                                 cand_first=cand_first, theta_line=theta_line,
+                                 d_line=d_line, degenerate=degen, cand=cand)
             continue
 
         # step 5 -> runs, then the long ones become segments.
@@ -961,6 +1178,13 @@ def extract_with_elements(grid: np.ndarray, rho: float,
             if length >= params.l_min:
                 accepted.append((lo, hi, members))
 
+        if tracer is not None:
+            tracer.iteration(
+                TRACE_ACCEPTED if accepted else TRACE_NO_ACCEPTED_RUN, j,
+                bin_idx, votes, alive, in_window, d_peak=d_peak,
+                cand_first=cand_first, theta_line=theta_line, d_line=d_line,
+                degenerate=degen, cand=cand, idx=idx, t_sorted=t_sorted,
+                runs=runs, accepted=accepted)
         if not accepted:
             continue
 
@@ -990,6 +1214,8 @@ def extract_with_elements(grid: np.ndarray, rho: float,
             gaps.append(rec)
 
         hough.remove(np.concatenate(taken))
+        if tracer is not None:
+            tracer.removed(hough, run_seg_id)
         lines.append({
             'theta': float(theta_line),
             'd': float(d_line),
@@ -998,6 +1224,9 @@ def extract_with_elements(grid: np.ndarray, rho: float,
             'peak': {'theta': theta_peak, 'votes': int(votes),
                      'degenerate_fit': bool(degen)},
         })
+
+    if tracer is not None:
+        tracer.end(hough, seg_of, n_iter)
 
     graph = _finish(grid, rho, origin, el, seg_of, segments, lines, params,
                     {'n_elements': el['n'],
@@ -1225,7 +1454,8 @@ def graph_for_map(stem: str, maps_dir: Path = MAPS_DIR_DEFAULT,
 
 def graph_and_elements(stem: str, maps_dir: Path = MAPS_DIR_DEFAULT,
                        params: Params | None = None,
-                       g_source: str | None = None
+                       g_source: str | None = None,
+                       tracer: Tracer | None = None
                        ) -> tuple[dict, dict, np.ndarray, np.ndarray]:
     """§7's JSON for one map, with the element table A8/A10 need.
 
@@ -1234,6 +1464,8 @@ def graph_and_elements(stem: str, maps_dir: Path = MAPS_DIR_DEFAULT,
 
     `params` defaults to g read from the nav2 params, which is the only threshold
     here that comes from outside the spec and the map.
+
+    `tracer` goes to extract_with_elements untouched; None changes nothing.
     """
     if params is None:
         radius, where = read_robot_radius()
@@ -1242,7 +1474,7 @@ def graph_and_elements(stem: str, maps_dir: Path = MAPS_DIR_DEFAULT,
     m = load_grid(stem, maps_dir)
     rho = m['rho']
     result, el, seg_of = extract_with_elements(
-        m['grid'], rho, m['origin'], params)
+        m['grid'], rho, m['origin'], params, tracer)
     robot = re.search(r'robot(\d+)$', stem)
     graph = {
         'map': stem,
