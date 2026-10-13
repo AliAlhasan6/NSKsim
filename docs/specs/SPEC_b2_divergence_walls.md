@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.17, draft)
+# SPEC — B2 divergence on walls (v0.18, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -29,8 +29,11 @@ to at k is intact at k', before any member of that segment was read at k'.
 v0.17 records the S10 results — G8 holds on all three checks, P13a fails, 2 of
 5 segments changed, and P13b holds, 12 of 14 intact, and P14 holds, 0 of 22
 flanked — and registers P15 and P16 on which rule of the extraction drops each
-e', before any class was computed for any e'. No code is written until the
-stop-point questions in §11 are answered.
+e', before any class was computed for any e'. v0.18 records the S11 results —
+G9 holds, P15 fails, 1 of 22 in R3, and P16 holds, 0 of 22 in Other — and a
+post-hoc reading that all 22 elements are risers with respect to H's refitted
+line. It closes O8, opens O9 and registers no prediction. No code is written
+until the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -1129,6 +1132,137 @@ audit and the trace, not the maps.
 
 P15 and P16 are judged separately.
 
+### S11 results
+
+Source: `experiments/logs/divergence/s11_trace_20261012T233219Z.json`, sha256
+`006a7f8fc2774cf1324b613d42e70d8e4d103bd8e8298624a8630522c58663dd`. The file is not
+tracked — `experiments/logs/` is gitignored — so the hash stands in for it. Produced
+at HEAD `dc5e2a3`, the commit that added the stage, against a clean tree. Every
+number here was read from that file by script.
+
+- **G9: HOLD,** all three checks.
+- **P15: FAIL.** 1 of the 22 distinct e' is in R3; 11 required.
+- **P16: HOLD.** 0 of the 22 are in Other.
+- The other 21 are in R4: e' does not face H's refitted line. None is in No home or
+  R5+R6.
+- Per distinct S_b, reported and not judged: all 19 hold an R4 element, and 1 of them
+  (k4, cut60 → cut120) also holds the R3 element.
+
+**Table 1 — classes by loss shape.**
+
+| class | one-cell hole | none within 1 m | total |
+|---|---|---|---|
+| No home | 0 | 0 | 0 |
+| R3 | 0 | 1 | 1 |
+| R4 | 14 | 7 | 21 |
+| R5+R6 | 0 | 0 | 0 |
+| Other | 0 | 0 | 0 |
+| **all distinct e'** | 14 | 8 | 22 |
+
+**Table 2 — classes by the state of S_b at k'.**
+
+| class | intact | changed | total |
+|---|---|---|---|
+| No home | 0 | 0 | 0 |
+| R3 | 1 | 0 | 1 |
+| R4 | 17 | 4 | 21 |
+| R5+R6 | 0 | 0 | 0 |
+| Other | 0 | 0 | 0 |
+| **all distinct e'** | 18 | 4 | 22 |
+
+**The riser reading (post hoc, not registered).** Read from the S11 file by script,
+after the verdicts above. None of it was registered, and it carries no verdict.
+
+- **The angle.** The angle S11 reports lies between the refitted line's direction and
+  the element's own face tangent, folded into 0–90°. So 90° minus the angle is the
+  line's unsigned tilt from its nearest axis.
+- **Perpendicular.** All 22 e' are perpendicular to the axis nearest H's refitted
+  normal. The file does not store the directions of H's members, so this axis stands
+  in for their majority direction.
+- **Facing.** In all 22, b faced the line that assigned it at k (dot > 1e-9), and e'
+  does not face H's refitted line at k' (dot ≤ 1e-9). In size, each dot equals the
+  sine of that line's tilt: at most 0.0351 at k and 0.0197 at k'.
+- **Tilt sign.** In all 22, the line's tilt, measured from the same axis with the
+  same sign convention, has opposite signs at k and k'.
+- **The R3 element** (k4, e' 83) is a riser too, with a negative dot at k'. It is in
+  R3 because R3 is tested first: it lies 1.167 eps from H's refitted line.
+- **b's place in its run.** In 13 of the 22, b's run is the first run of its
+  candidates, so b's place in it is known: in all 13, b is the first, second, last or
+  second-to-last element. For the other 9 it is not stored.
+- **Not stored, so not checked:** the directions of H's members, and e''s position
+  along H's span at k'.
+
+**Table 3 — the 22 distinct e', one row each.** `H` is the home iteration at k';
+`first-pass` and `refit` are e''s distances to H's first-pass and refitted lines,
+against eps = 0.1707 m; `e' dir` is e''s direction and `axis` the axis nearest H's
+refitted normal. The dot is that of the element's normal with the refitted normal: e'
+with H's at k', b with the line that assigned it at k. The tilt is the refitted
+line's, from its nearest axis, counter-clockwise positive; the nearest axis is the
+same at k and k' in every row.
+
+| B | step | e' | S_b | shape | state | class | H | first-pass (m) | refit (m) | e' dir | axis | dot at k' | tilt at k' | dot at k | tilt at k | sign differs |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| k0 | cut60 → cut120 | 436 | 3 | none within 1 m | changed | R4 | 6 | 0.1850 | 0.0518 | +y | +x | −0.001070 | −0.0613° | +0.003771 | +0.2161° | yes |
+| k0 | cut120 → cut240 | 760 | 5 | one-cell hole | intact | R4 | 7 | 0.1825 | 0.0643 | −y | −x | −0.008411 | −0.4819° | +0.008411 | +0.4819° | yes |
+| k0 | cut240 → cut1200 | 86 | 6 | one-cell hole | intact | R4 | 4 | 0.0651 | 0.0589 | +x | +y | −0.004979 | +0.2852° | +0.006890 | −0.3948° | yes |
+| k1 | cut60 → cut120 | 431 | 2 | none within 1 m | intact | R4 | 5 | 0.2355 | 0.1643 | +y | +x | −0.008411 | −0.4819° | +0.003990 | +0.2286° | yes |
+| k1 | cut60 → cut120 | 432 | 2 | none within 1 m | intact | R4 | 5 | 0.1356 | 0.0643 | +y | +x | −0.008411 | −0.4819° | +0.003990 | +0.2286° | yes |
+| k1 | cut120 → cut240 | 735 | 6 | one-cell hole | intact | R4 | 6 | 0.1825 | 0.0643 | −y | −x | −0.008411 | −0.4819° | +0.003990 | +0.2286° | yes |
+| k1 | cut240 → cut1200 | 85 | 5 | one-cell hole | intact | R4 | 4 | 0.0640 | 0.0509 | +x | +y | −0.002386 | +0.1367° | +0.008346 | −0.4782° | yes |
+| k1 | cut240 → cut1200 | 232 | 11 | one-cell hole | intact | R4 | 6 | 0.1061 | 0.0747 | +x | +y | −0.006668 | +0.3821° | +0.004619 | −0.2646° | yes |
+| k2 | cut60 → cut120 | 137 | 5 | none within 1 m | changed | R4 | 2 | 0.1680 | 0.1659 | −x | −y | −0.006239 | +0.3575° | +0.002913 | −0.1669° | yes |
+| k2 | cut120 → cut240 | 17 | 3 | one-cell hole | intact | R4 | 4 | 0.0591 | 0.0598 | +x | +y | −0.006164 | +0.3532° | +0.013583 | −0.7783° | yes |
+| k2 | cut120 → cut240 | 799 | 5 | one-cell hole | intact | R4 | 8 | 0.0988 | 0.0640 | −y | −x | −0.011209 | −0.6422° | +0.003990 | +0.2286° | yes |
+| k2 | cut240 → cut1200 | 227 | 5 | one-cell hole | intact | R4 | 5 | 0.0639 | 0.0579 | +x | −y | −0.003646 | −0.2089° | +0.002371 | +0.1358° | yes |
+| k2 | cut240 → cut1200 | 1017 | 8 | one-cell hole | changed | R4 | 10 | 0.1356 | 0.0643 | +y | −x | −0.008411 | +0.4819° | +0.011209 | −0.6422° | yes |
+| k2 | cut240 → cut1200 | 1022 | 9 | one-cell hole | intact | R4 | 11 | 0.1136 | 0.0951 | −y | +x | −0.019673 | +1.1273° | +0.035092 | −2.0110° | yes |
+| k2 | cut240 → cut1200 | 1099 | 7 | one-cell hole | changed | R4 | 8 | 0.0878 | 0.0733 | −y | +x | −0.010962 | +0.6281° | +0.001444 | −0.0827° | yes |
+| k3 | cut240 → cut1200 | 571 | 5 | one-cell hole | intact | R4 | 5 | 0.1719 | 0.0999 | −x | −y | −0.017633 | +1.0104° | +0.014097 | −0.8077° | yes |
+| k3 | cut240 → cut1200 | 1118 | 6 | none within 1 m | intact | R4 | 9 | 0.0771 | 0.1338 | −y | +x | −0.012238 | +0.7012° | +0.003990 | −0.2286° | yes |
+| k3 | cut240 → cut1200 | 1119 | 6 | none within 1 m | intact | R4 | 9 | 0.0229 | 0.0338 | −y | +x | −0.012238 | +0.7012° | +0.003990 | −0.2286° | yes |
+| k4 | cut60 → cut120 | 81 | 2 | none within 1 m | intact | R4 | 3 | 0.1749 | 0.0993 | +x | −y | −0.012582 | −0.7209° | +0.002140 | +0.1226° | yes |
+| k4 | cut60 → cut120 | 83 | 2 | none within 1 m | intact | R3 | 3 | 0.2749 | 0.1992 | +x | −y | −0.012582 | −0.7209° | +0.002140 | +0.1226° | yes |
+| k4 | cut120 → cut240 | 551 | 5 | one-cell hole | intact | R4 | 7 | 0.1796 | 0.0724 | +y | +x | −0.013594 | −0.7789° | +0.008411 | +0.4819° | yes |
+| k4 | cut240 → cut1200 | 543 | 5 | one-cell hole | intact | R4 | 7 | 0.0795 | 0.0592 | −x | −y | −0.003546 | +0.2032° | +0.006890 | −0.3948° | yes |
+
+What S11 shows:
+
+**Risers.** A riser, here, is a face element perpendicular to the line of the wall
+segment in question. In a grid map such faces arise where a wall's cells step
+sideways or end; where the 22 sit along their walls is not stored. `graph_walls`
+admits an element to a line only if the element faces the line: the dot of their
+normals must exceed FACING_MIN = 1e-9 (W4). For a riser, that dot is the sine of the
+line's tilt from the axis. So a riser joins a wall when the refitted line tilts
+toward it, by any amount, and leaves it when the line tilts away.
+
+**The mechanism.** The refitted line is fitted to every candidate along the infinite
+line (v0.16 audit), so its tilt can change sign between two cuts while the wall's own
+cells do not. S11 and the reading above show this for all 22 distinct e': each is a
+riser with respect to H's refitted line (perpendicular to it within 1.13°), b faced
+its line at k, and e' faces away from H's line at k', with the tilt's sign reversed.
+21 fail the facing test (R4). One also lies beyond eps and is counted as R3.
+
+**Corrections.**
+
+- P15's reason assumed that e' lies on the same face as H's members, so that only the
+  line's distance could exclude it. It does not: all 22 are risers with respect to
+  H's line. The line's tilt is the cause, but it acts through facing, not distance.
+- P16's first draft reasoned that an element of b's direction faces any line that b's
+  segment faces. The review before registration found this wrong (recorded in the
+  commit message of `dc754de`), and P16 was amended to allow R4. Unamended, P16 would
+  have failed at 21 of 22.
+
+**For the measure.** Whether B corroborates one of A's risers depends on the sign of
+a small tilt in B's line, 0.06–2.01° across the 22, not only on B's evidence. The
+effect is small: P9's largest rise is 0.8 % of A's walls, and in P3's series no step
+loses more than 7 elements, while every step gains at least 160. Article 3 will
+report it as a limitation of the wall measure.
+
+**Record.** v0.17's record said the losses come from the extraction, whose rules read
+the whole map and its grid. v0.18 narrows it: the 129 segmentation losses, 22
+distinct elements, are risers with respect to H's refitted line, and their membership
+in a wall segment follows the sign of that line's tilt.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -1167,7 +1301,7 @@ P15 and P16 are judged separately.
 
   Segmentation is the majority cause, 129 of 213, and geometry accounts for 3. What
   is left is why the segmenter leaves those 129 unassigned — O8.
-- **O8. Unassigned face elements at k'. REOPENED in v0.16.** For 129 of the 213
+- **O8. Unassigned face elements at k'. CLOSED in v0.18.** For 129 of the 213
   losses b's two cells hold their states at k', so B's grid at k' still carries the
   face element e' between them, in b's direction — and yet `graph_walls` does not
   assign e' to a wall segment, while b, its counterpart at the earlier cut k, was
@@ -1176,7 +1310,17 @@ P15 and P16 are judged separately.
   stopped at S9 by decision on 10 Oct 2026. Reopened in v0.16. S10 tests P13a, P13b
   and P14. S10 (v0.17): the losses sit on walls intact at k', or changed
   at least 1.29 m from e'. P13a failed; P13b and P14 held. S11 traces which rule
-  drops each e' (P15, P16).
+  drops each e' (P15, P16). S11 (v0.18): the 129 segmentation losses are 22 distinct
+  elements, all risers with respect to H's refitted line. `graph_walls` admits a
+  riser to a wall only when the refitted line tilts toward it, and the tilt's sign
+  changed between the two cuts in all 22. Reported as a limitation of the wall
+  measure; see O9.
+- **O9. Risers. OPEN.** Two questions for the rest of the schema. (1) Whether the
+  wall measure should count elements perpendicular to their segment's line at all.
+  Changing this would change the registered measure, and it is not proposed now. (2)
+  Whether segment ends, for openings and corners, are read only from elements in the
+  direction of the segment's normal axis, so that a riser leaving a segment cannot
+  move its end. Proposed: yes, to be decided when the schema spec is written.
 
 ## 11. Stop points for Claude Code
 
