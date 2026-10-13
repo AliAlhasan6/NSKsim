@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.18, draft)
+# SPEC — B2 divergence on walls (v0.19, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -32,8 +32,10 @@ flanked — and registers P15 and P16 on which rule of the extraction drops each
 e', before any class was computed for any e'. v0.18 records the S11 results —
 G9 holds, P15 fails, 1 of 22 in R3, and P16 holds, 0 of 22 in Other — and a
 post-hoc reading that all 22 elements are risers with respect to H's refitted
-line. It closes O8, opens O9 and registers no prediction. No code is written
-until the stop-point questions in §11 are answered.
+line. It closes O8, opens O9 and registers no prediction. v0.19 registers P17,
+mirror agreement of the viewpoint weight at mixed cuts (O3), and G10, the gate
+for stage S12. S12 will also record the distinct (S_A, S_B) pairs per row (O6).
+No code is written until the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -1263,6 +1265,82 @@ the whole map and its grid. v0.18 narrows it: the 129 segmentation losses, 22
 distinct elements, are risers with respect to H's refitted line, and their membership
 in a wall segment follows the sign of that line's tilt.
 
+## Viewpoint weight at mixed cuts (P17)
+
+Registered in a commit that precedes the commit of the code that tests it (S12), and
+before any weight was computed on a row with cut_A ≠ cut_B other than S5's rows with
+A at cut1200.
+
+**Mirror pairs.** A mirror pair is two rows that swap roles: X@a → Y@b and
+Y@b → X@a, for distinct robots X and Y. The 240 rows with a ≠ b form 120 mirror
+pairs, in two sets:
+- **M60 (tested):** a and b both in {60, 120, 240}. 60 pairs: 10 unordered robot
+  pairs × 3 unordered cut pairs × 2 ways to assign the cuts. No weight has been
+  computed on either row of any M60 pair.
+- **M1200 (reported):** one of a and b is 1200. 60 pairs. In each, the row with A at
+  cut1200 is one of S5's reported rows; its mirror's weight has not been computed.
+
+The 40 same-cut mirror pairs (10 at each cut) are all in S5's file.
+
+**Why the directions should agree.** w is symmetric in its two histograms (Caution 1)
+and constant within a matched segment pair (Caution 2). So w_mean(A, B) is a mean of
+the matched pairs' w, each weighted by the length of A's weighable corroborated
+elements in that pair, and w_mean(B, A) is a mean of the same values, weighted by B's
+length. Corroboration is expected to be mutual: where both maps hold a wall element at
+the same place, each corroborates the other and is normally matched to the other's
+segment. The code does not enforce this. Each direction picks its own nearest element
+under T1, and the across tolerance (eps = 0.1707 m) is wider than one element
+(rho = 0.1 m). A match to a neighbour changes nothing unless the neighbour lies in
+another segment, which happens near segment ends or where two same-facing segments
+lie within eps of each other. So a matched pair carries about the same length from
+both sides. The sides can differ only through such cases: lattice offsets between the
+two maps, segment ends and risers (S11), same-facing segments within eps of each
+other, and elements that are corroborated but unweighable. At cut1200 the mirror
+difference was at most 0.003° (Caution 1). In M60 the smaller map has 4–8 segments,
+against 12–13 at cut1200, so an edge element is a larger share of its pair. The
+weights are also larger at early cuts (P8: w_mean 15.16° to 27.71° with B at cut60),
+so the matched pairs' weights can lie further apart. The same few edge elements can
+therefore move a mean by more. The bound below allows for that; a systematic
+asymmetry would exceed it in many pairs.
+
+**Disclosure.** The bound and the count were chosen before any of the following was
+read, and were not changed after. Before registration, the same-cut mirror
+differences in S5's file were read. At cut60, cut120 and cut240, d is exactly 0 in all
+30 pairs: the two directions' w_mean are identical. At cut1200, d is exactly 0 in 8 of
+the 10 pairs and at most 0.003° in the other 2. None exceeds 1°. No weight on any M60
+row, or on the unseen row of any M1200 pair, was read or computed.
+
+**P17. REGISTERED 13 Oct 2026.** For a mirror pair, let
+d = |w_mean(X@a → Y@b) − w_mean(Y@b → X@a)|, with w_mean as in "Viewpoint weight
+(O1)". P17 holds if d ≤ 1/180 (1°) for at least 54 of the 60 pairs of M60. A pair in
+which either row has no weighable corroborated element counts against P17. Every pair
+with d over 1° is shown with its matched pairs: for each (S_A, S_B), its w and the
+length it carries from each side.
+
+**G10 (gate).** Before it computes any weight on a row S5 does not hold, S12:
+1. recomputes C on all 320 rows and requires each to equal S6's value exactly;
+2. recomputes w_mean, W, w_p10, w_p50, w_p90, unweighable_A and unweighable_B on every
+   row where S5 holds them, and G3 on the 20 maps against themselves, and requires
+   each to equal S5's value exactly.
+
+On any difference it stops before writing a verdict. A third check runs on every row
+S12 computes: the length-weighted mean of w over the row's recorded (S_A, S_B) pairs
+equals w_mean within 1e-12. If it fails on any row, S12 writes no verdict.
+
+**What S12 computes and records.** For each of the 320 rows: w_mean, W, w_p10, w_p50,
+w_p90, unweighable_A, unweighable_B, the length of A's weighable corroborated
+elements, and the distinct (S_A, S_B) pairs, each with its w and the length it
+carries. For each of the 160 mirror pairs (120 mixed-cut, 40 same-cut): both rows'
+w_mean and d. M1200 and the same-cut pairs are reported, not judged. S12 refuses an
+edited tree, requires this registration's commit to be an ancestor of HEAD, and pins
+S5's and S6's result files by sha256.
+
+**What is not computed.** w_null and E7 at mixed cuts. S12 does not compute them, so
+a prediction about them can still be registered.
+
+**The pair record.** The distinct (S_A, S_B) pairs per row are what Caution 2 says a
+rerun of S5 should add first, and what O6 asks for. S12 records them on all 320 rows.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -1274,9 +1352,9 @@ in a wall segment follows the sign of that line's tilt.
   `b2maps_k3_cut1200_gated_extfix_robot3`, per-map counts in "Results: G3, P7,
   P8" in §9. Treatment still undecided, though `unweighable_B` was 0.0 on every
   cut1200 row, so nothing was lost to it there.
-- **O3.** Form decided; P9 registered (v0.11) and failed 40/60 (S6, v0.12). Open:
-  whether the viewpoint weight's mirror agreement holds at mixed cuts. On the 180
-  rows unseen before S6, the weight is still unseen.
+- **O3.** Form decided; P9 registered (v0.11) and failed 40/60 (S6, v0.12). Mirror
+  agreement of the viewpoint weight at mixed cuts registered as P17 (v0.19), to be
+  tested by S12.
 - **O4.** Whether to report separately the unobserved length that parked robots
   shadow.
 - **O5.** The deep tail, unexplained. On A's own maps 4-10 % of crossings that meet
@@ -1285,7 +1363,8 @@ in a wall segment follows the sign of that line's tilt.
   scan) and wall-box joints were each pre-registered and each ruled out. Condition 4
   is a guard against it, not an explanation of it.
 - **O6.** S5's output records the distinct `(S_A, S_B)` pairs per row, so caution
-  2 gets an exact count at the next rerun.
+  2 gets an exact count at the next rerun. S12 will record these pairs on all
+  320 rows (v0.19); O6 closes when S12's results are recorded.
 - **O7. Losses. CLOSED in v0.15.** P10 held (S7); P11 failed (S8), 21 of 213 wall
   cells freed; P12 held (S9), 75 of the 78 tested unchanged losses in segmentation
   and 54 of 54 in the carve-out. All 213 losses now carry a cause:
