@@ -4585,6 +4585,1201 @@ def test_s11_refuses_a_missing_or_wrong_s10_file(tmp_path, monkeypatch):
                              'd8f6d1d7127407e2')
 
 
+# ───── S12: the viewpoint weight at mixed cuts, G10 and P17 (the Y series) ───
+#
+# SYNTHETIC ONLY. No weight is computed on a real map anywhere in this file,
+# at any pair of cuts, and nothing here reads S5's or S6's result file.
+#
+#   Y1   the mirror enumeration                    60, 60 and 40; M60 and
+#                                                  M1200 disjoint; every row
+#                                                  one direction of one pair
+#   Y2   6 and 7 failing pairs of the 60           54 holds P17, 53 fails it
+#   Y3   d of exactly 1/180, and one ulp over      holds; fails
+#   Y4   a row with no weighable element           no d; counts against P17
+#   Y5   the pairs of a row                        n and length sum to the
+#                                                  row's; w one number a pair
+#   Y6   two weights inside one pair               exit 2
+#   Y7   check 3 on two pairs of different w       holds; a pair's w moved by
+#                                                  1e-9 fails it
+#   Y8   the door, before G10                      S5's rows and the self
+#                                                  pairs pass; any other row
+#                                                  raises; a failed check
+#                                                  never opens it
+#   Y9   the door against S5's call                the same result, the same
+#                                                  arguments
+#   Y10  S5's file, location by location           1440 values over 6
+#                                                  locations, on 140 rows
+#   Y11  one ulp on one of S6's 320 C              exit 2; no weight call at
+#                                                  all; no verdict
+#   Y12  one ulp on one of S5's weights, and on    exit 2; 160 weight calls,
+#        one of G3's stored values                 none on an unseen row
+#   Y13  check 3 failing on a row S5 holds         exit 2; 160 weight calls
+#   Y14  check 3 failing on a row S5 does not      exit 2; no verdict written
+#        hold                                      or printed, and no weight
+#                                                  in the fail file
+#   Y15  a symmetric corpus, end to end            P17 holds 60/60; 320 rows,
+#                                                  160 pairs, one file
+#   Y16  one double wall, end to end               8 pairs with d not 0: 7
+#                                                  over the bound and shown
+#                                                  with the pair only one
+#                                                  side holds, 1 inside it
+#                                                  and holding; 53/60, P17
+#                                                  fails
+#   Y17  null_weights and segment_dirs raising     never called
+#   Y18  d over a set; w from both sides           min, median, max, zeroes
+#   Y19  --stage s12 on a dirty tree, without      refuses, exit 2, and loads
+#        82e6462, with a spec missing P17 or G10,  nothing in each
+#        and on a wrong S5 or S6 sha256
+#   Y20  the registered paragraphs                 read from the spec text
+
+S12_SPLIT = 1                # a single wall's columns from here on are seg 1
+S12_DOUBLE_AT = (4, 60)      # in the double corpus, k4 at cut60 has two walls
+
+
+def double_wall(w, h=12):
+    """Two '-y' faces per column, 0.2 m apart: OCC at rows 4 and 6.
+
+    Row 4 sits on FREE and under FREE, so it also yields a '+y' face; row 6
+    sits on FREE and under UNKNOWN. Three elements a column, and `s12_side`
+    leaves the '+y' ones unassigned.
+    """
+    g = blank(h, w)
+    g[:4, :] = FREE
+    g[4, :] = OCC
+    g[5, :] = FREE
+    g[6, :] = OCC
+    return g
+
+
+def s12_side(grid, stem, k, ci):
+    """A side with two segments and a bearing histogram on each.
+
+    A single wall is split by column at `S12_SPLIT`; a double wall is one
+    segment per wall. The histograms are one bin each, placed by robot and
+    cut so that no two segments in the corpus share one: w between any two is
+    then a whole number of bins and differs from pair to pair.
+    """
+    s = fake_side(grid, stem)
+    el = s['el']
+    minus_y = el['dir'] == 3
+    if (~minus_y).any():                       # the double wall
+        seg_of = np.where(minus_y, (el['row'] == 6).astype(np.int64), -1)
+    else:
+        seg_of = (el['col'] >= S12_SPLIT).astype(np.int64)
+    s['seg_of'] = seg_of
+    s['segments'] = [{'p0': [0.0, 0.0], 'p1': [1.0, 0.0]}] * 2
+    s['bearing_hist'] = [hist(2 * k + ci), hist(7 * k + 3 * ci + 20)]
+    return s
+
+
+def s12_sides(double=False):
+    """The synthetic corpus S12's cases run on: five robots by four cuts.
+
+    S6's growing wall, on row 5, so `C` behaves as it does there. Every map
+    is lattice-aligned with every other, so T1's matching is one to one, the
+    two directions of a mirror pair weigh the same elements and d is exactly
+    0 on every pair.
+
+    `double=True` gives k4 at cut60 two walls instead, 0.1 m either side of
+    where the others have one, and lifts k4's spawn by 0.02 m so the nearer
+    of the two is nearer by a clear 0.04 m. Another robot's wall then matches
+    k4's lower wall only, while BOTH of k4's walls match that robot's one
+    wall: the pair (S_X, upper) exists from k4's side alone, which is exactly
+    the asymmetry P17 is about.
+    """
+    by_kc, spawn = {}, {}
+    for k in range(dw.N_ROBOTS):
+        spawn[k] = (0.0, 0.02) if (double and k == S12_DOUBLE_AT[0]) \
+            else (0.0, 0.0)
+        for ci, c in enumerate(dw.CUTS):
+            w = S6_WIDTHS[c] + k
+            grid = (double_wall(w) if double and (k, c) == S12_DOUBLE_AT
+                    else wall_grid(h=12, w=w, wall_row=5))
+            by_kc[(k, c)] = s12_side(
+                grid, f'b2maps_k{k}_cut{c}_gated_extfix_robot{k}', k, ci)
+    return by_kc, spawn
+
+
+def s12_fake_s6(by_kc, spawn):
+    """An S6 payload for the corpus, built with S6's own code."""
+    keys = dw.matrix_keys()
+    rows = dw.cut_matrix(by_kc, spawn, keys)
+    return json.loads(json.dumps({'head': 'synthetic',
+                                  'rows': [rows[k] for k in keys]}))
+
+
+def s12_fake_s5(by_kc, spawn):
+    """An S5 payload for the corpus, in the shape `run_s5` writes.
+
+    Built with S5's own call and `_reported`, row for row as `run_s5` builds
+    it, and passed through JSON as the real file is. P7's E7 fields are
+    placeholders: S12 never reads them, and Y10 says so.
+    """
+    def rep(a, b, ca, cb):
+        _res, sh = dw._side_classify(by_kc[(a, ca)], by_kc[(b, cb)],
+                                     spawn[a], spawn[b])
+        return dw._reported(sh)
+
+    g3 = []
+    for kc in sorted(by_kc):
+        s = by_kc[kc]
+        res, sh = dw._side_classify(s, s, (0.0, 0.0), (0.0, 0.0))
+        w = res['weights']['w']
+        good = ~np.isnan(w)
+        g3.append({'map': s['stem'], 'C': sh['corroborated'],
+                   'max_abs_w': float(np.abs(w[good]).max()),
+                   'n_weighable': int(good.sum()), 'holds': True})
+    pairs = dw.ordered_pairs()
+    p7 = [{'A': a, 'B': b, 'n_E7': 0, 'mean_w': None, 'mean_w_null': None,
+           'holds': False, 'reported': {**rep(a, b, 1200, 1200), 'n_E7': 0}}
+          for (a, b) in pairs]
+    p8 = [{'A': a, 'B': b, 'holds': True,
+           'w_mean_B1200': rep(a, b, 1200, 1200)['w_mean'],
+           'w_mean_B60': rep(a, b, 1200, 60)['w_mean'],
+           'reported_B60': rep(a, b, 1200, 60)} for (a, b) in pairs]
+    reported = {
+        'A_cut1200_by_B_cut': [
+            {'A': a, 'B': b, 'cut_A': 1200, 'cut_B': c, **rep(a, b, 1200, c)}
+            for (a, b) in pairs for c in dw.CUTS],
+        'same_cut': [
+            {'A': a, 'B': b, 'cut_A': c, 'cut_B': c, **rep(a, b, c, c)}
+            for (a, b) in pairs for c in dw.CUTS]}
+    return json.loads(json.dumps({
+        'stage': 's5', 'head': 'synthetic',
+        'G3': {'rows': g3, 'holds': True, 'failures': []},
+        'P7': {'rows': p7}, 'P8': {'rows': p8}, 'reported': reported}))
+
+
+S12_META = {'stage': 's12', 'head': 'synthetic',
+            'predictions_verbatim': {'P17': 'the registered wording',
+                                     'G10': 'the registered wording'},
+            'sources': {'s5': {'sha256': 'x'}, 's6': {'sha256': 'y'}}}
+
+
+def _s12_run(by_kc, spawn, s5, s6, out_dir, **kw):
+    return dw.s12_mirror(by_kc, spawn, s5, s6, dict(S12_META), out_dir, **kw)
+
+
+def _kc_of(stem):
+    m = re.match(r'b2maps_k(\d)_cut(\d+)_', stem)
+    return int(m.group(1)), int(m.group(2))
+
+
+def _s12_spies(monkeypatch):
+    """Spies on the weight call, on what computes w, and on P7's null.
+
+    `weight_keys` is every (A, B, cut_A, cut_B) S5's call was made on, read
+    off the two sides it was handed. `null_weights` and `segment_dirs` are
+    how w_null and E7 are computed, and they raise: S12 calls neither.
+    """
+    seen = {'weight_keys': [], 'viewpoint_weights': 0, 'cut_matrix_keys': []}
+    real_sc, real_vw, real_cm = (dw._side_classify, dw.viewpoint_weights,
+                                 dw.cut_matrix)
+
+    def side_classify(a, b, spawn_a, spawn_b):
+        (ka, ca), (kb, cb) = _kc_of(a['stem']), _kc_of(b['stem'])
+        seen['weight_keys'].append((ka, kb, ca, cb))
+        return real_sc(a, b, spawn_a, spawn_b)
+
+    def viewpoint_weights(*a, **k):
+        seen['viewpoint_weights'] += 1
+        return real_vw(*a, **k)
+
+    def cut_matrix(by_kc, spawn, keys):
+        seen['cut_matrix_keys'] += list(keys)
+        return real_cm(by_kc, spawn, keys)
+
+    def never(*a, **k):
+        raise AssertionError('S12 computed w_null or E7')
+
+    monkeypatch.setattr(dw, '_side_classify', side_classify)
+    monkeypatch.setattr(dw, 'viewpoint_weights', viewpoint_weights)
+    monkeypatch.setattr(dw, 'cut_matrix', cut_matrix)
+    monkeypatch.setattr(dw, 'null_weights', never)
+    monkeypatch.setattr(dw, 'segment_dirs', never)
+    return seen
+
+
+def _keys_naming_the_null(node, path='$'):
+    """Every path in a payload whose KEY names w_null or E7."""
+    bad = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if 'null' in str(k).lower() or 'e7' in str(k).lower():
+                bad.append(f'{path}.{k}')
+            bad += _keys_naming_the_null(v, f'{path}.{k}')
+    elif isinstance(node, list):
+        for v in node:
+            bad += _keys_naming_the_null(v, f'{path}[]')
+    return bad
+
+
+def _unseen_weight_keys(keys):
+    return [k for k in keys if k[0] != k[1] and not dw.is_seen(k[2], k[3])]
+
+
+def _assert_s12_fail_file(tmp_path, capsys):
+    """One G10 fail file, no result file, and no verdict in either or printed."""
+    assert not list(tmp_path.glob('s12_mirror_*.json'))
+    written = list(tmp_path.glob('s12_g10_fail_*.json'))
+    assert len(written) == 1
+    payload = json.loads(written[0].read_text())
+    assert payload['stage'] == 's12_g10_fail'
+    for key in ('P17', 'rows', 'mirror_pairs', 'reported'):
+        assert key not in payload
+    dw._no_verdict_in_s12(payload)
+    out = capsys.readouterr().out
+    assert 'G10: ' in out and 'FAIL' in out
+    for word in ('P17', 'M60', 'M1200', 'd by set', 'largest d'):
+        assert word not in out
+    return payload, out
+
+
+def s12_mirrors(d=None, n_weighable=None):
+    """160 hand-built mirror pairs carrying only what the verdict reads.
+
+    `d[(X, Y, cut_X, cut_Y)]` sets a pair's d and `n_weighable[...]` its two
+    counts; anything unnamed has d = 0 and weighable elements on both sides.
+    """
+    d, n_weighable = d or {}, n_weighable or {}
+    out = []
+    for x in range(dw.N_ROBOTS):
+        for y in range(x + 1, dw.N_ROBOTS):
+            for a in dw.CUTS:
+                for b in dw.CUTS:
+                    nf, nr = n_weighable.get((x, y, a, b), (3, 3))
+                    dd = None if 0 in (nf, nr) else d.get((x, y, a, b), 0.0)
+                    out.append({'X': x, 'Y': y, 'cut_X': a, 'cut_Y': b,
+                                'set': dw.mirror_set(a, b), 'd': dd,
+                                'n_weighable_X_to_Y': nf,
+                                'n_weighable_Y_to_X': nr})
+    return out
+
+
+def _m60_keys():
+    return [(m['X'], m['Y'], m['cut_X'], m['cut_Y']) for m in s12_mirrors()
+            if m['set'] == dw.M60]
+
+
+def test_s12_mirror_enumeration_is_60_60_and_40():
+    """Y1: 160 pairs in three disjoint sets, and all 320 rows used once."""
+    by_kc, spawn = s12_sides()
+    rows = {k: {'w_mean': 0.1, 'n_weighable': 3, 'weighable_length_m': 0.3,
+                'seen_by_S5': dw.is_seen(k[2], k[3])}
+            for k in dw.matrix_keys()}
+    mirrors = dw.mirror_pairs(rows)
+    assert len(mirrors) == 160
+    sets = collections.Counter(m['set'] for m in mirrors)
+    assert (sets[dw.M60], sets[dw.M1200], sets[dw.SAME_CUT]) == (
+        60, 60, 40) == (dw.N_M60, dw.N_M1200, dw.N_SAME_CUT)
+
+    used = collections.Counter()
+    for m in mirrors:
+        assert m['X'] < m['Y']
+        used[(m['X'], m['Y'], m['cut_X'], m['cut_Y'])] += 1
+        used[(m['Y'], m['X'], m['cut_Y'], m['cut_X'])] += 1
+        early = m['cut_X'] in dw.M60_CUTS and m['cut_Y'] in dw.M60_CUTS
+        full = 1200 in (m['cut_X'], m['cut_Y'])
+        if m['set'] == dw.M60:
+            assert m['cut_X'] != m['cut_Y'] and early and not full
+            # no weight was seen on either row of an M60 pair
+            assert not m['seen_by_S5_X_to_Y'] and not m['seen_by_S5_Y_to_X']
+        elif m['set'] == dw.M1200:
+            assert m['cut_X'] != m['cut_Y'] and full and not early
+            # exactly one row of an M1200 pair is S5's: the one with A at 1200
+            assert m['seen_by_S5_X_to_Y'] != m['seen_by_S5_Y_to_X']
+        else:
+            assert m['cut_X'] == m['cut_Y']
+            assert m['seen_by_S5_X_to_Y'] and m['seen_by_S5_Y_to_X']
+    assert set(used) == set(rows) and set(used.values()) == {1}
+    # 10 unordered robot pairs x 3 unordered cut pairs x 2 ways round
+    assert len({(m['X'], m['Y']) for m in mirrors}) == 10
+    assert by_kc and spawn                       # the corpus builds
+
+
+@pytest.mark.parametrize('n_bad,expected', [(0, True), (6, True),
+                                            (7, False), (60, False)])
+def test_s12_p17_holds_at_54_of_60_and_not_at_53(n_bad, expected):
+    """Y2: at least 54 of the 60 M60 pairs; 53 is a failed P17."""
+    bad = _m60_keys()[:n_bad]
+    out = dw.p17_verdict(s12_mirrors(d={k: 0.01 for k in bad}))
+    assert (out['of'], out['min_required']) == (60, 54)
+    assert out['n_holding'] == 60 - n_bad
+    assert out['holds'] is expected
+    assert len(out['failing']) == n_bad == out['n_over_the_bound']
+    assert out['bound'] == 1.0 / 180.0
+
+
+def test_s12_p17_judges_m60_and_nothing_else():
+    """Y2b: a d of 1.0 on every M1200 and same-cut pair moves nothing."""
+    loud = {(m['X'], m['Y'], m['cut_X'], m['cut_Y']): 1.0
+            for m in s12_mirrors() if m['set'] != dw.M60}
+    assert len(loud) == 100
+    out = dw.p17_verdict(s12_mirrors(d=loud))
+    assert (out['holds'], out['n_holding'], out['max_d']) == (True, 60, 0.0)
+
+
+def test_s12_p17_the_bound_is_inclusive_and_exact():
+    """Y3: d of exactly 1/180 holds; one ulp over does not; no tolerance."""
+    k0, k1 = _m60_keys()[:2]
+    bound = 1.0 / 180.0
+    over = math.nextafter(bound, math.inf)
+    out = dw.p17_verdict(s12_mirrors(d={k0: bound, k1: over}))
+    assert out['n_holding'] == 59
+    assert [(f['X'], f['Y'], f['cut_X'], f['cut_Y'])
+            for f in out['failing']] == [k1]
+    assert out['failing'][0]['reason'] == 'd is over the bound'
+    assert out['max_d'] == over and out['max_d_deg'] == over * 180.0
+
+
+def test_s12_p17_a_row_with_no_weighable_element_counts_against():
+    """Y4: no weighable element on either side is no d, and a failure."""
+    keys = _m60_keys()
+    out = dw.p17_verdict(s12_mirrors(
+        n_weighable={keys[0]: (0, 5), keys[1]: (5, 0), keys[2]: (0, 0)}))
+    assert (out['n_holding'], out['n_undefined'], out['n_over_the_bound']) \
+        == (57, 3, 0)
+    assert all(f['d'] is None and 'no weighable' in f['reason']
+               for f in out['failing'])
+    assert out['holds']                          # 57 of 60 still holds it
+    assert out['d_summary']['n_undefined'] == 3
+    seven = dw.p17_verdict(s12_mirrors(
+        n_weighable={k: (0, 5) for k in keys[:7]}))
+    assert (seven['n_holding'], seven['holds']) == (53, False)
+
+
+def _s12_one_row(by_kc, spawn, key):
+    c_row = dw.s6_row(by_kc, spawn, key)
+    door = dw.S12Weights(by_kc, spawn)
+    door.open_after({'ok': True}, {'ok': True}, {'ok': True})
+    res, sh = door.row(key)
+    return dw.s12_row(key, c_row, res, sh), res, sh
+
+
+@pytest.mark.parametrize('key', [(0, 1, 60, 120), (1, 0, 120, 60),
+                                 (0, 4, 120, 60), (4, 0, 60, 120),
+                                 (2, 3, 1200, 1200)])
+def test_s12_pairs_partition_the_weighable_elements(key):
+    """Y5: the pairs' n and length sum to the row's, and w is one a pair."""
+    by_kc, spawn = s12_sides(double=True)
+    row, res, sh = _s12_one_row(by_kc, spawn, key)
+    pairs = row['pairs']
+    assert pairs and row['n_pairs'] == len(pairs)
+    assert sum(p['n'] for p in pairs) == row['n_weighable'] == sh['n_weighable']
+    assert sum(p['length_m'] for p in pairs) == pytest.approx(
+        row['weighable_length_m'])
+    assert row['weighable_length_m'] == pytest.approx(RHO * row['n_weighable'])
+    assert len({(p['S_A'], p['S_B']) for p in pairs}) == len(pairs)
+
+    w, seg_b = res['weights']['w'], res['weights']['seg_b_of']
+    for p in pairs:
+        mine = ((res['seg_of'] == p['S_A']) & (seg_b == p['S_B'])
+                & ~np.isnan(w))
+        assert mine.sum() == p['n']
+        assert (w[mine] == p['w']).all()         # exactly, not approximately
+    for f in dw.WEIGHT_FIELDS:
+        assert row[f] == sh[f]
+    assert row['seen_by_S5'] is dw.is_seen(key[2], key[3])
+
+
+def test_s12_two_weights_inside_one_pair_stop_the_stage():
+    """Y6: Caution 2 is required, not assumed."""
+    by_kc, spawn = s12_sides()
+    _row, res, _sh = _s12_one_row(by_kc, spawn, (0, 1, 1200, 1200))
+    assert len(dw.s12_pairs(res)) == 2
+    i = int(np.nonzero(~np.isnan(res['weights']['w']))[0][-1])
+    res['weights']['w'][i] = math.nextafter(res['weights']['w'][i], math.inf)
+    with pytest.raises(SystemExit) as e:
+        dw.s12_pairs(res)
+    assert e.value.code == 2
+
+
+def test_s12_check_3_holds_on_two_pairs_of_different_w():
+    """Y7: the length-weighted mean of the pairs is `w_mean`, and is checked.
+
+    k0 at cut120 against k1 at cut240: column 0 is the pair (0, 0) and
+    columns 1 to 5 the pair (1, 1), with weights 3 and 10 bins apart, so the
+    mean is neither pair's w and only the weighting gives it back.
+    """
+    by_kc, spawn = s12_sides()
+    row, _res, _sh = _s12_one_row(by_kc, spawn, (0, 1, 120, 240))
+    pairs = {(p['S_A'], p['S_B']): p for p in row['pairs']}
+    assert set(pairs) == {(0, 0), (1, 1)}
+    assert (pairs[(0, 0)]['n'], pairs[(1, 1)]['n']) == (1, 5)
+    assert pairs[(0, 0)]['w'] == pytest.approx(3 * BINW / 180.0)
+    assert pairs[(1, 1)]['w'] == pytest.approx(10 * BINW / 180.0)
+    assert row['w_mean'] == pytest.approx((3 + 5 * 10) / 6 * BINW / 180.0)
+
+    rec = dw.g10_pairs_mean(row)
+    assert rec['ok'] and rec['abs_diff'] <= 1e-12
+    assert set(rec) == {'key', 'abs_diff', 'ok'}     # and never the mean
+
+    moved = json.loads(json.dumps(row))
+    moved['pairs'][0]['w'] += 1e-9
+    bad = dw.g10_pairs_mean(moved)
+    assert not bad['ok'] and bad['abs_diff'] > 1e-12
+    swapped = json.loads(json.dumps(row))            # lengths matter too
+    swapped['pairs'][0]['length_m'], swapped['pairs'][1]['length_m'] = (
+        swapped['pairs'][1]['length_m'], swapped['pairs'][0]['length_m'])
+    assert not dw.g10_pairs_mean(swapped)['ok']
+
+    over = dw.g10_pairs_means([row, moved])
+    assert (over['ok'], over['n_rows'], over['n_ok']) == (False, 2, 1)
+    assert over['not_ok'] == [bad]
+
+
+def test_s12_check_3_on_a_row_with_no_weighable_element():
+    """Y7b: no pair and no `w_mean` holds; one without the other does not."""
+    base = {'A': 0, 'B': 1, 'cut_A': 60, 'cut_B': 120}
+    assert dw.g10_pairs_mean({**base, 'pairs': [], 'w_mean': None})['ok']
+    assert not dw.g10_pairs_mean({**base, 'pairs': [], 'w_mean': 0.1})['ok']
+    pair = {'S_A': 0, 'S_B': 0, 'w': 0.1, 'n': 1, 'length_m': 0.1}
+    assert not dw.g10_pairs_mean({**base, 'pairs': [pair],
+                                  'w_mean': None})['ok']
+
+
+def test_s12_the_door_raises_on_an_unseen_row_until_g10_passes(monkeypatch):
+    """Y8: a weight on a row S5 does not hold cannot be asked for early.
+
+    The proof is on the call itself: before `open_after` every one of the 180
+    unseen keys raises and S5's call is never reached, while the 140 rows S5
+    holds and the 20 maps against themselves go through.
+    """
+    by_kc, spawn = s12_sides()
+    seen = _s12_spies(monkeypatch)
+    door = dw.S12Weights(by_kc, spawn)
+    keys = dw.matrix_keys()
+    unseen = [k for k in keys if not dw.is_seen(k[2], k[3])]
+    assert len(unseen) == 180 and not door.is_open
+
+    for k in unseen:
+        with pytest.raises(dw.S12GateClosed):
+            door.row(k)
+    assert seen['weight_keys'] == [] and seen['viewpoint_weights'] == 0
+    assert door.asked == []
+
+    for k in keys:
+        if dw.is_seen(k[2], k[3]):
+            door.row(k)
+    for (k, c) in by_kc:
+        door.itself(k, c)
+    assert len(seen['weight_keys']) == 160 == seen['viewpoint_weights']
+    assert _unseen_weight_keys(seen['weight_keys']) == []
+    with pytest.raises(ValueError):
+        door.row((2, 2, 60, 60))                 # a self pair is not a row
+
+    # a failed, missing or merely truthy check never opens it
+    ok, bad = {'ok': True}, {'ok': False}
+    for checks in ((bad, ok, ok), (ok, bad, ok), (ok, ok, bad),
+                   (ok, None, None), (ok, ok, None), (ok, ok, {'ok': 1}),
+                   (ok, ok, {})):
+        assert door.open_after(*checks) is False
+        with pytest.raises(dw.S12GateClosed):
+            door.row(unseen[0])
+    assert _unseen_weight_keys(seen['weight_keys']) == []
+
+    assert door.open_after(ok, ok, ok) is True and door.is_open
+    door.row(unseen[0])
+    assert seen['weight_keys'][-1] == unseen[0]
+    # and a later failing check shuts it again
+    assert door.open_after(ok, ok, bad) is False
+    with pytest.raises(dw.S12GateClosed):
+        door.row(unseen[1])
+
+
+def test_s12_the_door_is_s5s_call_with_s5s_arguments(monkeypatch):
+    """Y9: the door adds nothing to S5's call and takes nothing from it.
+
+    No argument was added to `_side_classify`, `classify`, `viewpoint_weights`
+    or `shares` for S12: S_A is `res['seg_of']` and S_B is
+    `res['weights']['seg_b_of']`, both already returned. So the claim to hold
+    is that the door's result IS S5's, element for element, and that
+    `classify` is handed what `run_s5` hands it.
+    """
+    by_kc, spawn = s12_sides(double=True)
+    key = (0, 4, 1200, 60)                       # a row S5 holds
+    a, b = by_kc[(0, 1200)], by_kc[(4, 60)]
+    direct_res, direct_sh = dw._side_classify(a, b, spawn[0], spawn[4])
+
+    calls = []
+    real = dw.classify
+    monkeypatch.setattr(dw, 'classify', lambda *p, **k: (
+        calls.append((p, k)), real(*p, **k))[1])
+    res, sh = dw.S12Weights(by_kc, spawn).row(key)
+
+    assert sh == direct_sh
+    assert set(res) == set(direct_res)
+    for name in ('assigned', 'seg_of', 'corroborated', 'cls'):
+        assert np.array_equal(res[name], direct_res[name])
+    assert set(res['weights']) == {'w', 'seg_b_of', 'unweighable_A',
+                                   'unweighable_B'}
+    for name, arr in res['weights'].items():
+        assert np.array_equal(arr, direct_res['weights'][name],
+                              equal_nan=True)
+
+    (p, k), = calls
+    assert p[0] is a['el'] and p[1] is a['seg_of'] and p[3] is None
+    assert set(k) == {'hist_a', 'hist_b'}
+    assert k['hist_a'] is a['bearing_hist']
+    assert k['hist_b'] is b['bearing_hist']
+    el_b = p[2]                                  # B's FACE elements, in A's
+    keep = b['seg_of'] >= 0                      # frame, with their segments
+    assert el_b['n'] == int(keep.sum()) < b['el']['n']
+    assert np.array_equal(el_b['seg'], b['seg_of'][keep])
+    assert np.allclose(el_b['y'], b['el']['y'][keep] + 0.02)
+    assert np.array_equal(el_b['x'], b['el']['x'][keep])
+
+
+def test_s12_names_every_location_in_s5s_file():
+    """Y10: 1440 weight values over six locations, on exactly S5's 140 rows."""
+    by_kc, spawn = s12_sides()
+    s5 = s12_fake_s5(by_kc, spawn)
+    registered, beside = dw.s5_weight_comparisons(s5)
+    locations = collections.Counter(c['location'] for c in registered)
+    assert locations == {'P7.rows[].reported': 140,
+                         'P8.rows[].reported_B60': 140,
+                         'P8.rows[].w_mean_B1200': 20,
+                         'P8.rows[].w_mean_B60': 20,
+                         'reported.A_cut1200_by_B_cut[]': 560,
+                         'reported.same_cut[]': 560}
+    assert len(registered) == 1440
+    assert {c['field'] for c in registered} == set(dw.WEIGHT_FIELDS) == {
+        'w_mean', 'W', 'w_p10', 'w_p50', 'w_p90', 'unweighable_A',
+        'unweighable_B'}
+    rows = {c['key'] for c in registered}
+    assert rows == {k for k in dw.matrix_keys() if dw.is_seen(k[2], k[3])}
+    assert len(rows) == 140
+    # P7 is both at cut1200; P8's two columns are B at 1200 and B at 60
+    assert {c['key'][2:] for c in registered
+            if c['location'] == 'P7.rows[].reported'} == {(1200, 1200)}
+    assert {c['key'][2:] for c in registered
+            if c['location'] == 'P8.rows[].w_mean_B60'} == {(1200, 60)}
+    assert {c['key'][2:] for c in registered
+            if c['location'] == 'P8.rows[].w_mean_B1200'} == {(1200, 1200)}
+    # nothing of E7's or w_null's is compared, beside the gate or in it
+    for c in registered + beside:
+        assert 'E7' not in c['path'] and 'null' not in c['path']
+        assert not c['path'].endswith('.mean_w')
+    assert {c['field'] for c in beside} == set(dw.S5_BESIDE_FIELDS)
+
+    reg6, beside6 = dw.s6_c_comparisons(s12_fake_s6(by_kc, spawn))
+    assert len(reg6) == 320 and {c['field'] for c in reg6} == {'corroborated'}
+    assert {c['key'] for c in reg6} == set(dw.matrix_keys())
+    assert len(beside6) == 320 * len(dw.S6_BESIDE_FIELDS)
+
+
+def test_s12_g10_check_1_one_ulp_stops_before_any_weight(tmp_path, capsys,
+                                                         monkeypatch):
+    """Y11: one ulp on one of S6's 320 C, and S5's call is never made."""
+    by_kc, spawn = s12_sides()
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    was = s6['rows'][201]['corroborated']
+    s6['rows'][201]['corroborated'] = math.nextafter(was, 0.0)
+    assert s6['rows'][201]['corroborated'] != was
+
+    seen = _s12_spies(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        _s12_run(by_kc, spawn, s5, s6, tmp_path)
+    assert e.value.code == 2
+    assert seen['weight_keys'] == [] and seen['viewpoint_weights'] == 0
+    assert sorted(seen['cut_matrix_keys']) == sorted(dw.matrix_keys())
+
+    payload, out = _assert_s12_fail_file(tmp_path, capsys)
+    g10 = payload['G10']
+    assert g10['parts'] == {'1_C_equals_S6': False,
+                            '2_weights_and_G3_equal_S5': False,
+                            '3_pairs_give_back_w_mean': False}
+    c1 = g10['1_C_equals_S6']
+    assert (c1['n'], c1['n_equal'], len(c1['differing'])) == (320, 319, 1)
+    assert c1['differing'][0]['path'] == 'rows[201].corroborated'
+    assert g10['2_weights_and_G3_equal_S5'] is None
+    assert g10['3_pairs_give_back_w_mean'] is None
+    assert payload['n_weight_calls'] == 0
+    assert 'rows[201].corroborated' in out
+
+
+def test_s12_g10_check_1_needs_every_row_of_the_matrix(tmp_path, capsys,
+                                                       monkeypatch):
+    """Y11b: an S6 file a row short fails check 1 though every C is equal."""
+    by_kc, spawn = s12_sides()
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    del s6['rows'][17]
+    seen = _s12_spies(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        _s12_run(by_kc, spawn, s5, s6, tmp_path)
+    assert e.value.code == 2
+    assert seen['weight_keys'] == []
+    payload, _out = _assert_s12_fail_file(tmp_path, capsys)
+    c1 = payload['G10']['1_C_equals_S6']
+    assert (c1['covers_the_matrix'], c1['n'], c1['n_equal']) == (
+        False, 319, 319)
+
+
+@pytest.mark.parametrize('where', ['w_p50', 'W', 'unweighable_B',
+                                   'P8.w_mean_B60', 'G3.max_abs_w', 'G3.C'])
+def test_s12_g10_check_2_one_ulp_stops_before_any_unseen_weight(
+        where, tmp_path, capsys, monkeypatch):
+    """Y12: one stored value of S5's off by an ulp, and no unseen row is weighed.
+
+    The weight call ran 160 times -- the 140 rows S5 holds and the 20 maps
+    against themselves -- and not once on any of the other 180.
+    """
+    by_kc, spawn = s12_sides()
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    if where.startswith('G3.'):
+        node, field = s5['G3']['rows'][9], where[3:]
+    elif where.startswith('P8.'):
+        node, field = s5['P8']['rows'][4], where[3:]
+    else:
+        node, field = s5['reported']['same_cut'][33], where
+    was = node[field]
+    node[field] = math.nextafter(was, math.inf)
+    assert node[field] != was
+
+    seen = _s12_spies(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        _s12_run(by_kc, spawn, s5, s6, tmp_path)
+    assert e.value.code == 2
+    assert len(seen['weight_keys']) == 160 == seen['viewpoint_weights']
+    assert _unseen_weight_keys(seen['weight_keys']) == []
+    assert sum(1 for k in seen['weight_keys'] if k[0] == k[1]) == 20
+
+    payload, _out = _assert_s12_fail_file(tmp_path, capsys)
+    g10 = payload['G10']
+    assert g10['parts'] == {'1_C_equals_S6': True,
+                            '2_weights_and_G3_equal_S5': False,
+                            '3_pairs_give_back_w_mean': False}
+    c2 = g10['2_weights_and_G3_equal_S5']
+    assert c2['weights']['n'] == 1440 and c2['G3']['n_maps'] == 20
+    if where.startswith('G3.'):
+        assert c2['weights']['all_equal'] and not c2['G3']['ok']
+        assert [r['path'] for r in c2['G3']['not_ok']] == ['G3.rows[9]']
+        assert c2['G3']['not_ok'][0]['g3'] is True       # G3 itself held;
+        assert c2['G3']['not_ok'][0]['equal_to_S5'] is False   # S5 differs
+    else:
+        assert c2['G3']['ok'] and c2['weights']['n_equal'] == 1439
+        assert len(c2['weights']['differing']) == 1
+        assert c2['weights']['differing'][0]['path'].endswith(field)
+    assert g10['3_pairs_give_back_w_mean'] is None
+    assert payload['n_weight_calls'] == 160
+    assert all(dw.is_seen(c['key'][2], c['key'][3])
+               for c in c2['weights']['comparisons'])
+
+
+def test_s12_g10_g3_itself_failing_stops_the_stage(tmp_path, capsys,
+                                                   monkeypatch):
+    """Y12b: S5 agreed with, and G3 still required: C = 1 and max |w| = 0.
+
+    The weight call is skewed by 0.25 on one map against itself, and the S5
+    payload is built through the same skewed call. So the stage reproduces
+    S5's stored row exactly, `equal_to_S5` holds, and it is G3's own half --
+    max |w| is 0.0 exactly -- that stops the stage.
+    """
+    by_kc, spawn = s12_sides()
+    s6 = s12_fake_s6(by_kc, spawn)
+    real = dw._side_classify
+
+    def skewed(a, b, spawn_a, spawn_b):
+        res, sh = real(a, b, spawn_a, spawn_b)
+        if a is b and a['stem'] == by_kc[(2, 240)]['stem']:
+            res['weights']['w'] = res['weights']['w'] + 0.25
+        return res, sh
+
+    monkeypatch.setattr(dw, '_side_classify', skewed)
+    s5 = s12_fake_s5(by_kc, spawn)
+    with pytest.raises(SystemExit) as e:
+        _s12_run(by_kc, spawn, s5, s6, tmp_path)
+    assert e.value.code == 2
+    payload, _out = _assert_s12_fail_file(tmp_path, capsys)
+    g3 = payload['G10']['2_weights_and_G3_equal_S5']['G3']
+    assert (g3['ok'], g3['n_ok']) == (False, 19)
+    bad, = g3['not_ok']
+    assert bad['equal_to_S5'] is True and bad['g3'] is False
+    assert bad['max_abs_w'] == 0.25
+
+
+def test_s12_g10_check_3_on_a_row_s5_holds_stops_before_any_unseen_weight(
+        tmp_path, capsys, monkeypatch):
+    """Y13: the pairs are checked on S5's rows first, and a failure ends it.
+
+    Stricter than the registered order asks: check 3 is read on the 140 rows
+    before the door opens, so a fault in the pair record is found on rows
+    whose weights are already published.
+    """
+    by_kc, spawn = s12_sides()
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    seen = _s12_spies(monkeypatch)
+    real = dw.s12_pairs
+
+    def one_pair_wrong(res):
+        pairs = real(res)
+        if one_pair_wrong.n == 57:               # one of S5's 140 rows
+            pairs[0]['w'] += 1e-6
+        one_pair_wrong.n += 1
+        return pairs
+
+    one_pair_wrong.n = 0
+    monkeypatch.setattr(dw, 's12_pairs', one_pair_wrong)
+    with pytest.raises(SystemExit) as e:
+        _s12_run(by_kc, spawn, s5, s6, tmp_path)
+    assert e.value.code == 2
+    assert len(seen['weight_keys']) == 160
+    assert _unseen_weight_keys(seen['weight_keys']) == []
+    assert one_pair_wrong.n == 140               # S5's rows, and no other
+
+    payload, _out = _assert_s12_fail_file(tmp_path, capsys)
+    g10 = payload['G10']
+    assert g10['parts'] == {'1_C_equals_S6': True,
+                            '2_weights_and_G3_equal_S5': True,
+                            '3_pairs_give_back_w_mean': False}
+    c3 = g10['3_pairs_give_back_w_mean']
+    assert (c3['n_rows'], c3['n_ok'], len(c3['not_ok'])) == (140, 139, 1)
+    assert dw.is_seen(*c3['not_ok'][0]['key'][2:])
+
+
+def test_s12_g10_check_3_on_an_unseen_row_writes_no_verdict(tmp_path, capsys,
+                                                            monkeypatch):
+    """Y14: all 320 rows weighed, one pair record wrong, and no verdict.
+
+    The fail file names the row and the difference. It holds no weight of an
+    unseen row, no mirror pair and no P17, and none is printed.
+    """
+    by_kc, spawn = s12_sides()
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    seen = _s12_spies(monkeypatch)
+    real = dw.s12_pairs
+
+    def one_pair_wrong(res):
+        pairs = real(res)
+        if one_pair_wrong.n == 250:              # past S5's 140: an unseen row
+            pairs[0]['w'] += 1e-6
+        one_pair_wrong.n += 1
+        return pairs
+
+    one_pair_wrong.n = 0
+    monkeypatch.setattr(dw, 's12_pairs', one_pair_wrong)
+    p17_calls = []
+    real_p17 = dw.p17_verdict
+    monkeypatch.setattr(dw, 'p17_verdict', lambda *a, **k: (
+        p17_calls.append(1), real_p17(*a, **k))[1])
+
+    with pytest.raises(SystemExit) as e:
+        _s12_run(by_kc, spawn, s5, s6, tmp_path)
+    assert e.value.code == 2
+    assert len(seen['weight_keys']) == 340       # the gate had passed
+    assert p17_calls == []                       # and the verdict never ran
+
+    payload, _out = _assert_s12_fail_file(tmp_path, capsys)
+    c3 = payload['G10']['3_pairs_give_back_w_mean']
+    assert (c3['n_rows'], c3['n_ok'], len(c3['not_ok'])) == (320, 319, 1)
+    bad, = c3['not_ok']
+    assert not dw.is_seen(*bad['key'][2:])
+    assert set(bad) == {'key', 'abs_diff', 'ok'} and bad['abs_diff'] > 1e-12
+    assert all(set(r) == {'key', 'abs_diff', 'ok'} for r in c3['rows'])
+    assert payload['n_weight_calls'] == 340
+
+
+def test_s12_g10_holding_on_a_symmetric_corpus_end_to_end(tmp_path, capsys,
+                                                          monkeypatch):
+    """Y15: lattice-aligned maps, one-to-one matching, and d exactly 0."""
+    by_kc, spawn = s12_sides()
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    seen = _s12_spies(monkeypatch)
+    out = _s12_run(by_kc, spawn, s5, s6, tmp_path)
+
+    # C through S6's call on all 320; S5's call once per row and per map; and
+    # the order: every unseen row comes after every row S5 holds
+    assert sorted(seen['cut_matrix_keys']) == sorted(dw.matrix_keys())
+    wk = seen['weight_keys']
+    assert len(wk) == 340 == out['n_weight_calls'] == seen['viewpoint_weights']
+    assert len(set(wk)) == 340
+    first_unseen = min(i for i, k in enumerate(wk)
+                       if k[0] != k[1] and not dw.is_seen(k[2], k[3]))
+    assert first_unseen == 160
+    assert len(_unseen_weight_keys(wk)) == 180
+
+    g10 = out['G10']
+    assert g10['all_ok'] and all(g10['parts'].values())
+    c1, c2, c3 = (g10['1_C_equals_S6'], g10['2_weights_and_G3_equal_S5'],
+                  g10['3_pairs_give_back_w_mean'])
+    assert (c1['n'], c1['n_equal']) == (320, 320)
+    assert c1['beside']['n'] == c1['beside']['n_equal'] == 1280
+    assert (c2['weights']['n'], c2['weights']['n_equal']) == (1440, 1440)
+    assert len(c2['weights']['by_location']) == 6
+    assert (c2['G3']['n_maps'], c2['G3']['n_ok']) == (20, 20)
+    assert c2['beside']['n'] == c2['beside']['n_equal'] == 600
+    assert c2['not_compared']['locations'] == list(dw.S5_NOT_COMPARED)
+    assert (c3['n_rows'], c3['n_ok']) == (320, 320)
+    assert c3['max_abs_diff'] <= 1e-12
+
+    assert (out['n_rows'], out['n_seen_by_S5'], out['n_unseen_before_S12'],
+            out['n_mirror_pairs']) == (320, 140, 180, 160)
+    assert sum(1 for r in out['rows'] if r['seen_by_S5']) == 140
+    for r in out['rows']:
+        assert r['n_weighable'] > 0 and r['pairs']
+        assert set(dw.WEIGHT_FIELDS) <= set(r)
+        assert sum(p['n'] for p in r['pairs']) == r['n_weighable']
+    assert any(len({p['w'] for p in r['pairs']}) > 1 for r in out['rows'])
+
+    p17 = out['P17']
+    assert (p17['holds'], p17['n_holding'], p17['of'], p17['min_required']) \
+        == (True, 60, 60, 54)
+    assert p17['max_d'] == 0.0 and p17['failing'] == []
+    assert p17['d_summary']['n_exactly_0'] == 60
+    rep = out['reported']
+    assert (rep[dw.M1200]['n'], rep[dw.SAME_CUT]['n']) == (60, 40)
+    assert rep[dw.M1200]['n_exactly_0'] == 60
+    assert rep[dw.SAME_CUT]['max'] == 0.0
+    assert rep['w_symmetry']['n_segment_pairs_in_both_rows'] > 160
+    assert rep['w_symmetry']['max_abs_diff'] <= 1e-15
+
+    written = list(tmp_path.glob('s12_mirror_*.json'))
+    assert len(written) == 1 and not list(tmp_path.glob('s12_g10_fail_*'))
+    payload = json.loads(written[0].read_text())
+    assert out['written']['sha256'] == hashlib.sha256(
+        written[0].read_bytes()).hexdigest()
+    assert payload['head'] == 'synthetic'
+    assert payload['sources'] == S12_META['sources']
+    assert len(payload['rows']) == 320 and len(payload['mirror_pairs']) == 160
+    printed = capsys.readouterr().out
+    assert 'G10: check 1 HOLD  check 2 HOLD  check 3 HOLD   HOLD' in printed
+    assert 'P17: HOLD  60/60 M60 pairs' in printed
+    assert _keys_naming_the_null(payload) == []
+
+
+def test_s12_a_double_wall_moves_eight_pairs_and_shows_the_join(tmp_path,
+                                                                capsys):
+    """Y16: one map with two walls, and the asymmetry P17 is about.
+
+    k4 at cut60 has a wall either side of everyone else's. Another robot's
+    wall matches k4's lower one only; both of k4's match that robot's wall.
+    So for X in k0..k3 at cut120 or cut240 against k4 at cut60 -- 8 of M60's
+    60 -- the pair (S_X, upper) carries length from k4's side and none from
+    X's, and the two means differ.
+
+    Seven of the eight differ by more than 1/180 and fail. The eighth, k1 at
+    cut120, differs by 1/1260 -- 137/7 against 272/14 bins -- which is not 0
+    and is inside the bound, so it HOLDS: the verdict is on d, not on whether
+    the two rows weighed the same pairs. 53 of 60, and P17 fails.
+    """
+    by_kc, spawn = s12_sides(double=True)
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    out = _s12_run(by_kc, spawn, s5, s6, tmp_path)
+
+    assert out['G10']['all_ok']
+    p17 = out['P17']
+    moved = {(x, 4, a, 60) for x in range(4) for a in (120, 240)}
+    m60 = {(m['X'], m['Y'], m['cut_X'], m['cut_Y']): m
+           for m in out['mirror_pairs'] if m['set'] == dw.M60}
+    assert {k for k, m in m60.items() if m['d'] != 0.0} == moved
+    inside = m60[(1, 4, 120, 60)]
+    assert inside['d'] == pytest.approx(BINW / 180.0 / 7.0)
+    assert 0.0 < inside['d'] <= 1.0 / 180.0
+
+    assert (p17['holds'], p17['n_holding'], p17['of']) == (False, 53, 60)
+    assert (p17['n_over_the_bound'], p17['n_undefined']) == (7, 0)
+    assert {(f['X'], f['Y'], f['cut_X'], f['cut_Y']) for f in p17['failing']} \
+        == moved - {(1, 4, 120, 60)}
+    assert p17['max_d'] == max(f['d'] for f in p17['failing'])
+    assert all(f['d'] > 1.0 / 180.0 for f in p17['failing'])
+    assert p17['d_summary']['n_exactly_0'] == 52
+
+    rows = {(r['A'], r['B'], r['cut_A'], r['cut_B']): r for r in out['rows']}
+    for f in p17['failing']:
+        kf = (f['X'], f['Y'], f['cut_X'], f['cut_Y'])
+        kr = (f['Y'], f['X'], f['cut_Y'], f['cut_X'])
+        joined = f['matched_pairs']
+        assert {(j['S_X'], j['S_Y']) for j in joined} == {
+            (0, 0), (1, 0), (0, 1), (1, 1)}
+        for j in joined:
+            if j['S_Y'] == 0:                    # k4's lower wall: both sides
+                assert j['w_X_to_Y'] == pytest.approx(j['w_Y_to_X'])
+                assert j['n_X_to_Y'] == j['n_Y_to_X'] > 0
+                assert j['length_X_to_Y_m'] == j['length_Y_to_X_m'] > 0.0
+            else:                                # its upper wall: k4's only
+                assert j['w_X_to_Y'] is None and j['w_Y_to_X'] is not None
+                assert (j['n_X_to_Y'], j['length_X_to_Y_m']) == (0, 0.0)
+                assert j['length_Y_to_X_m'] > 0.0
+        # the join carries both rows whole: lengths and the two means
+        for side_, key in (('X_to_Y', kf), ('Y_to_X', kr)):
+            assert sum(j[f'n_{side_}'] for j in joined) \
+                == rows[key]['n_weighable']
+            mean = (sum(j[f'w_{side_}'] * j[f'n_{side_}'] for j in joined
+                        if j[f'n_{side_}'])
+                    / rows[key]['n_weighable'])
+            assert mean == pytest.approx(rows[key]['w_mean'], abs=1e-12)
+        assert f['d'] == abs(rows[kf]['w_mean'] - rows[kr]['w_mean'])
+
+    # the hand-computed one: k0 at cut120 against k4 at cut60, in bins of 5 deg
+    f = next(f for f in p17['failing']
+             if (f['X'], f['cut_X']) == (0, 120))
+    assert f['w_mean_X_to_Y'] == pytest.approx((7 + 5 * 15) / 6 * BINW / 180)
+    assert f['w_mean_Y_to_X'] == pytest.approx(
+        (7 + 5 * 15 + 25 + 5 * 25) / 12 * BINW / 180)
+
+    # the same double wall also moves pairs that are reported, not judged
+    rep = out['reported']
+    assert rep[dw.M1200]['max'] > 1.0 / 180.0
+    assert rep[dw.SAME_CUT]['max'] > 1.0 / 180.0
+    assert rep[dw.M1200]['n_exactly_0'] < 60
+    printed = capsys.readouterr().out
+    assert 'P17: FAIL  53/60 M60 pairs' in printed
+    assert 'k1@cut120 <-> k4@cut60' not in printed   # it holds; not shown
+    assert 'k0@cut120 <-> k4@cut60' in printed and 'S_X  1  S_Y  1' in printed
+    assert len(list(tmp_path.glob('s12_mirror_*.json'))) == 1
+
+
+def test_s12_reported_summaries_and_w_symmetry():
+    """Y18: min, median, max and zeroes over a set; w from both sides."""
+    entries = [{'d': v} for v in (0.0, 0.0, 0.002, None, 0.01)]
+    s = dw.d_summary(entries)
+    assert (s['n'], s['n_undefined'], s['n_exactly_0']) == (5, 1, 2)
+    assert (s['min'], s['median'], s['max']) == (0.0, 0.001, 0.01)
+    assert s['max_deg'] == pytest.approx(1.8)
+    empty = dw.d_summary([{'d': None}])
+    assert (empty['n'], empty['n_undefined'], empty['min'], empty['median'],
+            empty['max'], empty['max_deg']) == (1, 1, None, None, None, None)
+
+    def row(*pairs):
+        return {'pairs': [{'S_A': a, 'S_B': b, 'w': w, 'n': n,
+                           'length_m': n * RHO} for a, b, w, n in pairs]}
+
+    xy = row((0, 0, 0.10, 2), (1, 0, 0.30, 1))
+    yx = row((0, 0, 0.10, 2), (0, 1, 0.30 + 1e-9, 1), (2, 1, 0.5, 4))
+    joined = dw.joined_pairs(xy, yx)
+    assert [(j['S_X'], j['S_Y']) for j in joined] == [(0, 0), (1, 0), (1, 2)]
+    assert joined[2] == {'S_X': 1, 'S_Y': 2, 'w_X_to_Y': None,
+                         'w_Y_to_X': 0.5, 'n_X_to_Y': 0, 'n_Y_to_X': 4,
+                         'length_X_to_Y_m': 0.0,
+                         'length_Y_to_X_m': pytest.approx(0.4)}
+    m = {'X': 0, 'Y': 1, 'cut_X': 60, 'cut_Y': 120}
+    sym = dw.w_symmetry({(0, 1, 60, 120): xy, (1, 0, 120, 60): yx}, [m])
+    assert (sym['n_segment_pairs_in_both_rows'], sym['n_exactly_0']) == (2, 1)
+    assert sym['max_abs_diff'] == pytest.approx(1e-9)
+    assert sym['at'] == {**m, 'S_X': 1, 'S_Y': 0}
+
+
+def test_s12_the_fail_payload_guard_catches_a_verdict():
+    """Y14b: the guard on a fail file fires on each thing it must not hold."""
+    ok = {'stage': 's12_g10_fail', 'predictions_verbatim': {'P17': 'text'},
+          'G10': {'1_C_equals_S6': {'comparisons': [
+                      {'key': [0, 1, 60, 120], 'field': 'corroborated',
+                       'stored': 0.5, 'computed': 0.5}]},
+                  '2_weights_and_G3_equal_S5': {'weights': {'comparisons': [
+                      {'key': [0, 1, 1200, 60], 'field': 'w_mean',
+                       'stored': 0.1, 'computed': 0.1}]}},
+                  '3_pairs_give_back_w_mean': {'rows': [
+                      {'key': [0, 1, 60, 120], 'abs_diff': 0.0, 'ok': True}]}}}
+    dw._no_verdict_in_s12(ok)                    # what a fail file does hold
+    for extra in ({'P17': {}}, {'rows': []}, {'mirror_pairs': []},
+                  {'reported': {}}, {'x': [{'w_mean': 0.1}]},
+                  {'x': {'pairs': []}}, {'x': {'d': 0.0}}):
+        with pytest.raises(AssertionError):
+            dw._no_verdict_in_s12({**ok, **extra})
+    unseen = json.loads(json.dumps(ok))
+    unseen['G10']['2_weights_and_G3_equal_S5']['weights']['comparisons'][0][
+        'key'] = [0, 1, 60, 120]
+    with pytest.raises(AssertionError):
+        dw._no_verdict_in_s12(unseen)
+
+
+def test_s12_the_fail_payload_is_walked_before_it_is_written(tmp_path,
+                                                            monkeypatch):
+    """Y14c: the stage calls the guard, and a guard that fires writes nothing."""
+    by_kc, spawn = s12_sides()
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    s6['rows'][5]['corroborated'] = math.nextafter(
+        s6['rows'][5]['corroborated'], 0.0)
+    walked = []
+
+    def guard(payload):
+        walked.append(payload['stage'])
+        raise AssertionError('a verdict in a fail payload')
+
+    monkeypatch.setattr(dw, '_no_verdict_in_s12', guard)
+    with pytest.raises(AssertionError, match='a verdict in a fail payload'):
+        _s12_run(by_kc, spawn, s5, s6, tmp_path)
+    assert walked == ['s12_g10_fail']
+    assert not list(tmp_path.iterdir())
+
+
+def test_s12_needs_bearing_histograms_on_every_side(tmp_path, monkeypatch):
+    """A side with no histograms cannot be weighed, and stops before any C."""
+    by_kc, spawn = s12_sides()
+    s5, s6 = s12_fake_s5(by_kc, spawn), s12_fake_s6(by_kc, spawn)
+    by_kc[(3, 120)]['bearing_hist'] = None
+    seen = _s12_spies(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        _s12_run(by_kc, spawn, s5, s6, tmp_path)
+    assert e.value.code == 2
+    assert seen['cut_matrix_keys'] == [] and seen['weight_keys'] == []
+    assert not list(tmp_path.iterdir())
+
+
+S12_SPEC_TEXT = (
+    '## Viewpoint weight at mixed cuts (P17)\n\n'
+    '**P17. REGISTERED 13 Oct 2026.** For a mirror pair, let\n'
+    'd = |w_mean(X@a → Y@b) − w_mean(Y@b → X@a)|. P17 holds if d ≤ 1/180.\n\n'
+    '**G10 (gate).** Before it computes any weight on a row S5 does not '
+    'hold, S12:\n'
+    '1. recomputes C on all 320 rows;\n'
+    '2. recomputes w_mean on every\n   row where S5 holds them.\n\n'
+    'On any difference it stops before writing a verdict. A third check '
+    'runs on every row\nS12 computes.\n\n'
+    '**What S12 computes and records.** For each of the 320 rows.\n')
+
+
+def test_s12_reads_the_registered_paragraphs_from_the_spec_text():
+    """Y20: P17, G10 with its two numbered checks, and the third check."""
+    assert dw.spec_paragraph(S12_SPEC_TEXT, dw.P17_HEADER) == (
+        '**P17. REGISTERED 13 Oct 2026.** For a mirror pair, let '
+        'd = |w_mean(X@a → Y@b) − w_mean(Y@b → X@a)|. P17 holds if '
+        'd ≤ 1/180.')
+    assert dw.spec_paragraph(S12_SPEC_TEXT, dw.G10_HEADER) == (
+        '**G10 (gate).** Before it computes any weight on a row S5 does not '
+        'hold, S12: 1. recomputes C on all 320 rows; 2. recomputes w_mean on '
+        'every row where S5 holds them.')
+    assert dw.spec_paragraph(S12_SPEC_TEXT, dw.G10_THIRD_HEADER) == (
+        'On any difference it stops before writing a verdict. A third check '
+        'runs on every row S12 computes.')
+    assert dw.P17_GATE_TEXT in S12_SPEC_TEXT
+    assert dw.G10_GATE_TEXT in S12_SPEC_TEXT
+
+
+def _s12_refusal_spies(monkeypatch):
+    """Spies on everything `run_s12` could read: the corpus and two files."""
+    seen = {'load_side': 0, 'sha256': 0, 's12_mirror': 0}
+    real = dw._sha256
+
+    def load_side(*a, **k):
+        seen['load_side'] += 1
+        raise AssertionError('run_s12 loaded a map past a refusal')
+
+    def sha256(path):
+        seen['sha256'] += 1
+        return real(path)
+
+    def s12_mirror(*a, **k):
+        seen['s12_mirror'] += 1
+        raise AssertionError('run_s12 reached the stage past a refusal')
+
+    monkeypatch.setattr(dw, 'load_side', load_side)
+    monkeypatch.setattr(dw, '_sha256', sha256)
+    monkeypatch.setattr(dw, 's12_mirror', s12_mirror)
+    return seen
+
+
+S12_NOTHING = {'load_side': 0, 'sha256': 0, 's12_mirror': 0}
+
+
+def test_s12_refuses_a_dirty_tree(monkeypatch):
+    """Y19a: a result file must not name a commit it was not produced by."""
+    seen = _s12_refusal_spies(monkeypatch)
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/divergence_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s12()
+    assert e.value.code == 2
+    assert seen == S12_NOTHING
+
+
+def test_s12_refuses_when_the_registration_is_not_an_ancestor(monkeypatch):
+    """Y19b: 82e6462 registered P17 and G10 and must be behind the code."""
+    seen = _s12_refusal_spies(monkeypatch)
+    asked = []
+
+    def fake(*a):
+        asked.append(a)
+        return '' if a[0] in ('status', 'merge-base') else 'deadbeef'
+
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s12()
+    assert e.value.code == 2
+    assert ('merge-base', '82e6462', 'HEAD') in asked
+    assert dw.S12_REGISTRATION == '82e6462'
+    assert seen == S12_NOTHING
+
+
+@pytest.mark.parametrize('present', ['', 'P17', 'G10'])
+def test_s12_refuses_when_the_spec_at_head_lacks_p17_or_g10(present,
+                                                            monkeypatch):
+    """Y19c: the prediction AND its gate, not one of them."""
+    seen = _s12_refusal_spies(monkeypatch)
+    text = '## 9\n\n**P16. REGISTERED 11 Oct 2026.** something\n'
+    if present == 'P17':
+        text += '\n**P17. REGISTERED 13 Oct 2026.** something\n'
+    if present == 'G10':
+        text += '\n**G10 (gate).** something\n'
+
+    def fake(*a):
+        if a[0] == 'status':
+            return ''
+        if a[0] == 'show':
+            return text
+        return 'c0ffee'                       # merge-base == rev-parse
+
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s12()
+    assert e.value.code == 2
+    assert seen == S12_NOTHING
+
+
+def test_s12_refuses_a_missing_or_wrong_s5_or_s6_file(tmp_path, monkeypatch):
+    """Y19d: G10 is an equality against ONE S5 run and ONE S6 run.
+
+    Each file is refused when missing and when its hash is not the pinned
+    one, S5 first, and no map is loaded in any of the four.
+    """
+    seen = _s12_refusal_spies(monkeypatch)
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] == 'status' else S12_SPEC_TEXT if a[0] == 'show'
+        else 'c0ffee'))
+
+    def refused():
+        with pytest.raises(SystemExit) as e:
+            dw.run_s12(tmp_path)
+        assert e.value.code == 2
+        assert seen['load_side'] == 0 and seen['s12_mirror'] == 0
+
+    refused()                                   # neither file is there
+    assert seen['sha256'] == 0
+
+    s5_path = tmp_path / dw.S5_RESULT
+    s5_path.write_text('{"G3": {"rows": []}}')
+    refused()                                   # S5 there, and not the pinned
+    assert seen['sha256'] == 1
+
+    monkeypatch.setattr(dw, 'S5_SHA256',
+                        hashlib.sha256(s5_path.read_bytes()).hexdigest())
+    refused()                                   # S5 passes; S6 is missing
+    assert seen['sha256'] == 2
+
+    (tmp_path / dw.S6_RESULT).write_text('{"rows": []}')
+    refused()                                   # S6 there, and not the pinned
+    assert seen['sha256'] == 4
+
+    monkeypatch.undo()
+    assert dw.S5_RESULT == 's5_viewpoint_20261006T212758Z.json'
+    assert dw.S5_SHA256 == ('f99e001d517734ea4b8d737436f0e9243122c0edd9d30f65'
+                            'a241dde39e89bb67')
+    assert dw.S6_RESULT == 's6_cutmatrix_20261008T225604Z.json'
+    assert dw.S6_SHA256 == ('a3d584f310e509c33bcca09c2fe641d4914dd4f768146f10'
+                            'c1ebf340f58b2f13')
+
+
+def test_s12_is_a_stage_of_the_command_line(monkeypatch):
+    """`--stage s12` reaches `run_s12` and nothing else."""
+    called = []
+    monkeypatch.setattr(dw, 'run_s12', lambda out_dir: called.append(out_dir))
+    monkeypatch.setattr(dw.sys, 'argv', ['divergence_walls.py', '--stage',
+                                         's12'])
+    assert dw.main() == 0
+    assert called == [dw.OUT_DIR_DEFAULT]
+
+
 # ──────────────────────────── the named breaks ───────────────────────────────
 
 def test_x1_frame_sign_flip_fails_g1_and_collapses_corroboration():

@@ -5257,11 +5257,851 @@ def run_s11(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
     return s11_trace(by_kc, spawn, s10, meta, out_dir, t0, s9_sha=S9_SHA256)
 
 
+# ── S12: the viewpoint weight at mixed cuts, G10 and P17
+#    (spec v0.19, "Viewpoint weight at mixed cuts (P17)") ─────────────────────
+
+S12_REGISTRATION = '82e6462'       # registered P17 and G10 (spec v0.19)
+P17_HEADER = '**P17. REGISTERED'
+G10_HEADER = '**G10 (gate).**'
+G10_THIRD_HEADER = 'On any difference it stops before writing a verdict.'
+P17_GATE_TEXT = 'P17. REGISTERED'
+G10_GATE_TEXT = 'G10 (gate).'
+S5_SHA256 = ('f99e001d517734ea4b8d737436f0e9243122c0edd9d30f65a241dde39e89bb'
+             '67')
+P17_BOUND = 1.0 / 180.0            # "d <= 1/180 (1 deg)", inclusive
+P17_MIN_PAIRS = 54                 # "at least 54 of the 60 pairs of M60"
+M60_CUTS = (60, 120, 240)          # "a and b both in {60, 120, 240}"
+G10_MEAN_TOL = 1e-12               # check 3: "equals w_mean within 1e-12"
+M60, M1200, SAME_CUT = 'M60', 'M1200', 'same_cut'
+N_M60, N_M1200, N_SAME_CUT = 60, 60, 40       # of the 160 mirror pairs
+# G10 check 2's seven quantities, in the registered order.
+WEIGHT_FIELDS = ('w_mean', 'W', 'w_p10', 'w_p50', 'w_p90', 'unweighable_A',
+                 'unweighable_B')
+# What S6 and S5 store beside the registered quantities on the same rows.
+# Compared and reported; the gate is the registered comparison and no wider.
+S6_BESIDE_FIELDS = ('not_corroborated', 'n_corroborated', 'n_elements',
+                    'L_A_m')
+S5_BESIDE_FIELDS = ('corroborated', 'n_corroborated', 'n_weighable')
+# What S5 stores and S12 does NOT recompute, named so the omission is a
+# statement rather than an oversight: all four are E7's or w_null's.
+S5_NOT_COMPARED = ('P7.rows[].mean_w', 'P7.rows[].mean_w_null',
+                   'P7.rows[].n_E7', 'P7.rows[].reported.n_E7')
+
+
+class S12GateClosed(RuntimeError):
+    """A weight asked for on a row S5 does not hold, before G10 allowed it."""
+
+
+class S12Weights:
+    """The one door through which S12 reaches S5's weight call.
+
+    `row(key)` IS S5'S CALL: `_side_classify`, the function `run_s5` computes
+    every one of its rows with, handed what `run_s5` hands it -- A's side, B's
+    side and the two spawns -- so B's elements are B's FACE elements moved into
+    A's frame with their segment ids, and both sides' bearing histograms go to
+    `classify`. Nothing is re-derived here. `itself(k, cut)` is the same call
+    as G3 makes it: one side twice, both spawns at the origin.
+
+    THE DOOR IS SHUT ON EVERY ROW S5 DOES NOT HOLD until `open_after` is given
+    G10's checks and all of them hold. `is_seen` is that set: spec v0.11 says
+    every weight S5 computed lies in the 140 seen rows or on a map against
+    itself, and check 2 requires S5's file to name exactly those 140. So the
+    order of `s12_mirror` is not the only thing keeping the 180 unseen rows
+    unseen: a call that arrives early raises, whoever makes it.
+
+    `_side_classify` returns `classify`'s result and `shares` of it. Neither
+    calls `null_weights` or `segment_dirs`, so no w_null and no E7 comes back
+    through here.
+    """
+
+    def __init__(self, by_kc: dict, spawn: dict):
+        self._by_kc, self._spawn = by_kc, spawn
+        self._open = False
+        self.asked: list[tuple] = []   # every (A, B, cut_A, cut_B), in order
+
+    @property
+    def is_open(self) -> bool:
+        return self._open
+
+    def open_after(self, check_1, check_2, check_3_on_s5_rows) -> bool:
+        """Open for the rows S5 does not hold, if all three checks hold."""
+        self._open = all(c is not None and c.get('ok') is True
+                         for c in (check_1, check_2, check_3_on_s5_rows))
+        return self._open
+
+    def row(self, key: tuple) -> tuple:
+        ka, kb, cut_a, cut_b = key
+        if ka == kb:
+            raise ValueError(f'{key}: a map against itself is `itself`, not '
+                             'a row of the matrix')
+        if not is_seen(cut_a, cut_b) and not self._open:
+            raise S12GateClosed(
+                f'A=k{ka} B=k{kb} cut_A {cut_a} cut_B {cut_b} is not a row S5 '
+                'holds, and G10 has not passed; no weight is computed on it')
+        self.asked.append((ka, kb, cut_a, cut_b))
+        return _side_classify(self._by_kc[(ka, cut_a)],
+                              self._by_kc[(kb, cut_b)],
+                              self._spawn[ka], self._spawn[kb])
+
+    def itself(self, k: int, cut: int) -> tuple:
+        side = self._by_kc[(k, cut)]
+        self.asked.append((k, k, cut, cut))
+        return _side_classify(side, side, (0.0, 0.0), (0.0, 0.0))
+
+
+def s6_c_comparisons(s6: dict) -> tuple[list[dict], list[dict]]:
+    """Every row of S6's file: C, and what S6 stored beside it.
+
+    Returns `(registered, beside)`. G10 check 1 is stated on C, which S6 stores
+    as `corroborated`; that list is the gate. The other four fields of the row
+    are compared too and reported, never gating.
+    """
+    registered, beside = [], []
+    for i, row in enumerate(s6['rows']):
+        key = (row['A'], row['B'], row['cut_A'], row['cut_B'])
+        registered.append({'source': 's6', 'path': f'rows[{i}].corroborated',
+                           'key': key, 'field': 'corroborated',
+                           'stored': row['corroborated']})
+        for field in S6_BESIDE_FIELDS:
+            beside.append({'source': 's6', 'path': f'rows[{i}].{field}',
+                           'key': key, 'field': field, 'stored': row[field]})
+    return registered, beside
+
+
+def s5_weight_comparisons(s5: dict) -> tuple[list[dict], list[dict]]:
+    """Every weight quantity S5's file stores, with the matrix row it is on.
+
+    Returns `(registered, beside)`. Each entry carries the `location` it was
+    read from, so the gate can count its comparisons per location.
+
+    THE CUTS OF P7'S AND P8'S ROWS COME FROM THEIR REGISTERED WORDING, as
+    `s5_comparisons` reads them for G4: P7 is A and B both at cut1200;
+    `P8.rows[i].reported_B60` and `w_mean_B60` are the (A@1200, B@60) row and
+    `w_mean_B1200` the (A@1200, B@1200) one. The two `reported` series carry
+    `cut_A` and `cut_B` and those are used as stored.
+
+    NOT HERE, AND NOT COMPUTED BY S12: `S5_NOT_COMPARED`. P7's `mean_w` is a
+    mean over E7 and `mean_w_null` is w_null; S12 computes neither.
+    """
+    registered, beside = [], []
+
+    def take(location: str, path: str, key: tuple, stored: dict) -> None:
+        for field in WEIGHT_FIELDS:
+            registered.append({'source': 's5', 'location': location,
+                               'path': f'{path}.{field}', 'key': key,
+                               'field': field, 'stored': stored[field]})
+        for field in S5_BESIDE_FIELDS:
+            beside.append({'source': 's5', 'location': location,
+                           'path': f'{path}.{field}', 'key': key,
+                           'field': field, 'stored': stored[field]})
+
+    for i, row in enumerate(s5['P7']['rows']):
+        take('P7.rows[].reported', f'P7.rows[{i}].reported',
+             (row['A'], row['B'], FULL_CUT, FULL_CUT), row['reported'])
+    for i, row in enumerate(s5['P8']['rows']):
+        take('P8.rows[].reported_B60', f'P8.rows[{i}].reported_B60',
+             (row['A'], row['B'], FULL_CUT, 60), row['reported_B60'])
+        for name, cut_b in (('w_mean_B1200', FULL_CUT), ('w_mean_B60', 60)):
+            registered.append({'source': 's5',
+                               'location': f'P8.rows[].{name}',
+                               'path': f'P8.rows[{i}].{name}',
+                               'key': (row['A'], row['B'], FULL_CUT, cut_b),
+                               'field': 'w_mean', 'stored': row[name]})
+    for name in ('A_cut1200_by_B_cut', 'same_cut'):
+        for i, row in enumerate(s5['reported'][name]):
+            take(f'reported.{name}[]', f'reported.{name}[{i}]',
+                 (row['A'], row['B'], row['cut_A'], row['cut_B']), row)
+    return registered, beside
+
+
+def _beside(comparisons: list[dict], rows: dict, fields: tuple) -> dict:
+    """The comparisons that sit beside a gate: counted, and never gating."""
+    cmp = g4_compare([c for c in comparisons if c['key'] in rows], rows)
+    return {'fields': list(fields), 'n': cmp['n'], 'n_equal': cmp['n_equal'],
+            'differing': cmp['differing'],
+            'note': 'stored on the same rows; compared and reported, not '
+                    'part of the registered gate'}
+
+
+def g10_c_equals_s6(by_kc: dict, spawn: dict, s6: dict, keys: list
+                    ) -> tuple[dict, dict]:
+    """G10 check 1: C on all 320 rows, each equal to S6's value exactly.
+
+    C COMES FROM S6'S CALL. `cut_matrix` is what `s6_matrix` fills its rows
+    with, so the number compared is produced by the statements that produced
+    the stored one, and the comparison is `g4_compare`'s `==`, with no
+    tolerance. S6's file must name every row of the matrix exactly once, or
+    the check fails without comparing.
+
+    Returns `(check, rows)`, the rows keyed by key.
+    """
+    registered, beside = s6_c_comparisons(s6)
+    named = [c['key'] for c in registered]
+    covers = len(named) == len(keys) and set(named) == set(keys)
+
+    rows = cut_matrix(by_kc, spawn, keys)
+    cmp = g4_compare([c for c in registered if c['key'] in rows], rows)
+    check = {'ok': bool(covers and cmp['all_equal']),
+             'covers_the_matrix': covers, 'n_rows_named': len(named),
+             'n': cmp['n'], 'n_equal': cmp['n_equal'],
+             'differing': cmp['differing'], 'comparisons': cmp['comparisons'],
+             'beside': _beside(beside, rows, S6_BESIDE_FIELDS)}
+    return check, rows
+
+
+def g10_g3(door: S12Weights, s5: dict, by_kc: dict) -> dict:
+    """G3 again: each map against itself, and against what S5 stored for it.
+
+    The call is S5's -- one side twice, spawns at the origin -- and the
+    largest |w| is taken as `run_s5` takes it. Two things are required of each
+    map: C and max |w| equal S5's stored values exactly, AND they are 1.0 and
+    0.0 exactly, which is G3 itself. `n_weighable` is compared beside them.
+    """
+    kc_of = {side['stem']: kc for kc, side in by_kc.items()}
+    stored = s5['G3']['rows']
+    covers = (len(stored) == len(kc_of)
+              and {r['map'] for r in stored} == set(kc_of))
+    rows = []
+    for i, st in enumerate(stored):
+        rec = {'map': st['map'], 'path': f'G3.rows[{i}]',
+               'stored_C': st['C'], 'stored_max_abs_w': st['max_abs_w'],
+               'stored_n_weighable': st['n_weighable']}
+        kc = kc_of.get(st['map'])
+        if kc is None:
+            rec.update({'ok': False, 'reason': 'no such map in the corpus'})
+            rows.append(rec)
+            continue
+        res, sh = door.itself(*kc)
+        w = res['weights']['w'] if res['weights'] else np.array([])
+        good = ~np.isnan(w)
+        worst = float(np.abs(w[good]).max()) if good.any() else 0.0
+        c = sh['corroborated']
+        rec.update({
+            'C': c, 'max_abs_w': worst, 'n_weighable': int(good.sum()),
+            'equal_to_S5': bool(c == st['C'] and worst == st['max_abs_w']),
+            'g3': bool(c == 1.0 and worst == 0.0),
+            'n_weighable_equal': bool(int(good.sum()) == st['n_weighable'])})
+        rec['ok'] = rec['equal_to_S5'] and rec['g3']
+        rows.append(rec)
+    not_ok = [r for r in rows if not r['ok']]
+    return {'ok': bool(covers and not not_ok), 'covers_the_corpus': covers,
+            'n_maps': len(rows), 'n_ok': len(rows) - len(not_ok),
+            'n_comparisons': 2 * len(rows), 'rows': rows, 'not_ok': not_ok}
+
+
+def g10_weights_equal_s5(door: S12Weights, s5: dict, by_kc: dict,
+                         seen: list) -> tuple[dict, dict]:
+    """G10 check 2: S5's weight quantities and G3, each equal exactly.
+
+    The weights are computed ON THE 140 ROWS S5 HOLDS AND ON NO OTHER, through
+    the door, and every location in S5's file that stores one of the seven
+    quantities is compared with `==`. S5's file must name exactly those 140
+    rows, or the check fails.
+
+    Returns `(check, computed)`, `computed[key]` being `(res, sh)` as S5's
+    call returned it -- kept so the stage records these rows from the very
+    call the gate compared, rather than from a second one.
+    """
+    registered, beside = s5_weight_comparisons(s5)
+    covers = {c['key'] for c in registered} == set(seen)
+
+    computed = {k: door.row(k) for k in seen}
+    flat = {k: sh for k, (_res, sh) in computed.items()}
+    cmp = g4_compare([c for c in registered if c['key'] in flat], flat)
+    by_location: dict[str, dict] = {}
+    for rec in cmp['comparisons']:
+        loc = by_location.setdefault(rec['location'], {'n': 0, 'n_equal': 0})
+        loc['n'] += 1
+        loc['n_equal'] += int(rec['equal'])
+
+    g3 = g10_g3(door, s5, by_kc)
+    check = {'ok': bool(covers and cmp['all_equal'] and g3['ok']),
+             'covers_the_rows_s5_holds': covers,
+             'weights': {'fields': list(WEIGHT_FIELDS), 'n': cmp['n'],
+                         'n_equal': cmp['n_equal'],
+                         'all_equal': cmp['all_equal'],
+                         'by_location': by_location,
+                         'differing': cmp['differing'],
+                         'comparisons': cmp['comparisons']},
+             'G3': g3,
+             'beside': _beside(beside, flat, S5_BESIDE_FIELDS),
+             'not_compared': {'locations': list(S5_NOT_COMPARED),
+                              'why': 'E7 and w_null; S12 computes neither'}}
+    return check, computed
+
+
+def s12_pairs(res: dict) -> list[dict]:
+    """The distinct (S_A, S_B) pairs behind one row's `w_mean`, from A's side.
+
+    Read off what S5's call already returns per element: `res['seg_of']` is
+    A's segment and `res['weights']['seg_b_of']` the segment of the B element
+    T1 matched. The elements taken are `viewpoint_fields`' own -- assigned,
+    with a weight -- so the pairs partition exactly the elements `w_mean` is
+    the mean of.
+
+    w IS ONE NUMBER PER PAIR (spec v0.10, Caution 2), and that is required
+    exactly, not assumed: a pair whose elements carry two different weights
+    stops the stage.
+    """
+    wts = res['weights']
+    w = wts['w']
+    good = res['assigned'] & ~np.isnan(w)
+    groups: dict[tuple[int, int], list[float]] = {}
+    for i in np.nonzero(good)[0]:
+        groups.setdefault((int(res['seg_of'][i]), int(wts['seg_b_of'][i])),
+                          []).append(float(w[i]))
+    out = []
+    for (sa, sb) in sorted(groups):
+        vals = groups[(sa, sb)]
+        if any(v != vals[0] for v in vals):
+            die(f'S_A {sa}, S_B {sb}: {len(set(vals))} different weights '
+                'inside one matched segment pair, which contradicts Caution '
+                '2; nothing is written')
+        out.append({'S_A': sa, 'S_B': sb, 'w': vals[0], 'n': len(vals),
+                    'length_m': len(vals) * res['rho']})
+    return out
+
+
+def s12_row(key: tuple, c_row: dict, res: dict, sh: dict) -> dict:
+    """One row of the record: S6's C, S5's weight quantities, and the pairs.
+
+    `c_row` is the row check 1 computed through S6's call and `(res, sh)` what
+    S5's call returned for the same key. The two calls must agree on C --
+    `classify` gives the same mask with and without histograms -- and that is
+    asserted on every row.
+    """
+    ka, kb, cut_a, cut_b = key
+    assert (sh['corroborated'], sh['n_corroborated'], sh['n_elements']) == (
+        c_row['corroborated'], c_row['n_corroborated'], c_row['n_elements']), \
+        (key, 'the weight call and S6\'s call disagree on C')
+    pairs = s12_pairs(res)
+    n_w = sh['n_weighable']
+    assert sum(p['n'] for p in pairs) == n_w, (key, n_w)
+    row = {'A': ka, 'B': kb, 'cut_A': cut_a, 'cut_B': cut_b,
+           'A_stem': c_row['A_stem'], 'B_stem': c_row['B_stem'],
+           'seen_by_S5': is_seen(cut_a, cut_b),
+           'L_A_m': c_row['L_A_m'], 'n_elements': c_row['n_elements'],
+           'corroborated': c_row['corroborated'],
+           'n_corroborated': c_row['n_corroborated']}
+    row.update({f: sh[f] for f in WEIGHT_FIELDS})
+    row.update({'n_weighable': n_w, 'weighable_length_m': n_w * res['rho'],
+                'n_pairs': len(pairs), 'pairs': pairs})
+    return row
+
+
+def g10_pairs_mean(row: dict, tol: float = G10_MEAN_TOL) -> dict:
+    """G10 check 3 on one row: do the recorded pairs give back `w_mean`?
+
+    The length-weighted mean of w over the row's (S_A, S_B) pairs against the
+    row's `w_mean`, within 1e-12. A row with no weighable element has no pair
+    and no `w_mean`, and holds exactly when it has neither. The record names
+    the row and the difference and NOT the mean: it goes into a fail file too.
+    """
+    key = [row['A'], row['B'], row['cut_A'], row['cut_B']]
+    pairs = row['pairs']
+    if not pairs or row['w_mean'] is None:
+        return {'key': key, 'abs_diff': None,
+                'ok': bool(not pairs and row['w_mean'] is None)}
+    length = math.fsum(p['length_m'] for p in pairs)
+    mean = math.fsum(p['w'] * p['length_m'] for p in pairs) / length
+    diff = abs(mean - row['w_mean'])
+    return {'key': key, 'abs_diff': diff, 'ok': bool(diff <= tol)}
+
+
+def g10_pairs_means(rows: list[dict], tol: float = G10_MEAN_TOL) -> dict:
+    """G10 check 3 over `rows`: every one, or the check fails."""
+    recs = [g10_pairs_mean(r, tol) for r in rows]
+    not_ok = [r for r in recs if not r['ok']]
+    diffs = [r['abs_diff'] for r in recs if r['abs_diff'] is not None]
+    return {'ok': not not_ok, 'tol': tol, 'n_rows': len(recs),
+            'n_ok': len(recs) - len(not_ok),
+            'n_rows_without_a_weighable_element': len(recs) - len(diffs),
+            'max_abs_diff': max(diffs) if diffs else None,
+            'not_ok': not_ok, 'rows': recs}
+
+
+def mirror_set(cut_x: int, cut_y: int) -> str:
+    """Which of the registered sets a mirror pair's two cuts put it in."""
+    if cut_x == cut_y:
+        return SAME_CUT
+    if FULL_CUT in (cut_x, cut_y):
+        return M1200
+    assert cut_x in M60_CUTS and cut_y in M60_CUTS, (cut_x, cut_y)
+    return M60
+
+
+def mirror_pairs(rows: dict, cuts: tuple = CUTS,
+                 n_robots: int = N_ROBOTS) -> list[dict]:
+    """The mirror pairs: X@a -> Y@b beside Y@b -> X@a, and d between them.
+
+    For each unordered robot pair {X, Y} with X before Y and each ordered pair
+    of cuts (a, b) -- `symmetric_table`'s enumeration, so every row of the
+    matrix is one direction of exactly one pair, which is asserted.
+    `d = |w_mean(X@a -> Y@b) - w_mean(Y@b -> X@a)|`, and None when either row
+    has no weighable corroborated element and so no `w_mean`.
+    """
+    out, used = [], []
+    for x in range(n_robots):
+        for y in range(x + 1, n_robots):
+            for a in cuts:
+                for b in cuts:
+                    kf, kr = (x, y, a, b), (y, x, b, a)
+                    rf, rr = rows[kf], rows[kr]
+                    wf, wr = rf['w_mean'], rr['w_mean']
+                    assert (wf is None) == (rf['n_weighable'] == 0), kf
+                    assert (wr is None) == (rr['n_weighable'] == 0), kr
+                    d = None if wf is None or wr is None else abs(wf - wr)
+                    out.append({
+                        'X': x, 'Y': y, 'cut_X': a, 'cut_Y': b,
+                        'set': mirror_set(a, b),
+                        'w_mean_X_to_Y': wf, 'w_mean_Y_to_X': wr, 'd': d,
+                        'd_deg': None if d is None else d * 180.0,
+                        'n_weighable_X_to_Y': rf['n_weighable'],
+                        'n_weighable_Y_to_X': rr['n_weighable'],
+                        'weighable_length_X_to_Y_m': rf['weighable_length_m'],
+                        'weighable_length_Y_to_X_m': rr['weighable_length_m'],
+                        'seen_by_S5_X_to_Y': rf['seen_by_S5'],
+                        'seen_by_S5_Y_to_X': rr['seen_by_S5']})
+                    used += [kf, kr]
+    assert len(used) == len(set(used)) == len(rows), (
+        len(used), len(set(used)), len(rows))
+    return out
+
+
+def p17_verdict(mirrors: list[dict], bound: float = P17_BOUND,
+                min_pairs: int = P17_MIN_PAIRS,
+                n_expected: int = N_M60) -> dict:
+    """P17, exactly as registered at spec v0.19, on M60 and on nothing else.
+
+    A pair holds if `d <= 1/180`, the two floats compared as they are and the
+    bound inclusive. A pair in which either row has no weighable corroborated
+    element has no d and counts against P17. P17 holds if at least 54 of the
+    60 pairs hold. Every pair that does not hold is returned in `failing`.
+    """
+    m60 = [m for m in mirrors if m['set'] == M60]
+    assert len(m60) == n_expected, len(m60)
+    failing, ds = [], []
+    for m in m60:
+        undefined = (m['n_weighable_X_to_Y'] == 0
+                     or m['n_weighable_Y_to_X'] == 0)
+        assert undefined == (m['d'] is None), m
+        if not undefined:
+            ds.append(m['d'])
+        if undefined or m['d'] > bound:
+            rec = dict(m)
+            rec['reason'] = ('a row has no weighable corroborated element'
+                             if undefined else 'd is over the bound')
+            failing.append(rec)
+    n_hold = len(m60) - len(failing)
+    return {'of': len(m60), 'min_required': min_pairs, 'bound': bound,
+            'bound_deg': bound * 180.0, 'n_holding': n_hold,
+            'holds': n_hold >= min_pairs,
+            'n_over_the_bound': sum(1 for f in failing
+                                    if f['d'] is not None),
+            'n_undefined': sum(1 for f in failing if f['d'] is None),
+            'max_d': max(ds) if ds else None,
+            'max_d_deg': max(ds) * 180.0 if ds else None,
+            'd_summary': d_summary(m60), 'failing': failing}
+
+
+def d_summary(entries: list[dict]) -> dict:
+    """min, median and max of d over a set of mirror pairs, and its zeroes."""
+    ds = [e['d'] for e in entries if e['d'] is not None]
+    lo, mid, hi = ((min(ds), float(np.median(ds)), max(ds)) if ds
+                   else (None, None, None))
+    return {'n': len(entries), 'n_undefined': len(entries) - len(ds),
+            'n_exactly_0': sum(1 for d in ds if d == 0.0),
+            'min': lo, 'median': mid, 'max': hi,
+            'min_deg': None if lo is None else lo * 180.0,
+            'median_deg': None if mid is None else mid * 180.0,
+            'max_deg': None if hi is None else hi * 180.0}
+
+
+def joined_pairs(row_xy: dict, row_yx: dict) -> list[dict]:
+    """A mirror pair's two pair records, joined on (S_X, S_Y).
+
+    X@a -> Y@b records its pairs as (S_A, S_B) = (S_X, S_Y) and the mirror
+    row as (S_Y, S_X). For each (S_X, S_Y) either row holds: w from each
+    side, None where that side does not hold it, and the length it carries
+    from each side, 0 where absent.
+    """
+    f = {(p['S_A'], p['S_B']): p for p in row_xy['pairs']}
+    r = {(p['S_B'], p['S_A']): p for p in row_yx['pairs']}
+    out = []
+    for sx, sy in sorted(set(f) | set(r)):
+        pf, pr = f.get((sx, sy)), r.get((sx, sy))
+        out.append({'S_X': sx, 'S_Y': sy,
+                    'w_X_to_Y': pf['w'] if pf else None,
+                    'w_Y_to_X': pr['w'] if pr else None,
+                    'n_X_to_Y': pf['n'] if pf else 0,
+                    'n_Y_to_X': pr['n'] if pr else 0,
+                    'length_X_to_Y_m': pf['length_m'] if pf else 0.0,
+                    'length_Y_to_X_m': pr['length_m'] if pr else 0.0})
+    return out
+
+
+def _mirror_keys(m: dict) -> tuple[tuple, tuple]:
+    return ((m['X'], m['Y'], m['cut_X'], m['cut_Y']),
+            (m['Y'], m['X'], m['cut_Y'], m['cut_X']))
+
+
+def w_symmetry(rows: dict, mirrors: list[dict]) -> dict:
+    """Is w the same from both sides of a matched segment pair? Reported only.
+
+    Over every mirror pair, wherever one (S_X, S_Y) appears in both rows: the
+    largest `|w(X -> Y) - w(Y -> X)|`. `circular_emd_deg` is symmetric in its
+    two histograms up to rounding, so this should be at most a few ulps. It
+    is a report, not a gate.
+    """
+    n, n_zero, worst, where = 0, 0, None, None
+    for m in mirrors:
+        kf, kr = _mirror_keys(m)
+        for j in joined_pairs(rows[kf], rows[kr]):
+            if j['w_X_to_Y'] is None or j['w_Y_to_X'] is None:
+                continue
+            diff = abs(j['w_X_to_Y'] - j['w_Y_to_X'])
+            n += 1
+            n_zero += int(diff == 0.0)
+            if worst is None or diff > worst:
+                worst = diff
+                where = {'X': m['X'], 'Y': m['Y'], 'cut_X': m['cut_X'],
+                         'cut_Y': m['cut_Y'], 'S_X': j['S_X'],
+                         'S_Y': j['S_Y']}
+    return {'n_segment_pairs_in_both_rows': n, 'n_exactly_0': n_zero,
+            'max_abs_diff': worst, 'at': where,
+            'note': 'reported, not a gate'}
+
+
+def _no_verdict_in_s12(payload: dict) -> None:
+    """Assert a G10 fail payload carries no verdict and no row of the record.
+
+    Exact key names, as `_no_class_in` does it. `predictions_verbatim` is the
+    registered wording, keyed by prediction, and is not walked. What a fail
+    file may hold is G10's comparisons: C on all 320 rows, which S6 published;
+    the weight quantities on rows S5 holds, compared as `stored` and
+    `computed`; G3; and, for check 3, a row's key and its difference.
+    """
+    banned = {'P17', 'verdict', 'holds', 'mirror_pairs', 'pairs',
+              'matched_pairs', 'failing', 'reported', 'd', 'd_deg', 'max_d',
+              'd_summary', 'w_symmetry', 'w', 'w_mean_X_to_Y',
+              'w_mean_Y_to_X', *WEIGHT_FIELDS}
+    # the record's own rows sit at the top of a result file; a gate's `rows`
+    # (G3's maps, check 3's keys) sit under G10 and are not these
+    assert 'rows' not in payload, '$.rows is the record, not a comparison'
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if path == '$' and k == 'predictions_verbatim':
+                    continue
+                assert str(k) not in banned, \
+                    f'{path}.{k} is an unseen quantity'
+                walk(v, f'{path}.{k}')
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f'{path}[{i}]')
+
+    walk(payload, '$')
+    c2 = payload['G10']['2_weights_and_G3_equal_S5']
+    if c2 is not None:
+        assert all(is_seen(c['key'][2], c['key'][3])
+                   for c in c2['weights']['comparisons']), \
+            'a weight comparison names a row S5 does not hold'
+
+
+def _write_s12(payload: dict, out_dir: Path, prefix: str) -> tuple[Path, str]:
+    """S9's writer under this stage's name: a dated file, never an overwrite."""
+    return _write_s9(payload, out_dir, prefix)
+
+
+def _deg(v) -> str:
+    return '-' if v is None else f'{v:.6f} = {v * 180.0:.4f} deg'
+
+
+def _print_s12(p17: dict, reported: dict) -> None:
+    """The failing M60 pairs with their matched pairs, then what is reported."""
+    for f in p17['failing']:
+        print(f'  k{f["X"]}@cut{f["cut_X"]} <-> k{f["Y"]}@cut{f["cut_Y"]}  '
+              f'd {_deg(f["d"])}  ({f["reason"]})  w_mean '
+              f'{f["w_mean_X_to_Y"]!r} / {f["w_mean_Y_to_X"]!r}')
+        for j in f['matched_pairs']:
+            print(f'      S_X {j["S_X"]:>2}  S_Y {j["S_Y"]:>2}   w '
+                  f'{j["w_X_to_Y"]!r} / {j["w_Y_to_X"]!r}   length '
+                  f'{j["length_X_to_Y_m"]:.1f} m / '
+                  f'{j["length_Y_to_X_m"]:.1f} m')
+    print('\nd by set   (min / median / max, exactly 0, undefined)')
+    for name, s in (('M60, judged above', p17['d_summary']),
+                    ('M1200, reported', reported[M1200]),
+                    ('same cut, reported', reported[SAME_CUT])):
+        print(f'  {name:<20}{_deg(s["min"])} / {_deg(s["median"])} / '
+              f'{_deg(s["max"])}   exactly 0: {s["n_exactly_0"]}/{s["n"]}   '
+              f'undefined: {s["n_undefined"]}')
+    sym = reported['w_symmetry']
+    print(f'w from both sides of one (S_X, S_Y), reported: largest '
+          f'difference {sym["max_abs_diff"]!r} over '
+          f'{sym["n_segment_pairs_in_both_rows"]} segment pairs, '
+          f'{sym["n_exactly_0"]} exactly 0')
+
+
+def s12_mirror(by_kc: dict, spawn: dict, s5: dict, s6: dict, meta: dict,
+               out_dir: Path = OUT_DIR_DEFAULT, t0: float | None = None,
+               cuts: tuple = CUTS, n_robots: int = N_ROBOTS,
+               bound: float = P17_BOUND, min_pairs: int = P17_MIN_PAIRS,
+               tol: float = G10_MEAN_TOL) -> dict:
+    """The order that keeps every unseen weight behind G10.
+
+    Check 1 computes C on all 320 rows through S6's call. Check 2 computes the
+    weights on the 140 rows S5 holds, and G3 on the 20 maps, through S5's
+    call. Check 3 is then read on those 140 rows. ONLY IF ALL THREE HOLD is
+    the door opened and a weight computed on any of the other 180 -- and the
+    door enforces that, not only this order. Check 3 is then read on every
+    row before a verdict is printed or written.
+
+    On any failure the stage writes the G10 comparisons and stops at exit 2;
+    the fail payload is walked for a verdict first. A failure of check 1
+    computes no weight at all.
+
+    Reads no file and resolves no spawn; `run_s12` is this function plus the
+    corpus I/O. NO w_null AND NO E7: nothing here calls `null_weights` or
+    `segment_dirs`.
+    """
+    t0 = time.monotonic() if t0 is None else t0
+    keys = matrix_keys(cuts, n_robots)
+    seen = [k for k in keys if is_seen(k[2], k[3])]
+    unseen = [k for k in keys if not is_seen(k[2], k[3])]
+    assert len(seen) == N_SEEN, len(seen)
+    assert len(unseen) == N_UNSEEN, len(unseen)
+    for kc in sorted(by_kc):
+        if by_kc[kc].get('bearing_hist') is None:
+            die(f'{by_kc[kc]["stem"]} carries no bearing histograms, and S12 '
+                'weighs every row')
+
+    door = S12Weights(by_kc, spawn)
+    rows: dict[tuple, dict] = {}
+
+    # ── G10 check 1: C on all 320 rows, through S6's call ───────────────────
+    c1, c_rows = g10_c_equals_s6(by_kc, spawn, s6, keys)
+
+    # ── G10 check 2: S5's rows and G3, through S5's call ────────────────────
+    c2 = c3 = None
+    if c1['ok']:
+        c2, computed = g10_weights_equal_s5(door, s5, by_kc, seen)
+
+    # ── G10 check 3 on the rows S5 holds, before any other row exists ──────
+    if c2 is not None and c2['ok']:
+        for k in seen:
+            rows[k] = s12_row(k, c_rows[k], *computed[k])
+        c3 = g10_pairs_means([rows[k] for k in seen], tol)
+
+    g10 = {'1_C_equals_S6': c1, '2_weights_and_G3_equal_S5': c2,
+           '3_pairs_give_back_w_mean': c3,
+           'parts': {'1_C_equals_S6': c1['ok'],
+                     '2_weights_and_G3_equal_S5': bool(c2 and c2['ok']),
+                     '3_pairs_give_back_w_mean': bool(c3 and c3['ok'])}}
+
+    def gate_line():
+        g10['all_ok'] = all(g10['parts'].values())
+        print('G10: ' + '  '.join(
+            f'check {n.split("_")[0]} {"HOLD" if ok else "FAIL"}'
+            for n, ok in g10['parts'].items())
+            + f'   {"HOLD" if g10["all_ok"] else "FAIL"}')
+        print(f'  check 1: C equal on {c1["n_equal"]}/{c1["n"]} rows')
+        if c2 is not None:
+            w, g3 = c2['weights'], c2['G3']
+            print(f'  check 2: {w["n_equal"]}/{w["n"]} weight values equal '
+                  f'over {len(w["by_location"])} locations in S5\'s file; '
+                  f'G3 on {g3["n_ok"]}/{g3["n_maps"]} maps')
+        c3_now = g10['3_pairs_give_back_w_mean']
+        if c3_now is not None:
+            print(f'  check 3: {c3_now["n_ok"]}/{c3_now["n_rows"]} rows '
+                  f'within {c3_now["tol"]:g}')
+
+    def refuse(why: str):
+        for rec in c1['differing'][:20]:
+            a, b, ca, cb = rec['key']
+            print(f'  {rec["path"]}: A=k{a} B=k{b} cut_A {ca} cut_B {cb}  '
+                  f'{rec["field"]}  stored {rec["stored"]!r}  S12 '
+                  f'{rec["computed"]!r}')
+        if not c1['covers_the_matrix']:
+            print(f'  S6\'s file names {c1["n_rows_named"]} rows, not the '
+                  f'{len(keys)} of the matrix once each')
+        if c2 is not None:
+            for rec in c2['weights']['differing'][:20]:
+                a, b, ca, cb = rec['key']
+                print(f'  {rec["path"]}: A=k{a} B=k{b} cut_A {ca} cut_B {cb}'
+                      f'  stored {rec["stored"]!r}  S12 {rec["computed"]!r}')
+            if not c2['covers_the_rows_s5_holds']:
+                print('  S5\'s file does not name exactly the rows S5 holds')
+            for rec in c2['G3']['not_ok']:
+                print(f'  G3 {rec["map"]}: {rec.get("reason") or "differs"}')
+        c3_now = g10['3_pairs_give_back_w_mean']
+        if c3_now is not None:
+            for rec in c3_now['not_ok'][:20]:
+                a, b, ca, cb = rec['key']
+                print(f'  A=k{a} B=k{b} cut_A {ca} cut_B {cb}: the pairs\' '
+                      f'mean differs from w_mean by {rec["abs_diff"]!r}')
+        fail = dict(meta)
+        fail.update({'stage': 's12_g10_fail',
+                     'seconds': time.monotonic() - t0, 'G10': g10,
+                     'n_weight_calls': len(door.asked)})
+        _no_verdict_in_s12(fail)
+        path, _ = _write_s12(fail, out_dir, 's12_g10_fail')
+        die(f'G10 failed; {why} {path}')
+
+    if not door.open_after(c1, c2, c3):
+        gate_line()
+        refuse('no weight was computed on any row S5 does not hold, and no '
+               'verdict was computed, written or printed.')
+
+    # ── the 180 rows S5 does not hold ───────────────────────────────────────
+    for k in unseen:
+        rows[k] = s12_row(k, c_rows[k], *door.row(k))
+    assert len(rows) == N_SEEN + N_UNSEEN, len(rows)
+    assert sorted(door.asked) == sorted(
+        keys + [(k, k, c, c) for (k, c) in by_kc]), 'one weight call per row'
+
+    # ── G10 check 3 on every row, before any verdict ────────────────────────
+    c3 = g10_pairs_means([rows[k] for k in keys], tol)
+    g10['3_pairs_give_back_w_mean'] = c3
+    g10['parts']['3_pairs_give_back_w_mean'] = c3['ok']
+    gate_line()
+    if not g10['all_ok']:
+        refuse('the recorded pairs do not give back w_mean on every row; no '
+               'verdict was computed, written or printed.')
+
+    # ── the mirror pairs and the verdict, judged on M60 alone ───────────────
+    mirrors = mirror_pairs(rows, cuts, n_robots)
+    by_set = {s: [m for m in mirrors if m['set'] == s]
+              for s in (M60, M1200, SAME_CUT)}
+    assert tuple(len(by_set[s]) for s in (M60, M1200, SAME_CUT)) == (
+        N_M60, N_M1200, N_SAME_CUT), {s: len(v) for s, v in by_set.items()}
+
+    p17 = p17_verdict(mirrors, bound, min_pairs)
+    for f in p17['failing']:
+        kf, kr = _mirror_keys(f)
+        f['matched_pairs'] = joined_pairs(rows[kf], rows[kr])
+    print(f'P17: {"HOLD" if p17["holds"] else "FAIL"}  {p17["n_holding"]}/'
+          f'{p17["of"]} M60 pairs with d <= 1/180, {p17["min_required"]} '
+          f'required   largest d {_deg(p17["max_d"])}   '
+          f'({p17["n_over_the_bound"]} over the bound, '
+          f'{p17["n_undefined"]} with a row that has no weighable element)')
+
+    # ── reported, not judged ────────────────────────────────────────────────
+    reported = {M1200: d_summary(by_set[M1200]),
+                SAME_CUT: d_summary(by_set[SAME_CUT]),
+                'w_symmetry': w_symmetry(rows, mirrors),
+                'note': 'M1200 and the same-cut pairs are reported, not '
+                        'judged; d for every pair is in mirror_pairs'}
+    _print_s12(p17, reported)
+
+    rhos = {by_kc[kc]['rho'] for kc in by_kc}
+    payload = dict(meta)
+    payload.update({
+        'seconds': time.monotonic() - t0,
+        'rho_m': rhos.pop() if len(rhos) == 1 else sorted(rhos),
+        'n_rows': len(rows), 'n_seen_by_S5': len(seen),
+        'n_unseen_before_S12': len(unseen), 'n_mirror_pairs': len(mirrors),
+        'n_weight_calls': len(door.asked),
+        'G10': g10, 'rows': [rows[k] for k in keys],
+        'mirror_pairs': mirrors, 'P17': p17, 'reported': reported})
+    path, sha = _write_s12(payload, out_dir, 's12_mirror')
+    out = dict(payload)
+    out['written'] = {'path': str(path), 'sha256': sha}
+    return out
+
+
+def run_s12(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+            ) -> dict:
+    """S12: the viewpoint weight at mixed cuts. Spec v0.19.
+
+    G10 against S6 and S5, then P17.
+
+    The gates, in this order and each before anything it could mislead:
+
+    1. REFUSES ON AN EDITED TREE, before anything is loaded, as S5 to S11 do.
+    2. REGISTRATION BEFORE RESULT: `82e6462`, the commit that registered P17
+       and G10, must be an ancestor of HEAD, and the spec at HEAD must carry
+       both "P17. REGISTERED" and "G10 (gate).".
+    3. The registered paragraphs are read from the spec AT HEAD by script and
+       stored verbatim, never retyped.
+    4. THE S5 AND S6 FILES ARE PINNED BY HASH. G10's checks 1 and 2 are
+       equalities against them.
+
+    NOTHING IS LOADED UNTIL ALL FOUR HOLD.
+    """
+    t0 = time.monotonic()
+
+    porcelain = _git('status', '--porcelain').splitlines()
+    dirty = [ln for ln in porcelain if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    if not _is_ancestor(S12_REGISTRATION):
+        die(f'{S12_REGISTRATION} registered P17 and G10 and is not an '
+            f'ancestor of HEAD {head[:7] or "(unknown)"}; the registration '
+            'must be in history behind the code that tests it')
+    spec_text = _git('show', f'HEAD:{SPEC_REL}')
+    for gate in (P17_GATE_TEXT, G10_GATE_TEXT):
+        if gate not in spec_text:
+            die(f'the spec at HEAD carries no "{gate}"; S12 evaluates a '
+                'registered prediction behind a registered gate or it does '
+                'not run')
+    verbatim = {'P17': spec_paragraph(spec_text, P17_HEADER),
+                'G10': spec_paragraph(spec_text, G10_HEADER),
+                'G10_third_check': spec_paragraph(spec_text,
+                                                  G10_THIRD_HEADER)}
+    spec_rev = _git('log', '-1', '--format=%h', '--', SPEC_REL)
+
+    sources, loaded = {}, {}
+    for name, fname, pinned, what in (
+            ('s5', S5_RESULT, S5_SHA256, 'G10 check 2 reproduces its weight '
+             'quantities and G3'),
+            ('s6', S6_RESULT, S6_SHA256, 'G10 check 1 reproduces its C')):
+        path = out_dir / fname
+        if not path.is_file():
+            die(f'{path} is missing; {what}')
+        sha = _sha256(path)
+        if sha != pinned:
+            die(f'{path.name} has sha256 {sha}, not the {pinned} G10 is '
+                f'stated against; that is a different {name.upper()} run')
+        loaded[name] = json.loads(path.read_text())
+        sources[name] = {'file': path.name, 'sha256': sha,
+                         'head': loaded[name].get('head')}
+
+    import fit_world_transform as fwt                       # noqa: PLC0415
+    import robot_divergence as rd                           # noqa: PLC0415
+
+    stems = corpus_stems(variant)
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    by_kc = {}
+    for s in stems:
+        k, c = gw._k_and_cut(s, 'S12 needs the robot and the cut')
+        by_kc[(k, c)] = load_side(s)
+
+    meta = {'stage': 's12', 'head': head, 'spec_rev': spec_rev,
+            'tree_dirty': bool(dirty),
+            'untracked': sum(1 for ln in porcelain if ln.startswith('??')),
+            'variant': variant, 't2': False,
+            'spec': 'SPEC_b2_divergence_walls v0.19, G10/P17',
+            'predictions_verbatim': verbatim,
+            'sources': sources,
+            'note': 'C comes from S6\'s call (cut_matrix) and the weights '
+                    'from S5\'s (_side_classify), reached only through '
+                    'S12Weights, which raises on a row S5 does not hold '
+                    'until G10 has passed. The (S_A, S_B) pairs are read off '
+                    'what that call already returns per element. No w_null '
+                    'and no E7 is computed, and no truth is read'}
+    return s12_mirror(by_kc, spawn, loaded['s5'], loaded['s6'], meta, out_dir,
+                      t0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--stage',
                     choices=('g2', 's5', 's6', 's7', 's8', 's9', 's10',
-                             's11'),
+                             's11', 's12'),
                     default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
                          'the segment guard on the 20 maps; s5 evaluates G3, '
@@ -5276,7 +6116,10 @@ def main() -> int:
                          'belonged to at k, gates it on S9 with G8, and tests '
                          'P13a, P13b and P14; s11 traces which rule of the '
                          'extraction drops each e\', gates it on S10 with '
-                         'G9, and tests P15 and P16')
+                         'G9, and tests P15 and P16; s12 computes the '
+                         'viewpoint weight on all 320 rows, gates it on S6 '
+                         'and S5 with G10, and tests P17 on the mixed-cut '
+                         'mirror pairs')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -5312,6 +6155,9 @@ def main() -> int:
         return 0
     if args.stage == 's11':
         run_s11(args.out_dir)
+        return 0
+    if args.stage == 's12':
+        run_s12(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')
