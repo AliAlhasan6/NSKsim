@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.19, draft)
+# SPEC — B2 divergence on walls (v0.20, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -35,7 +35,10 @@ post-hoc reading that all 22 elements are risers with respect to H's refitted
 line. It closes O8, opens O9 and registers no prediction. v0.19 registers P17,
 mirror agreement of the viewpoint weight at mixed cuts (O3), and G10, the gate
 for stage S12. S12 will also record the distinct (S_A, S_B) pairs per row (O6).
-No code is written until the stop-point questions in §11 are answered.
+v0.20 records the S12 results — G10 holds, P17 holds 60 of 60 — and a post-hoc
+reading that the two rows of every mirror pair hold the same matched segment
+pairs. It closes O3 and O6 and registers no prediction. No code is written until
+the stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -1341,6 +1344,90 @@ a prediction about them can still be registered.
 **The pair record.** The distinct (S_A, S_B) pairs per row are what Caution 2 says a
 rerun of S5 should add first, and what O6 asks for. S12 records them on all 320 rows.
 
+### S12 results
+
+Source: `experiments/logs/divergence/s12_mirror_20261013T101707Z.json`, sha256
+`247faaa851e9c29cbd5fdd29f4b03e8f27a9b3faef2968ed721be9405486f1ba`. The file is not
+tracked — `experiments/logs/` is gitignored — so the hash stands in for it. Produced
+at HEAD `4f86b8f`, the commit that added the stage, against a clean tree, in 29.9 s
+and 340 weight calls. Every number here was read from that file by script.
+
+**G10 — HOLD, all three checks.**
+- Check 1: C equals S6's value exactly on 320 of 320 rows. The other four fields S6
+  stores per row were compared beside it, not gating: 1,280 of 1,280 equal.
+- Check 2: 1,440 of 1,440 weight values equal S5's exactly, over the six locations in
+  S5's file that store them, and G3 holds on 20 of 20 maps. The fields S5 stores
+  beside them were compared, not gating: 600 of 600 equal.
+- Check 3: on all 320 rows the recorded pairs give back w_mean within 1e-12; the
+  largest difference is 5.6e-17. S12 also read check 3 on S5's 140 rows before it
+  computed a weight on any other row, which is stricter than registered.
+
+**P17 — HOLD, 60/60, 54 required.** The largest d is 0.000313 (0.0563°), at
+k3@cut60 ↔ k4@cut120. d is exactly 0 in 58 of the 60 pairs. No row lacks a
+weighable element.
+
+**Reported, not judged.**
+- M1200: d is exactly 0 in 60 of 60 pairs.
+- Same cut: d is exactly 0 in 38 of 40. The other two are the cut1200 pairs
+  k0 ↔ k2 and k0 ↔ k3, as disclosed at registration.
+- w from the two sides of one matched segment pair is identical in all 1,264 segment
+  pairs held by both rows of a mirror pair. No segment pair is held by one row only.
+
+**The two rows are opposite directions.** In all 120 mixed-cut mirror pairs the two
+rows' C differ (|ΔC| 0.118 to 0.809, median 0.501), and so do their L_A (11.5 m to
+109.7 m). Each row's C equals S6's (check 1), and on all 320 rows the weight call's
+corroborated count, weighable plus unweighable, equals S6's n_corroborated. So d = 0
+is not one row read twice.
+
+**Distinct (S_A, S_B) pairs (O6, Caution 2).** Over the 320 rows a row has 4 to 22
+distinct pairs, median 7. With both maps at cut1200 it has 12 to 22, against Caution
+2's bound of 169, behind 1,286 to 1,298 weighable elements: 58.5 to 108.2 elements
+per pair. The effective sample of a row is its pair count.
+
+**Post hoc, not registered.** Read from the stored file only, after the verdict.
+- In all 160 mirror pairs, the two rows hold the same set of matched segment pairs
+  (S_X, S_Y).
+- In 156, every matched segment pair also carries the same number of elements from
+  both sides, and d is exactly 0.
+- In the other 4, one matched segment pair carries one element more on one side:
+
+| Mirror pair | S_X, S_Y | elements X → Y / Y → X | d |
+|---|---|---|---|
+| k2@cut60 ↔ k4@cut120 | 2, 3 | 71 / 72 | 0.0112° |
+| k3@cut60 ↔ k4@cut120 | 2, 3 | 72 / 73 | 0.0563° |
+| k0@cut1200 ↔ k2@cut1200 | 0, 0 | 204 / 205 | 0.0028° |
+| k0@cut1200 ↔ k3@cut1200 | 0, 0 | 207 / 206 | 0.0025° |
+
+- The registered reason allowed for edge elements to move the mean further at early
+  cuts. In 58 of the 60 M60 pairs, no element differed between the two sides.
+- Two rows carry one unweighable element each: k2@cut240 → k3@cut1200 and its mirror,
+  which S5 holds. It is unweighable_A in the row from k3 and unweighable_B in the row
+  to it, so both fall on k3@cut1200's side, where the corpus's one segment with an
+  empty histogram lies (O2). d for that pair is 0.
+
+**Newly seen, reported, not judged: w_mean at every pair of cuts.** Min–max over the
+20 ordered pairs, in degrees. A cell marked `*` had no weight computed before S12.
+
+| A's cut | B at 60 | B at 120 | B at 240 | B at 1200 |
+|---|---|---|---|---|
+| 60 | 5.82–24.63 | 7.45–25.44 `*` | 9.86–28.48 `*` | 15.16–27.71 `*` |
+| 120 | 7.45–25.44 `*` | 9.36–29.82 | 10.19–32.90 `*` | 11.62–20.64 `*` |
+| 240 | 9.86–28.48 `*` | 10.19–32.90 `*` | 8.42–20.00 | 9.31–14.59 `*` |
+| 1200 | 15.16–27.71 | 11.62–20.64 | 9.31–14.59 | 5.32–10.58 |
+
+Held at one cut of A, w_mean is non-increasing as B's cut goes 60 → 120 → 240 → 1200
+in 19 of the 20 series with A at cut1200, and in 0, 2 and 1 of 20 with A at cut60,
+cut120 and cut240. No prediction was registered on whether these series fall. P8
+compared only the first and last values of the series with A at cut1200 (B at cut60
+against B at cut1200). The series are now seen, so no such prediction can be
+registered.
+
+**Reading.** At every pair of cuts, w_mean is the same in both directions — exactly
+in 156 of the 160 mirror pairs and within 0.06° in the other 4 — while C is not (S6).
+So the convergence series can give one viewpoint weight per pair of maps, and must
+give C in both directions. Mirror agreement is not convergence: with A held at cut60,
+cut120 or cut240, 57 of the 60 series rise at some step as B explores.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -1351,10 +1438,12 @@ rerun of S5 should add first, and what O6 asks for. S12 records them on all 320 
   Recounted on the extfix corpus in v0.10 — 1 segment in the whole corpus, on
   `b2maps_k3_cut1200_gated_extfix_robot3`, per-map counts in "Results: G3, P7,
   P8" in §9. Treatment still undecided, though `unweighable_B` was 0.0 on every
-  cut1200 row, so nothing was lost to it there.
-- **O3.** Form decided; P9 registered (v0.11) and failed 40/60 (S6, v0.12). Mirror
-  agreement of the viewpoint weight at mixed cuts registered as P17 (v0.19), to be
-  tested by S12.
+  cut1200 row, so nothing was lost to it there. S12 finds one unweighable
+  element in each direction of k2@cut240 ↔ k3@cut1200, the only two rows of 320
+  with any.
+- **O3. CLOSED in v0.20.** Form decided (v0.11). P9 failed 40/60 (S6). P17 held
+  60/60 (S12): w_mean is the same in both directions at every pair of cuts, while C
+  is not.
 - **O4.** Whether to report separately the unobserved length that parked robots
   shadow.
 - **O5.** The deep tail, unexplained. On A's own maps 4-10 % of crossings that meet
@@ -1362,9 +1451,8 @@ rerun of S5 should add first, and what O6 asks for. S12 records them on all 320 
   under 0.2 m or over 1 m, with almost nothing between. Turning (yaw rate at the
   scan) and wall-box joints were each pre-registered and each ruled out. Condition 4
   is a guard against it, not an explanation of it.
-- **O6.** S5's output records the distinct `(S_A, S_B)` pairs per row, so caution
-  2 gets an exact count at the next rerun. S12 will record these pairs on all
-  320 rows (v0.19); O6 closes when S12's results are recorded.
+- **O6. CLOSED in v0.20.** S12 records the distinct `(S_A, S_B)` pairs on all 320
+  rows: 4 to 22 per row, and 12 to 22 with both maps at cut1200 ("S12 results").
 - **O7. Losses. CLOSED in v0.15.** P10 held (S7); P11 failed (S8), 21 of 213 wall
   cells freed; P12 held (S9), 75 of the 78 tested unchanged losses in segmentation
   and 54 of 54 in the carve-out. All 213 losses now carry a cause:
