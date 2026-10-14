@@ -5780,6 +5780,865 @@ def test_s12_is_a_stage_of_the_command_line(monkeypatch):
     assert called == [dw.OUT_DIR_DEFAULT]
 
 
+# ───── S13: parked-robot shadows, G11, X7, P18 and P19 (the Z series) ─────────
+#
+# SYNTHETIC ONLY. No ray of a real bag is read, no blocked beam, mark or Δ is
+# computed on a real map, and nothing here reads S3's or S6's result file. The
+# one real file read is the spec, for the registered text.
+#
+#   Z1   a corner, heading +x +y                 the x-step first
+#   Z2   a corner the exact order would take y    the x-step first, whatever
+#        first, and that cell_index puts in the   cell cell_index gives the
+#        y-neighbour                              corner point
+#   Z3   the corner tolerance, along the ray      0.9e-9 m: x first; 1.1e-9 m:
+#                                                 the exact order
+#   Z4   a ray along a grid line                  the row cell_index gives it
+#   Z5   cell_index's slack at a lower edge       the walk starts in the upper
+#                                                 cell; a floor would not
+#   Z6   the starting cell occupied               skipped
+#   Z7   an occupied cell inside a spawn disk     skipped; just outside, not
+#   Z8   free and unknown cells                   passed; a face entered from
+#                                                 unknown marks nothing
+#   Z9   entered below 7.9 m, at 7.9 m, beyond    marked; nothing; nothing
+#   Z10  leaving the grid                         nothing marked
+#   Z11  an unassigned face                       nothing marked
+#   Z12  blocked beams: hit false; a return at    never; counts; does not;
+#        exactly r + 1e-9, one ulp beyond; an     excluded and counted
+#        origin inside a disk
+#   Z13  shadowed and Δ on a hand count           marked 4, shadowed 2, Δ 2/12,
+#                                                 2/6; one mark per element
+#   Z14  the frame                                s_j - s_A; B's beam moved by
+#                                                 s_B - s_A
+#   Z15  the door                                 raises before G11, and after
+#                                                 any failed or missing check;
+#                                                 opens on five
+#   Z16  G11 checks 1 to 5, each failing          exit 2, a fail file, and no
+#                                                 mark or Δ (spies); a check
+#                                                 that failed runs nothing
+#                                                 after it
+#   Z17  the verdict's integers                   5 % and 1 % hold, one more
+#                                                 fails; 18 of 20 holds, 17
+#                                                 fails; no measured element
+#                                                 counts against
+#   Z18  the fail path, with a real meta          the file is written: no
+#                                                 AssertionError from the
+#                                                 meta's predictions_verbatim
+#   Z19  a corpus holding G11, end to end         320 rows, P18 and P19 20/20,
+#                                                 one file
+#   Z20  readings at or below range_min           -inf and range_min count;
+#                                                 NaN, +inf and non-admitted
+#                                                 scans do not; 0.3 m inclusive
+#   Z21  S6's synthetic corpus and check 5        the test's corpus; e3d8568b
+#   Z22  the registered text                      read from the spec; a changed
+#                                                 number refuses
+#   Z23  --stage s13 refusals                     dirty tree, no 2a88223, a
+#                                                 spec without P18, P19 or G11,
+#                                                 a missing or wrong S6 or S3:
+#                                                 exit 2, nothing loaded
+#   Z24  --stage s13 on the command line          reaches run_s13
+
+SPEC_PATH = os.path.join(REPO_ROOT, 'docs', 'specs',
+                         'SPEC_b2_divergence_walls.md')
+NO_DISKS = {'centres': np.zeros((0, 2)), 'cells': frozenset(), 'r': 0.176,
+            'tol': 1e-9}
+
+
+def z_side(grid, origin=ORIGIN, seg_of=None):
+    """A grid for the walk, its elements and their lookup."""
+    el = gw.face_elements(grid, RHO, origin)
+    if seg_of is None:
+        seg_of = np.zeros(el['n'], dtype=np.int64)
+    return ({'grid': grid, 'origin': origin, 'rho': RHO},
+            dw.face_lookup(el, seg_of), el)
+
+
+def z_element(el, row, col, d):
+    hits = [i for i in range(el['n'])
+            if (el['row'][i], el['col'][i], el['dir'][i]) == (row, col, d)]
+    assert len(hits) == 1, (row, col, d, hits)
+    return hits[0]
+
+
+def z_ray(px, py, heading_deg=None, d=None, back=0.3):
+    """A ray whose return point is (px, py), its origin `back` m behind it."""
+    if d is None:
+        d = (math.cos(math.radians(heading_deg)),
+             math.sin(math.radians(heading_deg)))
+    return {'ox': px - back * d[0], 'oy': py - back * d[1], 'dx': d[0],
+            'dy': d[1], 'free_len': back}
+
+
+DIR_PX, DIR_MX, DIR_PY, DIR_MY = 0, 1, 2, 3          # gw.DIRS: +x, -x, +y, -y
+
+
+def test_s13_entry_dirs_name_the_face_a_step_crosses():
+    """A +x step crosses the cell's -x face, whose free neighbour it came from."""
+    assert [gw.DIRS[k][4] for k in (DIR_PX, DIR_MX, DIR_PY, DIR_MY)] == [
+        '+x', '-x', '+y', '-y']
+    assert dw.ENTRY_DIR == {('x', 1): DIR_MX, ('x', -1): DIR_PX,
+                            ('y', 1): DIR_MY, ('y', -1): DIR_PY}
+
+
+def test_s13_walk_corner_takes_the_x_step_first():
+    """Z1: through the corner of cells (0,0), (0,1), (1,0), (1,1), x first."""
+    g = blank(4, 4, FREE)
+    g[0, 1] = g[1, 0] = g[1, 1] = OCC
+    side_, lookup, el = z_side(g)
+    e, why = dw.walk_mark(z_ray(0.0, 0.0, 45.0), side_, lookup, NO_DISKS)
+    assert why == dw.WALK_MARKED
+    assert e == z_element(el, 0, 1, DIR_MX)       # not (1, 0)'s -y face
+
+
+def test_s13_walk_corner_overrides_cell_index_and_the_exact_order():
+    """Z2: heading -x +y, cell_index gives the corner point to the y-neighbour,
+    and the y-edge is crossed first by 2.8e-10 m; the x-step still comes first."""
+    g = blank(4, 4, FREE)
+    g[0, 0] = g[1, 1] = OCC
+    side_, lookup, el = z_side(g)
+    ray = z_ray(0.1, 0.0, 135.0)
+    e, why = dw.walk_mark(ray, side_, lookup, NO_DISKS)
+    assert why == dw.WALK_MARKED
+    assert e == z_element(el, 0, 0, DIR_PX)       # x first: (0, 0), not (1, 1)
+    # the exact order, with no corner rule, would have taken the y-step
+    assert dw.walk_mark(ray, side_, lookup, NO_DISKS, corner_tol=0.0) == (
+        z_element(el, 1, 1, DIR_MY), dw.WALK_MARKED)
+
+
+@pytest.mark.parametrize('gap,expect', [(0.9e-9, (0, 1, DIR_MX)),
+                                        (1.1e-9, (1, 0, DIR_MY))])
+def test_s13_walk_corner_tolerance_is_along_the_ray(gap, expect):
+    """Z3: the y-edge crossed first by `gap` m along the ray, at 45 degrees."""
+    g = blank(4, 4, FREE)
+    g[0, 1] = g[1, 0] = OCC
+    side_, lookup, el = z_side(g)
+    shift = gap / math.sqrt(2.0)                  # gap along the ray, at 45 deg
+    e, why = dw.walk_mark(z_ray(-shift, 0.0, 45.0), side_, lookup, NO_DISKS)
+    assert why == dw.WALK_MARKED and e == z_element(el, *expect)
+
+
+def test_s13_walk_along_a_grid_line_stays_in_cell_indexs_row():
+    """Z4: y exactly on the edge between rows 0 and 1: row 1, by cell_index."""
+    g = blank(3, 8, FREE)
+    g[0, 2] = OCC                                 # nearer, in the other row
+    g[1, 4] = OCC
+    side_, lookup, el = z_side(g)
+    assert int(dw.cell_index(0.05, 0.0, RHO)) == 1
+    e, why = dw.walk_mark(z_ray(0.0, 0.05, d=(1.0, 0.0)), side_, lookup,
+                          NO_DISKS)
+    assert why == dw.WALK_MARKED and e == z_element(el, 1, 4, DIR_MX)
+
+
+def test_s13_walk_uses_cell_indexs_slack_at_a_lower_edge():
+    """Z5: 5e-11 m below cell 1's edge is cell 1 by cell_index, 0 by a floor."""
+    g = blank(1, 3, FREE)
+    g[0, 0] = OCC
+    side_, lookup, el = z_side(g)
+    x = 0.05 - 5e-11
+    assert int(dw.cell_index(x, 0.0, RHO)) == 1
+    assert math.floor((x - 0.0) / RHO + 0.5) == 0          # supercover's floor
+    e, why = dw.walk_mark(z_ray(x, 0.0, d=(-1.0, 0.0)), side_, lookup,
+                          NO_DISKS)
+    assert why == dw.WALK_MARKED and e == z_element(el, 0, 0, DIR_PX)
+
+
+def test_s13_walk_skips_its_starting_cell_even_when_occupied():
+    """Z6: the return point lies in an occupied cell; the walk goes on."""
+    g = blank(1, 6, FREE)
+    g[0, 2] = g[0, 4] = OCC
+    side_, lookup, el = z_side(g)
+    e, why = dw.walk_mark(z_ray(0.2, 0.0, d=(1.0, 0.0)), side_, lookup,
+                          NO_DISKS)
+    assert why == dw.WALK_MARKED and e == z_element(el, 0, 4, DIR_MX)
+
+
+@pytest.mark.parametrize('offset,expect_col', [(0.176, 4), (0.176 + 1e-9, 4),
+                                               (0.176 + 2e-9, 2)])
+def test_s13_walk_skips_cells_inside_a_spawn_disk(offset, expect_col):
+    """Z7: a cell whose centre is at most r + 1e-9 from a spawn is skipped."""
+    g = blank(1, 6, FREE)
+    g[0, 2] = g[0, 4] = OCC
+    side_, lookup, el = z_side(g)
+    disks = dw.spawn_disks_on(side_, [(0.2, -offset)])
+    assert ((0, 2) in disks['cells']) == (expect_col == 4)
+    e, why = dw.walk_mark(z_ray(0.0, 0.0, d=(1.0, 0.0)), side_, lookup, disks)
+    assert why == dw.WALK_MARKED
+    assert e == z_element(el, 0, expect_col, DIR_MX)
+
+
+def test_s13_walk_passes_free_and_unknown_cells():
+    """Z8: free and unknown do not stop it; a face entered from unknown is no
+    element, so nothing is marked there."""
+    g = blank(2, 8, UNK)
+    g[0, 1:4] = FREE
+    g[0, 5] = OCC                                 # entered from (0, 4), unknown
+    g[1, :] = FREE
+    g[1, 6] = OCC                                 # entered from (1, 5), free
+    side_, lookup, el = z_side(g)
+    e, why = dw.walk_mark(z_ray(0.0, 0.0, d=(1.0, 0.0)), side_, lookup,
+                          NO_DISKS)
+    assert (e, why) == (None, dw.WALK_NOT_A_FACE)
+    e, why = dw.walk_mark(z_ray(0.0, 0.1, d=(1.0, 0.0)), side_, lookup,
+                          NO_DISKS)
+    assert why == dw.WALK_MARKED and e == z_element(el, 1, 6, DIR_MX)
+
+
+@pytest.mark.parametrize('entry,expect', [(7.9 - 1e-6, dw.WALK_MARKED),
+                                          (7.9 + 1e-9, dw.WALK_END),
+                                          (7.9 + 1e-6, dw.WALK_END)])
+def test_s13_walk_stops_only_at_a_cell_entered_below_7_9_m(entry, expect):
+    """Z9: the occupied cell's edge at `entry` m from the ray's origin.
+
+    An entry at exactly 7.9 m is not built here, because the walk's arithmetic
+    cannot place an edge there to the last bit; the next case holds the bound
+    exactly, on a return point at 7.9 m.
+    """
+    g = blank(1, 90, FREE)
+    g[0, 85] = OCC
+    side_, lookup, el = z_side(g)
+    edge = (85 - 0.5 - 1e-9) * RHO                # where cell_index enters 85
+    ray = {'ox': edge - entry, 'oy': 0.0, 'dx': 1.0, 'dy': 0.0,
+           'free_len': 0.5}
+    e, why = dw.walk_mark(ray, side_, lookup, NO_DISKS)
+    assert why == expect
+    assert (e is not None) == (expect == dw.WALK_MARKED)
+
+
+def test_s13_walk_returns_nothing_at_7_9_m_or_off_the_grid():
+    """Z9, Z10: a return at 7.9 m walks nowhere; leaving the grid marks nothing."""
+    g = blank(1, 6, FREE)
+    side_, lookup, _el = z_side(g)
+    ray = {'ox': -7.9, 'oy': 0.0, 'dx': 1.0, 'dy': 0.0, 'free_len': 7.9}
+    assert dw.walk_mark(ray, side_, lookup, NO_DISKS) == (None, dw.WALK_END)
+    assert dw.walk_mark(z_ray(0.2, 0.0, d=(1.0, 0.0)), side_, lookup,
+                        NO_DISKS) == (None, dw.WALK_OFF_GRID)
+    assert dw.walk_mark(z_ray(-0.3, 0.0, d=(1.0, 0.0)), side_, lookup,
+                        NO_DISKS) == (None, dw.WALK_OFF_GRID)
+
+
+def test_s13_walk_marks_only_a_measured_face():
+    """Z11: the same face, assigned and unassigned."""
+    g = blank(1, 6, FREE)
+    g[0, 4] = OCC
+    side_, lookup, el = z_side(g)
+    i = z_element(el, 0, 4, DIR_MX)
+    ray = z_ray(0.0, 0.0, d=(1.0, 0.0))
+    assert dw.walk_mark(ray, side_, lookup, NO_DISKS) == (i, dw.WALK_MARKED)
+    seg_of = np.zeros(el['n'], dtype=np.int64)
+    seg_of[i] = -1
+    _s, lookup2, _e = z_side(g, seg_of=seg_of)
+    assert dw.walk_mark(ray, side_, lookup2, NO_DISKS) == (
+        None, dw.WALK_NOT_MEASURED)
+
+
+def z_rays(*spec):
+    """Rays as (ox, oy, dx, dy, free_len, hit), admitted_rays' shape."""
+    a = np.array([s[:5] for s in spec], dtype=float).reshape(-1, 5)
+    return {'ox': a[:, 0], 'oy': a[:, 1], 'dx': a[:, 2], 'dy': a[:, 3],
+            'free_len': a[:, 4],
+            'hit': np.array([bool(s[5]) for s in spec], dtype=bool),
+            'scan': np.zeros(len(spec), dtype=np.int64),
+            'range_threshold': 7.9}
+
+
+def test_s13_blocked_beams_need_a_hit_and_a_return_inside():
+    """Z12: hit false never counts; r + 1e-9 counts; one ulp beyond does not."""
+    edge = dw.SHADOW_R_M + dw.INSIDE_TOL_M
+    beyond = math.nextafter(edge, math.inf)
+    rays_ = z_rays((edge, -1.0, 0.0, 1.0, 1.0, True),      # return (edge, 0)
+                   (beyond, -1.0, 0.0, 1.0, 1.0, True),    # one ulp outside
+                   (0.0, -1.0, 0.0, 1.0, 1.0, False),      # no hit, at centre
+                   (0.0, -1.0, 0.0, 1.0, 1.0, True))       # hit, at centre
+    out = dw.blocked_beams(rays_, [(0.0, 0.0)])
+    assert list(out['index']) == [0, 3]
+    assert out['n_per_disk'] == [2]
+    assert out['n_excluded_origin_inside'] == 0
+
+
+def test_s13_blocked_beams_exclude_an_origin_inside_any_disk():
+    """Z12: the origin in one disk, the return in another: excluded, counted."""
+    rays_ = z_rays((0.0, 0.0, 1.0, 0.0, 1.0, True),        # from disk 0 to 1
+                   (0.5, 0.0, 1.0, 0.0, 0.5, True))        # from outside to 1
+    out = dw.blocked_beams(rays_, [(0.0, 0.0), (1.0, 0.0)])
+    assert list(out['index']) == [1] and out['n_per_disk'] == [0, 1]
+    assert out['n_excluded_origin_inside'] == 1
+
+
+def z_hand_corpus(spawn_b=(0.0, 0.0)):
+    """A at cut1200 with a 12-element wall, B at cut60 holding its first 6."""
+    a = side(wall_grid())
+    b = side(wall_grid(w=6))
+    by_kc = {(0, 1200): dict(a, stem='b2maps_k0_cut1200_gated_extfix_robot0'),
+             (1, 60): dict(b, stem='b2maps_k1_cut60_gated_extfix_robot1')}
+    return by_kc, {0: (0.0, 0.0), 1: spawn_b}
+
+
+def z_up_beams(cols, x_shift=0.0):
+    """Blocked beams heading +y, returns at (col * rho - x_shift, 0.2)."""
+    xs = np.array([c * RHO - x_shift for c in cols], dtype=float)
+    n = len(cols)
+    return {'blocked': {'ox': xs, 'oy': np.full(n, -1.0), 'dx': np.zeros(n),
+                        'dy': np.ones(n), 'free_len': np.full(n, 1.2),
+                        'disk': [0] * n},
+            'blocked_per_parked_disk': {'k0': n},
+            'readings_at_or_below_range_min': {'n': 0}}
+
+
+def test_s13_shadowed_needs_marked_and_not_corroborated_hand_count():
+    """Z13: B corroborates columns 0-5. Beams mark 2, 3, 7, 8 (7 twice)."""
+    by_kc, spawn = z_hand_corpus()
+    row = dw.delta_row(by_kc, spawn, (0, 1, 1200, 60),
+                       z_up_beams([2, 3, 7, 7, 8]), n_robots=2)
+    assert row['measured_n'] == 12 and row['not_corroborated_n'] == 6
+    assert row['walk_ends'][dw.WALK_MARKED] == 5
+    assert row['n_marked'] == 4 and row['marked_elements'] == [2, 3, 7, 8]
+    assert row['shadowed_n'] == 2
+    assert row['delta'] == 2 / 12
+    assert row['shadowed_over_not_corroborated'] == 2 / 6
+    assert row['shadowed_by_segment'] == {'0': 2}
+    assert row['not_corroborated'] == 0.5 and row['L_A_m'] == 12 * RHO
+
+
+def test_s13_the_frame_is_g1s_translation():
+    """Z14: s_j - s_A; and B's beams land in A's frame shifted by s_B - s_A."""
+    spawn = {0: (0.86, 0.28), 1: (0.0, 0.9), 2: (-0.53, -0.73)}
+    for j in spawn:
+        for a in spawn:
+            assert dw.spawn_in_frame(spawn, j, a) == (
+                spawn[j][0] - spawn[a][0], spawn[j][1] - spawn[a][1])
+    by_kc, spawn = z_hand_corpus(spawn_b=(0.3, 0.0))
+    row = dw.delta_row(by_kc, spawn, (0, 1, 1200, 60), z_up_beams([4]),
+                       n_robots=2)
+    assert row['marked_elements'] == [7]          # B's x 0.4 is A's 0.7
+
+
+Z_SPAWN = {0: (0.86, 0.28), 1: (0.0, 0.9), 2: (-0.86, 0.28),
+           3: (-0.53, -0.73), 4: (0.53, -0.73)}
+Z_HALF = 3.0                                     # the room, -3 to 3 m
+
+
+def z_corpus():
+    """Twenty maps of one square room, each in its robot's own frame."""
+    n = int(round(2 * Z_HALF / RHO)) + 1
+    g = blank(n, n, FREE)
+    g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = OCC
+    by_kc = {}
+    for k, s in Z_SPAWN.items():
+        origin = (-Z_HALF - s[0], -Z_HALF - s[1])
+        el = gw.face_elements(g, RHO, origin)
+        for c in dw.CUTS:
+            by_kc[(k, c)] = {'stem': f'b2maps_k{k}_cut{c}_gated_extfix_robot{k}',
+                             'el': el, 'seg_of': np.zeros(el['n'], np.int64),
+                             'grid': g, 'rho': RHO, 'origin': origin,
+                             'shape': g.shape}
+    return by_kc, dict(Z_SPAWN)
+
+
+def z_s6(by_kc, spawn):
+    keys = [k for k in dw.matrix_keys() if k[2] == 1200]
+    rows = dw.cut_matrix(by_kc, spawn, keys)
+    return {'rows': [dict(rows[k], A=k[0], B=k[1], cut_A=k[2], cut_B=k[3])
+                     for k in keys]}
+
+
+def z_g0(stem):
+    return {'n_observed_cells': 1000, 'agreement': 0.996,
+            'disagreeing_cells': 4 if 'k3_cut1200' in stem else 0}
+
+
+def z_s3(by_kc):
+    return {'G0': {s['stem']: z_g0(s['stem']) for s in by_kc.values()}}
+
+
+def z_b_rays(k, spawn, drop=None, decoy=False):
+    """B's rays from its spawn: a hit at every parked spawn, a miss beside it."""
+    spec = []
+    for j in spawn:
+        if j == k or j == drop:
+            continue
+        x, y = dw.spawn_in_frame(spawn, j, k)
+        d = math.hypot(x, y)
+        spec.append((0.0, 0.0, x / d, y / d, d, True))
+        spec.append((0.0, 0.0, -y / d, x / d, 1.5, True))   # sideways, a wall
+    if decoy:
+        cx, cy = np.mean([dw.spawn_in_frame(spawn, j, k) for j in spawn], 0)
+        d = math.hypot(cx, cy)
+        spec.append((0.0, 0.0, cx / d, cy / d, d, True))
+    return z_rays(*spec)
+
+
+def z_inputs_of(spawn, drop_at=None, decoy_at=None):
+    """`inputs_of` for the stage: every map's rays, one of them edited."""
+    def inputs_of(kc):
+        k, _c = kc
+        rays_ = z_b_rays(k, spawn, drop=(drop_at[1] if drop_at and
+                                         drop_at[0] == kc else None),
+                         decoy=decoy_at == kc)
+        readings = dw.readings_at_or_below_range_min(
+            np.array([[1.0, -np.inf]]), np.array([True]), np.array([0.0]),
+            np.array([0.0]), 0.16, [dw.spawn_in_frame(spawn, j, k)
+                                    for j in spawn if j != k])
+        return dw.shadow_inputs(rays_, readings, spawn, k)
+    return inputs_of
+
+
+def z_meta():
+    """The meta run_s13 builds, from the registered text of the real spec."""
+    with open(SPEC_PATH, encoding='utf-8') as f:
+        verbatim = dw.s13_verbatim(f.read())
+    return dw.s13_meta('synthetic', 'synthetic', ['?? .vscode/'], 'synthetic',
+                       verbatim, dw.s13_constants_from(verbatim),
+                       {'s6': {'sha256': 'x'}, 's3': {'sha256': 'y'}})
+
+
+def z_spies(monkeypatch):
+    """Counts of every mark, Δ, G0 rebuild and ray read the stage makes."""
+    seen = {'delta_row': 0, 'walk_mark': 0}
+    real_delta, real_walk = dw.delta_row, dw.walk_mark
+
+    def delta_row(*a, **k):
+        seen['delta_row'] += 1
+        return real_delta(*a, **k)
+
+    def walk_mark(*a, **k):
+        seen['walk_mark'] += 1
+        return real_walk(*a, **k)
+
+    monkeypatch.setattr(dw, 'delta_row', delta_row)
+    monkeypatch.setattr(dw, 'walk_mark', walk_mark)
+    return seen
+
+
+def z_run(tmp_path, s6=None, s3=None, g0=z_g0, inputs_of=None, calls=None):
+    by_kc, spawn = z_corpus()
+    calls = {} if calls is None else calls
+    calls.setdefault('g0', [])
+    calls.setdefault('inputs', [])
+    inputs_of = inputs_of or z_inputs_of(spawn)
+
+    def g0_of(stem):
+        calls['g0'].append(stem)
+        return g0(stem)
+
+    def counted_inputs(kc):
+        calls['inputs'].append(kc)
+        return inputs_of(kc)
+
+    return dw.s13_shadows(by_kc, spawn, s6 or z_s6(by_kc, spawn),
+                          s3 or z_s3(by_kc), z_meta(), g0_of, counted_inputs,
+                          tmp_path)
+
+
+def z_failed(tmp_path, capsys):
+    """The stage stopped at exit 2 with one fail file and no verdict."""
+    written = list(tmp_path.glob('s13_g11_fail_*.json'))
+    assert len(written) == 1
+    assert not list(tmp_path.glob('s13_shadows_*.json'))
+    payload = json.loads(written[0].read_text())
+    for key in ('rows', 'verdicts', 'reported', 'P18', 'P19'):
+        assert key not in payload
+    assert set(payload['predictions_verbatim']) >= {'P18', 'P19', 'G11'}
+    out = capsys.readouterr().out
+    assert 'P18:' not in out and 'P19:' not in out
+    return payload
+
+
+def test_s13_the_door_raises_until_g11_has_passed(monkeypatch):
+    """Z15: before G11, and after any failed or missing check, it raises."""
+    by_kc, spawn = z_hand_corpus()
+    door = dw.S13Shadows(by_kc, spawn, {(1, 60): z_up_beams([2])}, n_robots=2)
+    seen = z_spies(monkeypatch)
+    key = (0, 1, 1200, 60)
+    with pytest.raises(dw.S13GateClosed):
+        door.row(key)
+    ok = {'ok': True}
+    for checks in ((ok, ok, ok, ok, {'ok': False}), (ok, ok, ok, ok, None),
+                   (ok, ok, ok, ok), (ok, ok, ok, ok, {'ok': 1})):
+        assert not door.open_after(*checks)
+        with pytest.raises(dw.S13GateClosed):
+            door.row(key)
+    assert seen == {'delta_row': 0, 'walk_mark': 0} and door.asked == []
+    assert door.open_after(ok, ok, ok, ok, ok)
+    door.row(key)
+    assert seen['delta_row'] == 1 and door.asked == [key]
+
+
+def test_s13_g11_check_5_failing_runs_nothing_after_it(tmp_path, capsys,
+                                                      monkeypatch):
+    """Z16: S6's synthetic output not the pinned bytes: exit 2, nothing else."""
+    monkeypatch.setattr(dw, 'S6_SYNTH_SHA256', '0' * 64)
+    seen, calls = z_spies(monkeypatch), {}
+    reproduced = []
+    monkeypatch.setattr(dw, 'g11_reproduce_s6',
+                        lambda *a: reproduced.append(1))
+    with pytest.raises(SystemExit) as e:
+        z_run(tmp_path, calls=calls)
+    assert e.value.code == 2
+    payload = z_failed(tmp_path, capsys)
+    assert payload['G11']['parts']['5_S6_synthetic'] is False
+    assert payload['G11']['1_reproduce_S6'] is None
+    assert reproduced == []
+    assert calls == {'g0': [], 'inputs': []}
+    assert seen == {'delta_row': 0, 'walk_mark': 0}
+
+
+def test_s13_g11_check_1_one_ulp_stops_before_g0_and_any_mark(tmp_path, capsys,
+                                                              monkeypatch):
+    """Z16: one ulp on one stored C of the 80 rows."""
+    by_kc, spawn = z_corpus()
+    s6 = z_s6(by_kc, spawn)
+    s6['rows'][17]['corroborated'] = math.nextafter(
+        s6['rows'][17]['corroborated'], 0.0)
+    seen, calls = z_spies(monkeypatch), {}
+    with pytest.raises(SystemExit) as e:
+        z_run(tmp_path, s6=s6, calls=calls)
+    assert e.value.code == 2
+    payload = z_failed(tmp_path, capsys)
+    c1 = payload['G11']['1_reproduce_S6']
+    assert c1['n'] == 160 and c1['n_equal'] == 159 and not c1['ok']
+    assert payload['G11']['2_G0_cells'] is None
+    assert calls == {'g0': [], 'inputs': []}
+    assert seen == {'delta_row': 0, 'walk_mark': 0}
+
+
+def test_s13_g11_check_1_needs_each_of_the_80_rows(tmp_path, capsys,
+                                                   monkeypatch):
+    """Z16: S6's file missing one row with A at cut1200 fails check 1."""
+    by_kc, spawn = z_corpus()
+    s6 = z_s6(by_kc, spawn)
+    del s6['rows'][40]
+    seen, calls = z_spies(monkeypatch), {}
+    with pytest.raises(SystemExit) as e:
+        z_run(tmp_path, s6=s6, calls=calls)
+    assert e.value.code == 2
+    payload = z_failed(tmp_path, capsys)
+    assert payload['G11']['1_reproduce_S6']['covers_the_80_rows'] is False
+    assert calls == {'g0': [], 'inputs': []} and seen['delta_row'] == 0
+
+
+def test_s13_g11_check_2_one_cell_stops_before_any_ray_is_read(
+        tmp_path, capsys, monkeypatch):
+    """Z16: one map's disagreeing_cells one off S3's."""
+    by_kc, _spawn = z_corpus()
+    s3 = z_s3(by_kc)
+    s3['G0']['b2maps_k2_cut240_gated_extfix_robot2']['disagreeing_cells'] = 1
+    seen, calls = z_spies(monkeypatch), {}
+    with pytest.raises(SystemExit) as e:
+        z_run(tmp_path, s3=s3, calls=calls)
+    assert e.value.code == 2
+    payload = z_failed(tmp_path, capsys)
+    c2 = payload['G11']['2_G0_cells']
+    assert c2['n'] == 20 and c2['n_equal'] == 19
+    assert [m['map'] for m in c2['differing']] == [
+        'b2maps_k2_cut240_gated_extfix_robot2']
+    assert len(calls['g0']) == 20 and calls['inputs'] == []
+    assert seen == {'delta_row': 0, 'walk_mark': 0}
+
+
+def test_s13_g11_check_3_one_empty_parked_disk_stops_before_any_mark(
+        tmp_path, capsys, monkeypatch):
+    """Z16: map k1 at cut60 loses its beam at parked robot 4: 79 of 80."""
+    by_kc, spawn = z_corpus()
+    seen, calls = z_spies(monkeypatch), {}
+    with pytest.raises(SystemExit) as e:
+        z_run(tmp_path, calls=calls,
+              inputs_of=z_inputs_of(spawn, drop_at=((1, 60), 4)))
+    assert e.value.code == 2
+    payload = z_failed(tmp_path, capsys)
+    c3 = payload['G11']['3_detector']
+    assert (c3['n_disks'], c3['n_disks_with_a_return']) == (80, 79)
+    assert payload['G11']['parts']['4_decoy_X7'] is True
+    assert len(calls['inputs']) == 20
+    assert seen == {'delta_row': 0, 'walk_mark': 0}
+
+
+def test_s13_g11_check_4_a_return_in_the_decoy_stops_before_any_mark(
+        tmp_path, capsys, monkeypatch):
+    """Z16, X7: one hit return in the centroid disk of map k3 at cut1200."""
+    by_kc, spawn = z_corpus()
+    seen, calls = z_spies(monkeypatch), {}
+    with pytest.raises(SystemExit) as e:
+        z_run(tmp_path, calls=calls,
+              inputs_of=z_inputs_of(spawn, decoy_at=(3, 1200)))
+    assert e.value.code == 2
+    payload = z_failed(tmp_path, capsys)
+    c4 = payload['G11']['4_decoy_X7']
+    assert (c4['n_maps'], c4['n_maps_clean']) == (20, 19)
+    assert payload['G11']['parts']['3_detector'] is True
+    assert seen == {'delta_row': 0, 'walk_mark': 0}
+
+
+@pytest.mark.parametrize('measured,shadowed,percent,holds', [
+    (100, 5, 5, True), (100, 6, 5, False), (2000, 100, 5, True),
+    (2000, 101, 5, False), (100, 1, 1, True), (100, 2, 1, False),
+    (1000, 10, 1, True), (1000, 11, 1, False), (0, 0, 5, False)])
+def test_s13_verdict_compares_in_integers(measured, shadowed, percent, holds):
+    """Z17: a pair holds when 100 * shadowed <= percent * measured."""
+    rows = [{'A': a, 'B': b, 'cut_A': 1200, 'cut_B': 60,
+             'shadowed_n': shadowed if (a, b) == (0, 1) else 0,
+             'measured_n': measured if (a, b) == (0, 1) else 100,
+             'delta': None} for a, b in dw.ordered_pairs()]
+    v = dw.s13_verdict(rows, 60, percent)
+    assert v['n_holding'] == (20 if holds else 19)
+    assert [(f['A'], f['B']) for f in v['failing']] == ([] if holds
+                                                       else [(0, 1)])
+    if not holds:
+        assert (v['failing'][0]['shadowed_n'],
+                v['failing'][0]['measured_n']) == (shadowed, measured)
+
+
+@pytest.mark.parametrize('n_bad,holds', [(2, True), (3, False)])
+def test_s13_verdict_needs_18_of_20(n_bad, holds):
+    """Z17: at least 18 of the 20 pairs."""
+    pairs = dw.ordered_pairs()
+    rows = [{'A': a, 'B': b, 'cut_A': 1200, 'cut_B': 1200,
+             'shadowed_n': 2 if i < n_bad else 1, 'measured_n': 100,
+             'delta': None} for i, (a, b) in enumerate(pairs)]
+    v = dw.s13_verdict(rows, 1200, 1)
+    assert (v['holds'], v['n_holding'], v['of']) == (holds, 20 - n_bad, 20)
+
+
+def test_s13_the_fail_guard_allows_the_real_meta_and_catches_a_verdict():
+    """Z18: predictions_verbatim.P18 is allowed; a P18 anywhere else is not."""
+    meta = z_meta()
+    assert {'P18', 'P19', 'G11'} <= set(meta['predictions_verbatim'])
+    ok = dict(meta, stage='s13_g11_fail',
+              G11={'3_detector': {'maps': [{'blocked_per_parked_disk':
+                                            {'k1': 0}}]}})
+    dw._no_verdict_in_s13(ok)
+    for extra in ({'P18': {}}, {'rows': []}, {'verdicts': {}},
+                  {'x': [{'delta': 0.0}]}, {'x': {'marked_elements': []}},
+                  {'x': {'shadowed_n': 1}}, {'reported': {}}):
+        with pytest.raises(AssertionError):
+            dw._no_verdict_in_s13({**ok, **extra})
+
+
+def test_s13_the_fail_path_writes_its_file_with_a_real_meta(tmp_path, capsys,
+                                                           monkeypatch):
+    """Z18: the S9-S11 flaw: a real meta must reach the file, not an assert."""
+    by_kc, spawn = z_corpus()
+    s6 = z_s6(by_kc, spawn)
+    s6['rows'][3]['L_A_m'] = math.nextafter(s6['rows'][3]['L_A_m'], math.inf)
+    with pytest.raises(SystemExit) as e:
+        z_run(tmp_path, s6=s6)
+    assert e.value.code == 2
+    payload = z_failed(tmp_path, capsys)
+    assert payload['stage'] == 's13_g11_fail'
+    assert payload['predictions_verbatim']['P18'].startswith(
+        '**P18. REGISTERED 14 Oct 2026.** With A at cut1200 and B at cut60')
+
+
+def test_s13_holding_corpus_end_to_end(tmp_path, capsys, monkeypatch):
+    """Z19: G11 holds; 320 rows through the door; P18 and P19 hold 20/20."""
+    seen, calls = z_spies(monkeypatch), {}
+    out = z_run(tmp_path, calls=calls)
+    assert out['G11']['all_ok']
+    assert out['n_rows'] == 320 and out['n_door_calls'] == 320
+    assert seen['delta_row'] == 320
+    assert seen['walk_mark'] == 320 * 4           # the blocked beams only
+    assert len(calls['g0']) == 20 and len(calls['inputs']) == 20
+    rows = out['rows']
+    # every parked beam runs on to the room's wall, which B holds too
+    assert all(r['walk_ends'][dw.WALK_MARKED] == 4 for r in rows)
+    assert all(r['shadowed_n'] == 0 and r['delta'] == 0.0 for r in rows)
+    for name in ('P18', 'P19'):
+        v = out['verdicts'][name]
+        assert (v['holds'], v['n_holding'], v['of']) == (True, 20, 20)
+    assert len(out['reported']['fixed_A_series']) == 80
+    written = list(tmp_path.glob('s13_shadows_*.json'))
+    assert len(written) == 1 and out['written']['path'] == str(written[0])
+    assert 'P18: HOLD' in capsys.readouterr().out
+
+
+def test_s13_readings_at_or_below_range_min():
+    """Z20: -inf and range_min count; NaN, +inf, above and unadmitted do not."""
+    rmin = 0.16
+    ranges = np.array([[-np.inf, rmin, np.nan, np.inf, 0.17],
+                       [-np.inf, -np.inf, 1.0, 1.0, 1.0],
+                       [0.1, 1.0, 1.0, 1.0, 1.0]])
+    reach = np.array([True, True, False])
+    sx = np.array([0.3, 2.0, 0.0])
+    sy = np.zeros(3)
+    out = dw.readings_at_or_below_range_min(ranges, reach, sx, sy, rmin,
+                                            [(0.0, 0.0)])
+    assert out == {'n': 4, 'n_in_scans_within_0.3_m_of_a_parked_spawn': 2,
+                   'n_admitted_scans_within_0.3_m': 1}
+
+
+def test_s13_s6_synthetic_corpus_is_m10s_and_check_5_holds():
+    """Z21: the stage's copy of the corpus is the test's, and gives e3d8568b."""
+    mine, spawn = dw._s6_synthetic_corpus()
+    theirs, spawn_t = s6_sides()
+    assert spawn == spawn_t and sorted(mine) == sorted(theirs)
+    for kc in mine:
+        a, b = mine[kc], theirs[kc]
+        assert a['stem'] == b['stem'] and a['rho'] == b['rho']
+        assert a['origin'] == b['origin'] and a['shape'] == b['shape']
+        assert np.array_equal(a['grid'], b['grid'])
+        assert np.array_equal(a['seg_of'], b['seg_of'])
+        assert a['segments'] == b['segments']
+        for f in ('x', 'y', 'nx', 'ny', 'row', 'col', 'dir'):
+            assert np.array_equal(a['el'][f], b['el'][f])
+    c5 = dw.s6_synthetic_check()
+    assert c5['ok'] and c5['bytes'] == 293309
+    assert c5['sha256'] == ('e3d8568bebeea2b621629ebb8a011cf11839f92f6ed21ce4'
+                            'ac85d2868ffea82b')
+
+
+def test_s13_reads_the_registered_text_and_its_numbers():
+    """Z22: P18, P19, G11 and the definitions, read from the spec."""
+    with open(SPEC_PATH, encoding='utf-8') as f:
+        text = f.read()
+    v = dw.s13_verbatim(text)
+    assert v['P18'] == (
+        '**P18. REGISTERED 14 Oct 2026.** With A at cut1200 and B at cut60, '
+        'Δ ≤ 0.05 in at least 18 of the 20 ordered pairs. Reason, an '
+        'expectation that has not been tested: B\'s scan plane is pitched '
+        'about 0.71° nose-up, so in part of B\'s scans it passes over a parked '
+        'robot, which then blocks nothing. Where a robot does block B\'s view, '
+        'we expect B to see most of the same walls from nearby places soon '
+        'after, and a wall B sees clearly to be corroborated. So Δ should '
+        'stay well under 0.05.')
+    assert v['P19'].startswith('**P19. REGISTERED 14 Oct 2026.** With A at '
+                               'cut1200 and B at cut1200, Δ ≤ 0.01 in at least '
+                               '18 of the 20 ordered pairs.')
+    assert v['G11'].startswith('**G11 (gate).** S13 computes no Δ')
+    assert '5. **Nothing else moves.**' in v['G11']
+    assert v['G11_failure_rule'].startswith('On a G11 failure, S13 writes')
+    assert v['definitions'].startswith('**Definitions.**')
+    assert '- **Mark.** Walk A\'s grid' in v['definitions']
+    assert v['definitions'].rstrip().endswith('one row per pair.')
+    c = dw.s13_constants_from(v)
+    assert c['predictions'] == {
+        'p18': {'cut_A': 1200, 'cut_B': 60, 'percent': 5, 'min_pairs': 18,
+                'of': 20},
+        'p19': {'cut_A': 1200, 'cut_B': 1200, 'percent': 1, 'min_pairs': 18,
+                'of': 20}}
+    for old, new in (('Δ ≤ 0.05 in at least', 'Δ ≤ 0.06 in at least'),
+                     ('radius r = 0.176 m', 'radius r = 0.2 m'),
+                     ('less than 7.9 m from', 'less than 8.0 m from')):
+        assert old in text
+        with pytest.raises(SystemExit):
+            dw.s13_constants_from(dw.s13_verbatim(text.replace(old, new, 1)))
+
+
+def _s13_refusal_spies(monkeypatch):
+    seen = {'load_side': 0, 'sha256': 0, 's13_shadows': 0}
+    real = dw._sha256
+
+    def load_side(*a, **k):
+        seen['load_side'] += 1
+        raise AssertionError('run_s13 loaded a map past a refusal')
+
+    def sha256(path):
+        seen['sha256'] += 1
+        return real(path)
+
+    def s13_shadows(*a, **k):
+        seen['s13_shadows'] += 1
+        raise AssertionError('run_s13 reached the stage past a refusal')
+
+    monkeypatch.setattr(dw, 'load_side', load_side)
+    monkeypatch.setattr(dw, '_sha256', sha256)
+    monkeypatch.setattr(dw, 's13_shadows', s13_shadows)
+    return seen
+
+
+S13_NOTHING = {'load_side': 0, 'sha256': 0, 's13_shadows': 0}
+
+
+def _s13_spec_text():
+    with open(SPEC_PATH, encoding='utf-8') as f:
+        return f.read()
+
+
+def test_s13_refuses_a_dirty_tree(monkeypatch):
+    """Z23a: a result file must not name a commit it was not produced by."""
+    seen = _s13_refusal_spies(monkeypatch)
+    monkeypatch.setattr(dw, '_git',
+                        lambda *a: ' M experiments/analysis/divergence_walls.py'
+                        if a[0] == 'status' else 'deadbeef')
+    with pytest.raises(SystemExit) as e:
+        dw.run_s13()
+    assert e.value.code == 2
+    assert seen == S13_NOTHING
+
+
+def test_s13_refuses_when_the_registration_is_not_an_ancestor(monkeypatch):
+    """Z23b: 2a88223 registered P18, P19, G11 and X7."""
+    seen = _s13_refusal_spies(monkeypatch)
+    asked = []
+
+    def fake(*a):
+        asked.append(a)
+        return '' if a[0] in ('status', 'merge-base') else 'deadbeef'
+
+    monkeypatch.setattr(dw, '_git', fake)
+    with pytest.raises(SystemExit) as e:
+        dw.run_s13()
+    assert e.value.code == 2
+    assert ('merge-base', '2a88223', 'HEAD') in asked
+    assert dw.S13_REGISTRATION == '2a88223'
+    assert seen == S13_NOTHING
+
+
+@pytest.mark.parametrize('missing', ['P18. REGISTERED', 'P19. REGISTERED',
+                                     'G11 (gate).'])
+def test_s13_refuses_a_spec_without_p18_p19_or_g11(missing, monkeypatch):
+    """Z23c: the spec at HEAD must carry all three."""
+    seen = _s13_refusal_spies(monkeypatch)
+    text = _s13_spec_text().replace(missing, 'NOT THERE')
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] == 'status' else text if a[0] == 'show' else 'c0ffee'))
+    with pytest.raises(SystemExit) as e:
+        dw.run_s13()
+    assert e.value.code == 2
+    assert seen == S13_NOTHING
+
+
+def test_s13_refuses_a_missing_or_wrong_s6_or_s3_file(tmp_path, monkeypatch):
+    """Z23d: G11 is an equality against ONE S6 run and ONE S3 run."""
+    seen = _s13_refusal_spies(monkeypatch)
+    text = _s13_spec_text()
+    monkeypatch.setattr(dw, '_git', lambda *a: (
+        '' if a[0] == 'status' else text if a[0] == 'show' else 'c0ffee'))
+
+    def refused():
+        with pytest.raises(SystemExit) as e:
+            dw.run_s13(tmp_path)
+        assert e.value.code == 2
+        assert seen['load_side'] == 0 and seen['s13_shadows'] == 0
+
+    refused()                                   # neither file is there
+    assert seen['sha256'] == 0
+    s6_path = tmp_path / dw.S6_RESULT
+    s6_path.write_text('{"rows": []}')
+    refused()                                   # S6 there, and not the pinned
+    assert seen['sha256'] == 1
+    monkeypatch.setattr(dw, 'S6_SHA256',
+                        hashlib.sha256(s6_path.read_bytes()).hexdigest())
+    refused()                                   # S6 passes; S3 is missing
+    assert seen['sha256'] == 2
+    (tmp_path / dw.S3_RESULT).write_text('{"G0": {}}')
+    refused()                                   # S3 there, and not the pinned
+    assert seen['sha256'] == 4
+    monkeypatch.undo()
+    assert dw.S3_RESULT == 's3_gates_20261004T201944Z.json'
+    assert dw.S3_SHA256 == ('dd0b37969e50f2ee302fac8391ae73291e285b9ed7ae81e6'
+                            '5446428c3af4dfc6')
+    assert dw.S6_SHA256 == ('a3d584f310e509c33bcca09c2fe641d4914dd4f768146f10'
+                            'c1ebf340f58b2f13')
+
+
+def test_s13_is_a_stage_of_the_command_line(monkeypatch):
+    """Z24: `--stage s13` reaches `run_s13` and nothing else."""
+    called = []
+    monkeypatch.setattr(dw, 'run_s13', lambda out_dir: called.append(out_dir))
+    monkeypatch.setattr(dw.sys, 'argv', ['divergence_walls.py', '--stage',
+                                         's13'])
+    assert dw.main() == 0
+    assert called == [dw.OUT_DIR_DEFAULT]
+
+
 # ──────────────────────────── the named breaks ───────────────────────────────
 
 def test_x1_frame_sign_flip_fails_g1_and_collapses_corroboration():

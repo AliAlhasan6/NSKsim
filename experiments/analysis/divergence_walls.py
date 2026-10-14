@@ -51,6 +51,7 @@ sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'analysis'))
 
 import graph_walls as gw                                      # noqa: E402
 from trinary_map import CELL_CENTRE_OFFSET, cell_index        # noqa: E402
+from trinary_map import EPS as CELL_EPS, cell_centre, cell_coord  # noqa: E402
 
 OUT_DIR_DEFAULT = gw.LOGS_DIR / 'divergence'
 
@@ -6097,11 +6098,978 @@ def run_s12(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
                       t0)
 
 
+# ───────── S13: parked-robot shadows, G11 and X7, P18 and P19 (spec v0.21) ─────────
+#
+# The spec section "Parked-robot shadows (O4; P18, P19)" is the rule. What is new
+# here is three pure functions -- `blocked_beams`, `walk_mark` and `delta_row` --
+# and the door that every mark and every Δ goes through. Everything else is
+# borrowed: C and A's measured length from S6's call, B's rays and `hit` from
+# `diagnose_karto.admitted_rays`, G0 from `diagnose_karto.rebuild` and `gate`,
+# A's elements from `load_side`, cell membership from `trinary_map.cell_index`
+# and the frame from `to_frame_a`, the transform G1 placed parked robots with.
+
+S13_REGISTRATION = '2a88223'       # registered P18, P19, G11 and X7 (spec v0.21)
+S13_SECTION = '## Parked-robot shadows (O4; P18, P19)'
+P18_HEADER = '**P18. REGISTERED'
+P19_HEADER = '**P19. REGISTERED'
+G11_HEADER = '**G11 (gate).**'
+G11_FAIL_HEADER = 'On a G11 failure'
+S13_DEFS_LABEL = '**Definitions.**'
+S13_REPORTED_LABEL = '**Reported, not judged.**'
+P18_GATE_TEXT = 'P18. REGISTERED'
+P19_GATE_TEXT = 'P19. REGISTERED'
+G11_GATE_TEXT = 'G11 (gate).'
+S3_RESULT = 's3_gates_20261004T201944Z.json'
+S3_SHA256 = ('dd0b37969e50f2ee302fac8391ae73291e285b9ed7ae81e65446428c3af4'
+             'dfc6')
+# G11 check 5: S6's output on its own synthetic corpus, the one test M10 builds,
+# hashed without the wall-clock `seconds` and the `written` path.
+S6_SYNTH_SHA256 = ('e3d8568bebeea2b621629ebb8a011cf11839f92f6ed21ce4ac85d2868ff'
+                   'ea82b')
+S6_SYNTH_BYTES = 293309
+S6_SYNTH_WIDTHS = {60: 3, 120: 6, 240: 9, 1200: 12}
+
+SHADOW_R_M = 0.176                 # r, the spawn disks' radius
+INSIDE_TOL_M = 1e-9                # "inside a disk": at most r + 1e-9, inclusive
+CORNER_TOL_M = 1e-9                # the corner rule, measured along the ray
+WALK_END_M = 7.9                   # max_laser_range: the walk ends here
+CLOSE_PASS_M = 0.3                 # the reported readings at or below range_min
+P18_CUT_B, P19_CUT_B = 60, 1200
+P18_PERCENT, P19_PERCENT = 5, 1    # Δ <= 0.05 and Δ <= 0.01, as integers
+S13_MIN_PAIRS = 18                 # "in at least 18 of the 20 ordered pairs"
+N_PAIRS = 20
+
+WALK_MARKED = 'marked'
+WALK_NOT_MEASURED = 'face_not_measured'      # an element, but seg_of < 0
+WALK_NOT_A_FACE = 'face_not_an_element'      # walked from a cell that is not free
+WALK_END = 'reached_7.9_m'
+WALK_OFF_GRID = 'left_the_grid'
+WALK_ENDS = (WALK_MARKED, WALK_NOT_MEASURED, WALK_NOT_A_FACE, WALK_END,
+             WALK_OFF_GRID)
+
+
+def _entry_dirs() -> dict:
+    """(axis, step) -> the DIRS index of a face entered by that step.
+
+    An element is an occupied cell and the dir of its FREE neighbour. A walk
+    that steps +x into an occupied cell came from the cell at col - 1, so the
+    face it crosses is the cell's -x face; and so on for the other three.
+    """
+    out = {}
+    for axis, step in (('x', 1), ('x', -1), ('y', 1), ('y', -1)):
+        want = (0, -step) if axis == 'x' else (-step, 0)
+        out[(axis, step)] = next(k for k, d in enumerate(gw.DIRS)
+                                 if (d[0], d[1]) == want)
+    return out
+
+
+ENTRY_DIR = _entry_dirs()
+
+
+class S13GateClosed(RuntimeError):
+    """A mark or a Δ asked for before G11 allowed it."""
+
+
+def spawn_in_frame(spawn, j: int, k: int) -> tuple[float, float]:
+    """Where robot j's spawn lies in robot k's map frame: s_j - s_k.
+
+    The frame change is `to_frame_a`, the one G1 used to place a parked robot
+    seen in one robot's map into another's: robot j's spawn is the origin of
+    its own frame, carried into k's.
+    """
+    x, y = to_frame_a(np.zeros(1), np.zeros(1), spawn[j], spawn[k])
+    return float(x[0]), float(y[0])
+
+
+def inside_disk(x, y, centres, r: float = SHADOW_R_M,
+                tol: float = INSIDE_TOL_M) -> np.ndarray:
+    """For each point, the index of the disk it is inside, or -1.
+
+    Inside is at most r from the centre with the measure's 1e-9 m, inclusive.
+    The disks cannot overlap, so a point is inside at most one.
+    """
+    x = np.atleast_1d(np.asarray(x, dtype=float))
+    y = np.atleast_1d(np.asarray(y, dtype=float))
+    c = np.asarray(centres, dtype=float).reshape(-1, 2)
+    if c.shape[0] == 0 or x.size == 0:
+        return np.full(x.size, -1, dtype=np.int64)
+    d = np.hypot(x[:, None] - c[None, :, 0], y[:, None] - c[None, :, 1])
+    inside = d <= r + tol
+    return np.where(inside.any(axis=1), inside.argmax(axis=1), -1)
+
+
+def blocked_beams(rays: dict, disks, r: float = SHADOW_R_M,
+                  tol: float = INSIDE_TOL_M) -> dict:
+    """The spec's blocked beams: `hit` true, the return point inside a disk.
+
+    `rays` is `diagnose_karto.admitted_rays`' dict, in B's frame, and `disks`
+    the centres in that frame. A ray without a hit is never one, and a ray
+    whose origin lies inside any of the disks is excluded. The return point is
+    `origin + free_len * direction`, which for a ray with a hit is the range
+    G0 traced to.
+    """
+    centres = np.asarray(disks, dtype=float).reshape(-1, 2)
+    hit = np.asarray(rays['hit'], dtype=bool)
+    px = rays['ox'] + rays['free_len'] * rays['dx']
+    py = rays['oy'] + rays['free_len'] * rays['dy']
+    at = inside_disk(px, py, centres, r, tol)
+    from_inside = inside_disk(rays['ox'], rays['oy'], centres, r, tol) >= 0
+    blocked = hit & (at >= 0) & ~from_inside
+    idx = np.nonzero(blocked)[0]
+    per = np.bincount(at[idx], minlength=centres.shape[0])
+    return {'index': idx, 'disk': at[idx],
+            'n_per_disk': [int(v) for v in per],
+            'n_excluded_origin_inside': int(np.count_nonzero(
+                hit & (at >= 0) & from_inside))}
+
+
+def face_lookup(el: dict, seg_of: np.ndarray) -> dict:
+    """A's elements by (row, col, dir), so a walk can name the face it enters."""
+    return {'lookup': {(int(r), int(c), int(d)): i for i, (r, c, d) in
+                       enumerate(zip(el['row'], el['col'], el['dir']))},
+            'seg_of': np.asarray(seg_of)}
+
+
+def spawn_disks_on(grid: dict, centres, r: float = SHADOW_R_M,
+                   tol: float = INSIDE_TOL_M) -> dict:
+    """The spawn disks on one grid: their centres, and the cells the walk skips.
+
+    A cell is skipped when its centre lies inside any disk.
+    """
+    c = np.asarray(centres, dtype=float).reshape(-1, 2)
+    ox, oy = grid['origin']
+    rho = grid['rho']
+    reach = r + tol + rho
+    cells = set()
+    for cx, cy in c:
+        c0, c1 = (int(cell_index(cx - reach, ox, rho)),
+                  int(cell_index(cx + reach, ox, rho)))
+        r0, r1 = (int(cell_index(cy - reach, oy, rho)),
+                  int(cell_index(cy + reach, oy, rho)))
+        for row in range(r0, r1 + 1):
+            for col in range(c0, c1 + 1):
+                if math.hypot(float(cell_centre(ox, col, rho)) - cx,
+                              float(cell_centre(oy, row, rho)) - cy) <= r + tol:
+                    cells.add((row, col))
+    return {'centres': c, 'cells': frozenset(cells), 'r': r, 'tol': tol}
+
+
+def walk_mark(ray: dict, grid: dict, elements: dict, spawn_disks: dict,
+              end_m: float = WALK_END_M, corner_tol: float = CORNER_TOL_M
+              ) -> tuple[int | None, str]:
+    """The spec's Mark, for one blocked beam in A's frame. (element or None, why).
+
+    `ray` holds `ox`, `oy`, `dx`, `dy` and `free_len`, the distance from the
+    origin to the return point; `grid` is A's side (`grid`, `origin`, `rho`);
+    `elements` is `face_lookup` of A; `spawn_disks` is `spawn_disks_on` A's grid.
+
+    THE RULES, in the spec's order:
+    - a point belongs to the cell `trinary_map.cell_index` gives it, slack and
+      all: the walk runs in `cell_coord + EPS`, whose floor IS `cell_index`, so
+      the edges it crosses are the edges membership changes at;
+    - where an x-edge and a y-edge are crossed within `corner_tol` of each other
+      along the ray, the x-step comes first, then the y-step, whatever cell
+      `cell_index` gives the corner point and whichever is crossed first;
+    - the walk begins in the cell that holds the return point and skips it;
+    - it skips every cell whose centre lies inside a spawn disk;
+    - free and unknown cells do not stop it;
+    - it stops at the first occupied cell it enters at less than `end_m` from
+      the ray's origin, and marks the face it entered through if that face is
+      one of A's measured elements (`seg_of >= 0`); otherwise nothing;
+    - if it reaches `end_m`, or leaves A's grid, it ends and marks nothing.
+    """
+    g = grid['grid']
+    ox, oy = grid['origin']
+    rho = grid['rho']
+    h, w = g.shape
+    dx, dy = float(ray['dx']), float(ray['dy'])
+    t0 = float(ray['free_len'])
+    if not t0 < end_m:
+        return None, WALK_END
+    u0 = float(cell_coord(float(ray['ox']) + t0 * dx, ox, rho)) + CELL_EPS
+    v0 = float(cell_coord(float(ray['oy']) + t0 * dy, oy, rho)) + CELL_EPS
+    ix, iy = math.floor(u0), math.floor(v0)
+    if not (0 <= ix < w and 0 <= iy < h):
+        return None, WALK_OFF_GRID
+    sx = 1 if dx > 0 else -1 if dx < 0 else 0
+    sy = 1 if dy > 0 else -1 if dy < 0 else 0
+
+    def crossing(i: int, s: int, u: float, d: float) -> float:
+        """Distance from the ray's origin to the next edge on this axis."""
+        if s == 0:
+            return math.inf
+        return t0 + ((i + 1 if s > 0 else i) - u) * rho / d
+
+    tx, ty = crossing(ix, sx, u0, dx), crossing(iy, sy, v0, dy)
+    skip, lookup, seg_of = (spawn_disks['cells'], elements['lookup'],
+                            elements['seg_of'])
+    while True:
+        if tx <= ty + corner_tol:
+            t_in, ix, axis, step = tx, ix + sx, 'x', sx
+            tx = crossing(ix, sx, u0, dx)
+        else:
+            t_in, iy, axis, step = ty, iy + sy, 'y', sy
+            ty = crossing(iy, sy, v0, dy)
+        if not t_in < end_m:
+            return None, WALK_END
+        if not (0 <= ix < w and 0 <= iy < h):
+            return None, WALK_OFF_GRID
+        if (iy, ix) in skip:
+            continue
+        if g[iy, ix] == gw.OCC:
+            e = lookup.get((iy, ix, ENTRY_DIR[(axis, step)]))
+            if e is None:
+                return None, WALK_NOT_A_FACE
+            if seg_of[e] >= 0:
+                return int(e), WALK_MARKED
+            return None, WALK_NOT_MEASURED
+
+
+def readings_at_or_below_range_min(ranges: np.ndarray, reach: np.ndarray,
+                                   sensor_x: np.ndarray, sensor_y: np.ndarray,
+                                   range_min: float, parked_centres,
+                                   close_m: float = CLOSE_PASS_M) -> dict:
+    """B's readings at or below `range_min`, `-inf` included, in admitted scans.
+
+    `ranges` are the raw readings (scans x beams), `reach` the admitted scans
+    (`scan_inputs`' mask) and the sensor positions B's own, per scan. Also: how
+    many of them lie in scans taken with B's sensor within `close_m` of a
+    parked spawn. Such a reading has no hit, so Δ cannot count a shadow behind
+    it, even when it met a parked robot.
+    """
+    r = np.asarray(ranges, dtype=float)
+    low = np.isneginf(r) | (np.isfinite(r) & (r <= range_min))
+    adm = np.asarray(reach, dtype=bool)
+    per_scan = low.sum(axis=1)
+    c = np.asarray(parked_centres, dtype=float).reshape(-1, 2)
+    d = np.hypot(np.asarray(sensor_x)[:, None] - c[None, :, 0],
+                 np.asarray(sensor_y)[:, None] - c[None, :, 1]).min(axis=1)
+    close = adm & (d <= close_m)
+    return {'n': int(per_scan[adm].sum()),
+            'n_in_scans_within_0.3_m_of_a_parked_spawn':
+                int(per_scan[close].sum()),
+            'n_admitted_scans_within_0.3_m': int(close.sum())}
+
+
+def shadow_inputs(rays: dict, readings: dict, spawn, k: int,
+                  n_robots: int = N_ROBOTS) -> dict:
+    """What S13 keeps of one B map: its blocked beams, and G11's two counts.
+
+    `rays` is `admitted_rays` of (B, cut_B) in B's own frame. The four parked
+    disks are the other spawns, moved into B's frame; the decoy is the
+    centroid of the five. Only the blocked beams are kept, still in B's frame,
+    with the disk each landed in.
+    """
+    parked = [j for j in range(n_robots) if j != k]
+    centres = np.array([spawn_in_frame(spawn, j, k) for j in parked])
+    centroid = np.mean([spawn_in_frame(spawn, j, k) for j in range(n_robots)],
+                       axis=0)
+    bb = blocked_beams(rays, centres)
+    decoy = blocked_beams(rays, centroid.reshape(1, 2))
+    sel = bb['index']
+    return {
+        'parked': parked,
+        'blocked': {'ox': rays['ox'][sel], 'oy': rays['oy'][sel],
+                    'dx': rays['dx'][sel], 'dy': rays['dy'][sel],
+                    'free_len': rays['free_len'][sel],
+                    'disk': [parked[i] for i in bb['disk']]},
+        'blocked_per_parked_disk': {f'k{j}': n for j, n in
+                                    zip(parked, bb['n_per_disk'])},
+        'excluded_origin_inside': bb['n_excluded_origin_inside'],
+        'decoy_hit_returns': int(decoy['index'].size),
+        'decoy_centre_in_B_frame': [float(centroid[0]), float(centroid[1])],
+        'n_rays': int(np.asarray(rays['hit']).size),
+        'readings_at_or_below_range_min': readings,
+    }
+
+
+def delta_row(by_kc: dict, spawn, key: tuple, b_in: dict,
+              a_cache: dict | None = None, n_robots: int = N_ROBOTS) -> dict:
+    """Δ for one row (A, B, cut_A, cut_B), and every reported per-row field.
+
+    C, the corroboration mask and A's measured length come from S6's call,
+    `s6_classify` and `shares`, unchanged. B's blocked beams move into A's frame
+    by `rays_in_frame`, and each is walked over A's grid. Shadowed is marked
+    and not corroborated; Δ is shadowed over measured, both in elements, which
+    is the same ratio as the lengths at rho per element.
+    """
+    ka, kb, cut_a, cut_b = key
+    res, _el_b, a, b = s6_classify(by_kc, spawn, key)
+    sh = shares(res)
+    assigned = res['assigned']
+    not_corr = assigned & ~res['corroborated']
+    measured_n = int(assigned.sum())
+    assert measured_n == sh['n_elements'], (measured_n, sh['n_elements'])
+
+    if a_cache is None:
+        a_cache = {}
+    if 'elements' not in a_cache:
+        a_cache['elements'] = face_lookup(a['el'], a['seg_of'])
+        a_cache['disks'] = spawn_disks_on(
+            a, [spawn_in_frame(spawn, j, ka) for j in range(n_robots)])
+
+    bl = b_in['blocked']
+    rays_a = rays_in_frame(bl, spawn[kb], spawn[ka])
+    ends = {w: 0 for w in WALK_ENDS}
+    marked = set()
+    for i in range(len(rays_a['ox'])):
+        e, why = walk_mark({'ox': rays_a['ox'][i], 'oy': rays_a['oy'][i],
+                            'dx': rays_a['dx'][i], 'dy': rays_a['dy'][i],
+                            'free_len': rays_a['free_len'][i]},
+                           a, a_cache['elements'], a_cache['disks'])
+        ends[why] += 1
+        if e is not None:
+            marked.add(e)
+    marked_list = sorted(marked)
+    shadowed = [e for e in marked_list if not_corr[e]]
+    nc_n = int(not_corr.sum())
+    by_seg: dict[str, int] = {}
+    for e in shadowed:
+        s = str(int(a['seg_of'][e]))
+        by_seg[s] = by_seg.get(s, 0) + 1
+    rho = a['rho']
+    return {
+        'A': ka, 'B': kb, 'cut_A': cut_a, 'cut_B': cut_b,
+        'A_stem': a['stem'], 'B_stem': b['stem'],
+        'corroborated': sh['corroborated'],
+        'not_corroborated': sh['not_corroborated'],
+        'L_A_m': sh['L_A'],
+        'measured_n': measured_n,
+        'not_corroborated_n': nc_n,
+        'not_corroborated_m': nc_n * rho,
+        'n_blocked_beams': len(rays_a['ox']),
+        'blocked_beams_per_parked_disk': dict(b_in['blocked_per_parked_disk']),
+        'walk_ends': ends,
+        'n_marked': len(marked_list),
+        'marked_elements': marked_list,
+        'shadowed_n': len(shadowed),
+        'shadowed_m': len(shadowed) * rho,
+        'delta': (len(shadowed) / measured_n) if measured_n else None,
+        'shadowed_over_not_corroborated': (len(shadowed) / nc_n) if nc_n
+        else None,
+        'shadowed_by_segment': by_seg,
+        'readings_at_or_below_range_min':
+            dict(b_in['readings_at_or_below_range_min']),
+    }
+
+
+class S13Shadows:
+    """The one door through which S13 computes a mark or a Δ.
+
+    `row(key)` raises `S13GateClosed` until `open_after` has been handed G11's
+    five checks and all five hold. G11's checks 3 and 4 do not come through
+    here: they call `blocked_beams` directly, and they are the gate, not Δ.
+    """
+
+    def __init__(self, by_kc: dict, spawn, inputs: dict,
+                 n_robots: int = N_ROBOTS):
+        self._by_kc, self._spawn, self._inputs = by_kc, spawn, inputs
+        self._n_robots = n_robots
+        self._open = False
+        self._a_cache: dict = {}
+        self.asked: list[tuple] = []
+
+    @property
+    def is_open(self) -> bool:
+        return self._open
+
+    def open_after(self, *checks) -> bool:
+        self._open = (len(checks) == 5 and all(
+            c is not None and c.get('ok') is True for c in checks))
+        return self._open
+
+    def row(self, key: tuple) -> dict:
+        if not self._open:
+            raise S13GateClosed(f'{key}: G11 has not passed; no mark and no Δ '
+                                'is computed')
+        self.asked.append(key)
+        ka, kb, cut_a, cut_b = key
+        cache = self._a_cache.setdefault((ka, cut_a), {})
+        return delta_row(self._by_kc, self._spawn, key,
+                         self._inputs[(kb, cut_b)], cache, self._n_robots)
+
+
+def _s6_synthetic_corpus(n_robots: int = N_ROBOTS) -> tuple[dict, dict]:
+    """S6's synthetic corpus, the one test M10 builds: five robots, four cuts.
+
+    Robot k at cut c holds `S6_SYNTH_WIDTHS[c] + k` elements of one '-y' wall,
+    all assigned to segment 0, every spawn at the origin. Restated here so the
+    stage can run G11 check 5 without the test file; the Z series checks that
+    it is the test's corpus, element for element.
+    """
+    by_kc, spawn = {}, {}
+    for k in range(n_robots):
+        spawn[k] = (0.0, 0.0)
+        for c, w in S6_SYNTH_WIDTHS.items():
+            g = np.full((12, w + k), gw.UNKNOWN, dtype=np.uint8)
+            g[:6, :] = gw.FREE
+            g[6, :] = gw.OCC
+            el = gw.face_elements(g, 0.1, (0.0, 0.0))
+            by_kc[(k, c)] = {
+                'stem': f'b2maps_k{k}_cut{c}_gated_extfix_robot{k}',
+                'el': el, 'seg_of': np.zeros(el['n'], dtype=np.int64),
+                'grid': g, 'rho': 0.1, 'origin': (0.0, 0.0), 'shape': g.shape,
+                'segments': [{'p0': [0.0, 0.55], 'p1': [1.1, 0.55]}]}
+    return by_kc, spawn
+
+
+def s6_synthetic_check() -> dict:
+    """G11 check 5: S6's output on its synthetic corpus is byte-identical.
+
+    The payload of `s6_matrix` on M10's corpus, without the wall-clock
+    `seconds` and the `written` path, dumped with S6's writer's settings. S6
+    writes into a temporary directory that is removed, and its printing is
+    held back so it cannot be mistaken for S13's.
+    """
+    import contextlib                                       # noqa: PLC0415
+    import hashlib                                          # noqa: PLC0415
+    import io                                               # noqa: PLC0415
+    import tempfile                                         # noqa: PLC0415
+    by_kc, spawn = _s6_synthetic_corpus()
+    seen = [k for k in matrix_keys() if is_seen(k[2], k[3])]
+    rows = cut_matrix(by_kc, spawn, seen)
+    comparisons = [{'source': 's4', 'path': f'same_cut[{i}].{f}', 'key': k,
+                    'field': f, 'stored': rows[k][f]}
+                   for i, k in enumerate(seen)
+                   for f in ('L_A_m', 'corroborated', 'not_corroborated')]
+    with tempfile.TemporaryDirectory() as d, \
+            contextlib.redirect_stdout(io.StringIO()):
+        out = s6_matrix(by_kc, spawn, comparisons,
+                        {'stage': 's6', 'head': 'synthetic'}, Path(d))
+    payload = {k: v for k, v in out.items() if k not in ('seconds', 'written')}
+    blob = json.dumps(payload, indent=2, sort_keys=True,
+                      default=str).encode('utf-8')
+    sha = hashlib.sha256(blob).hexdigest()
+    return {'ok': sha == S6_SYNTH_SHA256 and len(blob) == S6_SYNTH_BYTES,
+            'sha256': sha, 'bytes': len(blob),
+            'pinned_sha256': S6_SYNTH_SHA256, 'pinned_bytes': S6_SYNTH_BYTES}
+
+
+def g11_reproduce_s6(by_kc: dict, spawn, s6: dict, keys_1200: list
+                     ) -> dict:
+    """G11 check 1: C and L_A_m on the 80 rows with cut_A == 1200, exactly.
+
+    Through S6's own call, `cut_matrix`, compared with `g4_compare`'s `==`. S6's
+    file must name each of the 80 rows once among its rows with A at cut1200.
+    """
+    comparisons, named = [], []
+    for i, row in enumerate(s6['rows']):
+        key = (row['A'], row['B'], row['cut_A'], row['cut_B'])
+        if row['cut_A'] != FULL_CUT:
+            continue
+        named.append(key)
+        for field in ('corroborated', 'L_A_m'):
+            comparisons.append({'source': 's6', 'path': f'rows[{i}].{field}',
+                                'key': key, 'field': field,
+                                'stored': row[field]})
+    covers = len(named) == len(keys_1200) and set(named) == set(keys_1200)
+    rows = cut_matrix(by_kc, spawn, keys_1200)
+    cmp = g4_compare([c for c in comparisons if c['key'] in rows], rows)
+    return {'ok': bool(covers and cmp['all_equal']
+                       and cmp['n'] == 2 * len(keys_1200)),
+            'covers_the_80_rows': covers, 'n_rows_named': len(named),
+            'n': cmp['n'], 'n_equal': cmp['n_equal'],
+            'differing': cmp['differing'], 'comparisons': cmp['comparisons']}
+
+
+def g0_cells(gate_result: dict) -> dict:
+    """G0's three numbers from `diagnose_karto.gate`.
+
+    The cells the saved map or the rebuild committed, and those of them where
+    the two differ: `n_observed_cells - n_agree`, every observed cell being
+    either.
+    """
+    n_obs = int(gate_result['n_observed_cells'])
+    return {'n_observed_cells': n_obs,
+            'disagreeing_cells': n_obs - int(gate_result['n_agree']),
+            'agreement': gate_result['agreement']}
+
+
+def g11_g0(s3: dict, stems: list, g0_of) -> dict:
+    """G11 check 2: each map rebuilt from B's rays as G0 did, against S3.
+
+    `g0_of(stem)` rebuilds one map and returns `g0_cells`. Gating: each map's
+    `disagreeing_cells` equals S3's exactly. Beside, reported: the observed
+    cells and the agreement. S3's G0 must name exactly the 20 maps.
+    """
+    stored = s3.get('G0', {})
+    covers = set(stored) == set(stems) and len(stored) == len(stems)
+    maps = []
+    for stem in stems:
+        got = g0_of(stem)
+        st = stored.get(stem, {})
+        maps.append({'map': stem,
+                     'disagreeing_cells': {'stored': st.get('disagreeing_cells'),
+                                           'computed': got['disagreeing_cells']},
+                     'equal': got['disagreeing_cells'] == st.get(
+                         'disagreeing_cells'),
+                     'beside': {f: {'stored': st.get(f), 'computed': got[f],
+                                    'equal': got[f] == st.get(f)}
+                                for f in ('n_observed_cells', 'agreement')}})
+    n_eq = sum(m['equal'] for m in maps)
+    return {'ok': bool(covers and n_eq == len(stems)), 'covers_the_20_maps':
+            covers, 'n': len(maps), 'n_equal': n_eq, 'maps': maps,
+            'differing': [m for m in maps if not m['equal']]}
+
+
+def g11_detector(inputs: dict, by_kc: dict) -> dict:
+    """G11 check 3: each of the four parked disks of every map holds a return."""
+    maps, n_disks, n_ok = [], 0, 0
+    for kc in sorted(by_kc):
+        per = inputs[kc]['blocked_per_parked_disk']
+        n_disks += len(per)
+        n_ok += sum(1 for v in per.values() if v >= 1)
+        maps.append({'map': by_kc[kc]['stem'], 'blocked_per_parked_disk': per,
+                     'ok': all(v >= 1 for v in per.values())})
+    return {'ok': n_disks == 80 and n_ok == 80, 'n_disks': n_disks,
+            'n_disks_with_a_return': n_ok, 'maps': maps}
+
+
+def g11_decoy(inputs: dict, by_kc: dict) -> dict:
+    """G11 check 4, X7: the centroid disk holds no hit return in any map."""
+    maps = [{'map': by_kc[kc]['stem'],
+             'decoy_hit_returns': inputs[kc]['decoy_hit_returns'],
+             'decoy_centre_in_B_frame': inputs[kc]['decoy_centre_in_B_frame']}
+            for kc in sorted(by_kc)]
+    return {'ok': len(maps) == 20 and all(m['decoy_hit_returns'] == 0
+                                          for m in maps),
+            'n_maps': len(maps),
+            'n_maps_clean': sum(m['decoy_hit_returns'] == 0 for m in maps),
+            'maps': maps}
+
+
+def s13_verdict(rows: list[dict], cut_b: int, percent: int,
+                min_pairs: int = S13_MIN_PAIRS) -> dict:
+    """P18 or P19 on the 20 ordered pairs with A at cut1200 and B at `cut_b`.
+
+    A pair holds when `100 * shadowed_n <= percent * measured_n`, in integers so
+    no float sits on the bound. A pair with no measured element has no Δ and
+    counts against. Every failing pair is recorded with A, B and both counts.
+    """
+    pairs = [r for r in rows if r['cut_A'] == FULL_CUT and r['cut_B'] == cut_b]
+    assert len(pairs) == N_PAIRS, len(pairs)
+    failing = []
+    for r in pairs:
+        s, m = r['shadowed_n'], r['measured_n']
+        if not (m > 0 and 100 * s <= percent * m):
+            failing.append({'A': r['A'], 'B': r['B'], 'shadowed_n': s,
+                            'measured_n': m, 'delta': r['delta']})
+    n_hold = len(pairs) - len(failing)
+    return {'holds': n_hold >= min_pairs, 'n_holding': n_hold,
+            'of': len(pairs), 'min_required': min_pairs, 'cut_A': FULL_CUT,
+            'cut_B': cut_b, 'percent': percent,
+            'rule': f'100 * shadowed_n <= {percent} * measured_n',
+            'failing': failing}
+
+
+def fixed_a_series(rows: dict, cuts: tuple = CUTS,
+                   n_robots: int = N_ROBOTS) -> list[dict]:
+    """The fixed-A series with shadowed walls removed, for A at every cut."""
+    out = []
+    for a, b in ordered_pairs(n_robots):
+        for ca in cuts:
+            pts = []
+            for cb in cuts:
+                r = rows[(a, b, ca, cb)]
+                pts.append({'cut_B': cb, 'not_corroborated': r['not_corroborated'],
+                            'delta': r['delta'],
+                            'not_corroborated_minus_delta':
+                                (r['not_corroborated'] - r['delta'])
+                                if r['delta'] is not None else None})
+            out.append({'A': a, 'B': b, 'cut_A': ca, 'series': pts})
+    return out
+
+
+def _no_verdict_in_s13(payload: dict) -> None:
+    """Assert a G11 fail payload carries no Δ, no mark and no verdict.
+
+    Exact key names, walked from the root. `predictions_verbatim` is the
+    registered wording, keyed P18, P19, G11 and the rest, and is not walked: it
+    is part of every real meta, which is what the S9-S11 fail paths forgot.
+    What a fail file may hold is G11's five checks, the blocked-beam and decoy
+    counts among them, since those are the gate.
+    """
+    banned = {'P18', 'P19', 'verdicts', 'rows', 'delta', 'shadowed_n',
+              'shadowed_m', 'shadowed_over_not_corroborated', 'n_marked',
+              'marked_elements', 'shadowed_by_segment', 'walk_ends',
+              'fixed_A_series', 'reported', 'holds', 'n_holding', 'failing'}
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if path == '$' and k == 'predictions_verbatim':
+                    continue
+                assert str(k) not in banned, f'{path}.{k} is not a gate value'
+                walk(v, f'{path}.{k}')
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f'{path}[{i}]')
+
+    walk(payload, '$')
+
+
+def _write_s13(payload: dict, out_dir: Path, prefix: str) -> tuple[Path, str]:
+    """S9's writer under this stage's name: a dated file, never an overwrite."""
+    return _write_s9(payload, out_dir, prefix)
+
+
+def s13_section(text: str) -> str:
+    """The spec's O4 section, from its heading to the next '## ' heading."""
+    i = text.find(S13_SECTION + '\n')
+    if i < 0:
+        die(f'the spec carries no "{S13_SECTION}"')
+    j = text.find('\n## ', i + len(S13_SECTION))
+    return text[i:] if j < 0 else text[i:j + 1]
+
+
+def s13_verbatim(text: str) -> dict:
+    """The registered text, read from the spec by script and never retyped.
+
+    P18, P19, G11 (its opening and five checks) and G11's failure rule are
+    paragraphs, read as every stage reads them. The definitions and the
+    reported items are blocks with blank lines inside, so they are kept as the
+    spec has them, line breaks and all, from their label to the next label.
+    """
+    sec = s13_section(text)
+
+    def block(start: str, end: str) -> str:
+        i = sec.find(start)
+        j = sec.find(end, i + 1) if i >= 0 else -1
+        if i < 0 or j < 0:
+            die(f'the O4 section has no block from "{start}" to "{end}"')
+        return sec[i:j].strip('\n')
+
+    return {'P18': spec_paragraph(sec, P18_HEADER),
+            'P19': spec_paragraph(sec, P19_HEADER),
+            'G11': spec_paragraph(sec, G11_HEADER),
+            'G11_failure_rule': spec_paragraph(sec, G11_FAIL_HEADER),
+            'definitions': block(S13_DEFS_LABEL, G11_HEADER),
+            'reported_items': block(S13_REPORTED_LABEL,
+                                    '**For Article 3, whatever the verdicts.**')}
+
+
+def s13_constants_from(verbatim: dict) -> dict:
+    """The numbers S13 applies, each found in the registered text or refused."""
+    import re                                               # noqa: PLC0415
+    from decimal import Decimal                             # noqa: PLC0415
+    flat = {k: ' '.join(v.split()) for k, v in verbatim.items()}
+    found = {}
+    for name, cut_b, percent in (('P18', P18_CUT_B, P18_PERCENT),
+                                 ('P19', P19_CUT_B, P19_PERCENT)):
+        m = re.search(r'With A at cut(\d+) and B at cut(\d+), Δ ≤ ([0-9.]+) in '
+                      r'at least (\d+) of the (\d+) ordered pairs\.', flat[name])
+        if not m:
+            die(f'{name}\'s registered sentence is not the shape S13 reads')
+        got = (int(m.group(1)), int(m.group(2)),
+               int(Decimal(m.group(3)) * 100), int(m.group(4)), int(m.group(5)))
+        want = (FULL_CUT, cut_b, percent, S13_MIN_PAIRS, N_PAIRS)
+        if got != want:
+            die(f'{name} registers {got}, and S13 applies {want}')
+        found[name.lower()] = {'cut_A': got[0], 'cut_B': got[1], 'percent': got[2],
+                       'min_pairs': got[3], 'of': got[4]}
+    defs = flat['definitions']
+    for phrase in ('radius r = 0.176 m', 'tolerance of 1e-9 m',
+                   'within 1e-9 m of each other, measured along the ray',
+                   'that it enters at less than 7.9 m from the ray\'s origin',
+                   'if it reaches 7.9 m from the ray\'s origin'):
+        if phrase not in defs:
+            die(f'the registered definitions do not say "{phrase}"')
+    if 'within 0.3 m of a parked spawn' not in flat['reported_items']:
+        die('the registered reported items do not say "within 0.3 m of a '
+            'parked spawn"')
+    assert (SHADOW_R_M, INSIDE_TOL_M, CORNER_TOL_M, WALK_END_M,
+            CLOSE_PASS_M) == (0.176, 1e-9, 1e-9, 7.9, 0.3)
+    return {'r_m': SHADOW_R_M, 'inside_tol_m': INSIDE_TOL_M,
+            'corner_tol_m': CORNER_TOL_M, 'walk_end_m': WALK_END_M,
+            'close_pass_m': CLOSE_PASS_M, 'predictions': found}
+
+
+def s13_meta(head: str, spec_rev: str, porcelain: list, variant: str,
+             verbatim: dict, constants: dict, sources: dict) -> dict:
+    """The meta every S13 file carries, the fail file's included."""
+    return {'stage': 's13', 'head': head, 'spec_rev': spec_rev,
+            'tree_dirty': any(not ln.startswith('??') for ln in porcelain),
+            'untracked': sum(1 for ln in porcelain if ln.startswith('??')),
+            'variant': variant, 't2': False,
+            'spec': 'SPEC_b2_divergence_walls v0.21, O4: G11, X7, P18, P19',
+            'predictions_verbatim': verbatim,
+            'constants': constants,
+            'sources': sources,
+            'note': 'C and A\'s measured length come from S6\'s call '
+                    '(cut_matrix, s6_classify, shares); B\'s rays and hit from '
+                    'diagnose_karto.admitted_rays; G0 from '
+                    'diagnose_karto.rebuild and gate. Every mark and every Δ '
+                    'goes through S13Shadows, which raises until G11 holds.'}
+
+
+def _print_g11(g11: dict) -> None:
+    parts = g11['parts']
+    print('G11: ' + '  '.join(f'check {n.split("_")[0]} '
+                              f'{"HOLD" if ok else ("FAIL" if ok is False else "-")}'
+                              for n, ok in parts.items())
+          + f'   {"HOLD" if g11["all_ok"] else "FAIL"}')
+    c = g11
+    if c['5_S6_synthetic'] is not None:
+        s = c['5_S6_synthetic']
+        print(f'  check 5: S6 synthetic output {s["sha256"][:12]}..., '
+              f'{s["bytes"]} bytes')
+    if c['1_reproduce_S6'] is not None:
+        s = c['1_reproduce_S6']
+        print(f'  check 1: {s["n_equal"]}/{s["n"]} values equal on the '
+              f'{s["n_rows_named"]} rows with cut_A 1200')
+        for rec in s['differing'][:20]:
+            a, b, ca, cb = rec['key']
+            print(f'    {rec["path"]}: A=k{a} B=k{b} cut_A {ca} cut_B {cb}  '
+                  f'{rec["field"]}  stored {rec["stored"]!r}  S13 '
+                  f'{rec["computed"]!r}')
+    if c['2_G0_cells'] is not None:
+        s = c['2_G0_cells']
+        print(f'  check 2: disagreeing_cells equal on {s["n_equal"]}/{s["n"]} '
+              'maps')
+        for m in s['differing']:
+            print(f'    {m["map"]}: stored {m["disagreeing_cells"]["stored"]!r}'
+                  f'  S13 {m["disagreeing_cells"]["computed"]!r}')
+    if c['3_detector'] is not None:
+        s = c['3_detector']
+        print(f'  check 3: {s["n_disks_with_a_return"]}/{s["n_disks"]} parked '
+              'disks hold a blocked-beam return')
+        for m in s['maps']:
+            if not m['ok']:
+                print(f'    {m["map"]}: {m["blocked_per_parked_disk"]}')
+    if c['4_decoy_X7'] is not None:
+        s = c['4_decoy_X7']
+        print(f'  check 4 (X7): {s["n_maps_clean"]}/{s["n_maps"]} maps with no '
+              'hit return in the decoy disk')
+
+
+def s13_shadows(by_kc: dict, spawn, s6: dict, s3: dict, meta: dict,
+                g0_of, inputs_of, out_dir: Path = OUT_DIR_DEFAULT,
+                t0: float | None = None, cuts: tuple = CUTS,
+                n_robots: int = N_ROBOTS) -> dict:
+    """G11, then Δ on all 320 rows, then P18, P19 and the reported items.
+
+    The order, each step only after everything before it held:
+    1. check 5, S6's synthetic output byte-identical;
+    2. check 1, C and L_A_m on the 80 rows with cut_A 1200, against S6;
+    3. check 2, G0 on the 20 maps, against S3, through `g0_of(stem)`;
+    4. checks 3 and 4, through `inputs_of((k, cut))`, which reads each B map's
+       rays once and keeps its blocked beams;
+    5. the door opens, and Δ is computed on all 320 rows;
+    6. the verdicts, then the reported items.
+
+    On a failure the stage writes the G11 results and stops at exit 2; the
+    payload is walked for a Δ, a mark or a verdict first. Reads no file and
+    resolves no spawn; `run_s13` is this function plus the corpus I/O.
+    """
+    t0 = time.monotonic() if t0 is None else t0
+    keys = matrix_keys(cuts, n_robots)
+    keys_1200 = [k for k in keys if k[2] == FULL_CUT]
+    assert len(keys) == 320 and len(keys_1200) == 80
+    kcs = sorted(by_kc)
+    stems = [by_kc[kc]['stem'] for kc in kcs]
+
+    c5 = s6_synthetic_check()
+    c1 = c2 = c3 = c4 = None
+    inputs: dict = {}
+    if c5['ok']:
+        c1 = g11_reproduce_s6(by_kc, spawn, s6, keys_1200)
+    if c1 is not None and c1['ok']:
+        c2 = g11_g0(s3, stems, g0_of)
+    if c2 is not None and c2['ok']:
+        for kc in kcs:
+            inputs[kc] = inputs_of(kc)
+        c3 = g11_detector(inputs, by_kc)
+        c4 = g11_decoy(inputs, by_kc)
+
+    g11 = {'5_S6_synthetic': c5, '1_reproduce_S6': c1, '2_G0_cells': c2,
+           '3_detector': c3, '4_decoy_X7': c4}
+    g11['parts'] = {n: (None if c is None else c['ok'])
+                    for n, c in (('1_reproduce_S6', c1), ('2_G0_cells', c2),
+                                 ('3_detector', c3), ('4_decoy_X7', c4),
+                                 ('5_S6_synthetic', c5))}
+    g11['all_ok'] = all(v is True for v in g11['parts'].values())
+    door = S13Shadows(by_kc, spawn, inputs, n_robots)
+    _print_g11(g11)
+
+    if not door.open_after(c1, c2, c3, c4, c5):
+        fail = dict(meta)
+        fail.update({'stage': 's13_g11_fail',
+                     'seconds': time.monotonic() - t0, 'G11': g11,
+                     'n_door_calls': len(door.asked)})
+        _no_verdict_in_s13(fail)
+        path, _ = _write_s13(fail, out_dir, 's13_g11_fail')
+        die('G11 failed; no mark, no Δ and no verdict was computed, written '
+            f'or printed. {path}')
+
+    # ── the door is open: Δ on all 320 rows ────────────────────────────────
+    rows = {k: door.row(k) for k in keys}
+    assert door.asked == keys, 'one door call per row'
+
+    p18 = s13_verdict(list(rows.values()), P18_CUT_B, P18_PERCENT)
+    p19 = s13_verdict(list(rows.values()), P19_CUT_B, P19_PERCENT)
+    for name, v in (('P18', p18), ('P19', p19)):
+        print(f'{name}: {"HOLD" if v["holds"] else "FAIL"}  {v["n_holding"]}/'
+              f'{v["of"]} pairs with {v["rule"]} (A at cut1200, B at '
+              f'cut{v["cut_B"]}), {v["min_required"]} required')
+        for f in v['failing']:
+            print(f'  A=k{f["A"]} B=k{f["B"]}: shadowed {f["shadowed_n"]} of '
+                  f'{f["measured_n"]} measured elements, Δ {f["delta"]!r}')
+
+    # ── reported, not judged ────────────────────────────────────────────────
+    print('\nΔ, largest over the 20 ordered pairs (A cut down, B cut across)')
+    print('  cut_A \\ cut_B ' + ''.join(f'{c:>10}' for c in cuts))
+    for ca in cuts:
+        cells = []
+        for cb in cuts:
+            ds = [rows[(a, b, ca, cb)]['delta'] for a, b in
+                  ordered_pairs(n_robots)]
+            ds = [d for d in ds if d is not None]
+            cells.append(f'{max(ds):>10.4f}' if ds else f'{"-":>10}')
+        print(f'  {ca:>13} ' + ''.join(cells))
+    print('\nreadings at or below range_min per B map (in scans within 0.3 m '
+          'of a parked spawn)')
+    for kc in kcs:
+        rd_ = inputs[kc]['readings_at_or_below_range_min']
+        print(f'  {by_kc[kc]["stem"]}: {rd_["n"]} '
+              f'({rd_["n_in_scans_within_0.3_m_of_a_parked_spawn"]})')
+
+    rhos = {by_kc[kc]['rho'] for kc in by_kc}
+    payload = dict(meta)
+    payload.update({
+        'seconds': time.monotonic() - t0,
+        'rho_m': rhos.pop() if len(rhos) == 1 else sorted(rhos),
+        'n_rows': len(rows), 'n_door_calls': len(door.asked),
+        'G11': g11,
+        'rows': [rows[k] for k in keys],
+        'verdicts': {'P18': p18, 'P19': p19},
+        'reported': {'fixed_A_series': fixed_a_series(rows, cuts, n_robots),
+                     'b_maps': [{'map': by_kc[kc]['stem'],
+                                 'n_rays': inputs[kc]['n_rays'],
+                                 'n_blocked_beams': len(
+                                     inputs[kc]['blocked']['ox']),
+                                 'blocked_per_parked_disk':
+                                     inputs[kc]['blocked_per_parked_disk'],
+                                 'excluded_origin_inside':
+                                     inputs[kc]['excluded_origin_inside'],
+                                 'readings_at_or_below_range_min':
+                                     inputs[kc]['readings_at_or_below_range_min']}
+                                for kc in kcs]}})
+    path, sha = _write_s13(payload, out_dir, 's13_shadows')
+    out = dict(payload)
+    out['written'] = {'path': str(path), 'sha256': sha}
+    return out
+
+
+def s13_b_map(stem: str, k: int, cut: int, spawn, n_robots: int = N_ROBOTS
+              ) -> dict:
+    """One B map's inputs, read from its bag: `admitted_rays`, as G0 used them.
+
+    The readings at or below range_min come from `scan_inputs`, the function
+    `admitted_rays` itself is built on. The range threshold is checked to be
+    the 7.9 m the walk ends at.
+    """
+    import diagnose_karto as dk                             # noqa: PLC0415
+    rays = dk.admitted_rays(stem, k, cut)
+    if rays['range_threshold'] != WALK_END_M:
+        die(f'{stem}: Karto\'s range threshold is {rays["range_threshold"]}, '
+            f'not the {WALK_END_M} m the registered walk ends at')
+    si = dk.scan_inputs(stem, k, cut)
+    parked = np.array([spawn_in_frame(spawn, j, k)
+                       for j in range(n_robots) if j != k])
+    readings = readings_at_or_below_range_min(
+        si['data']['ranges'], si['reach'], si['returns']['sensor_x'],
+        si['returns']['sensor_y'], si['geom']['range_min'], parked)
+    return shadow_inputs(rays, readings, spawn, k, n_robots)
+
+
+def run_s13(out_dir: Path = OUT_DIR_DEFAULT, variant: str = CORPUS_VARIANT
+            ) -> dict:
+    """S13: parked-robot shadows. Spec v0.21, "Parked-robot shadows".
+
+    Before anything is loaded:
+    1. REFUSES ON AN EDITED TREE, as S5 to S12 do.
+    2. REGISTRATION BEFORE RESULT: `2a88223`, the commit that registered P18,
+       P19, G11 and X7, must be an ancestor of HEAD, and the spec at HEAD must
+       carry "P18. REGISTERED", "P19. REGISTERED" and "G11 (gate).".
+    3. The registered text is read from the spec AT HEAD by script and stored
+       verbatim, and every number S13 applies is found in it.
+    4. THE S6 AND S3 FILES ARE PINNED BY HASH: G11's checks 1 and 2 are
+       equalities against them.
+    """
+    t0 = time.monotonic()
+
+    porcelain = _git('status', '--porcelain').splitlines()
+    dirty = [ln for ln in porcelain if not ln.startswith('??')]
+    if dirty:
+        die('the working tree has tracked changes, so a result file would name '
+            'a commit it was not produced by:\n  ' + '\n  '.join(dirty))
+    head = _git('rev-parse', 'HEAD')
+
+    if not _is_ancestor(S13_REGISTRATION):
+        die(f'{S13_REGISTRATION} registered P18, P19, G11 and X7 and is not an '
+            f'ancestor of HEAD {head[:7] or "(unknown)"}; the registration must '
+            'be in history behind the code that tests it')
+    spec_text = _git('show', f'HEAD:{SPEC_REL}')
+    for gate in (P18_GATE_TEXT, P19_GATE_TEXT, G11_GATE_TEXT):
+        if gate not in spec_text:
+            die(f'the spec at HEAD carries no "{gate}"; S13 evaluates a '
+                'registered prediction behind a registered gate or it does '
+                'not run')
+    verbatim = s13_verbatim(spec_text)
+    constants = s13_constants_from(verbatim)
+    spec_rev = _git('log', '-1', '--format=%h', '--', SPEC_REL)
+
+    sources, loaded = {}, {}
+    for name, fname, pinned, what in (
+            ('s6', S6_RESULT, S6_SHA256, 'G11 check 1 reproduces its C and '
+             'L_A_m'),
+            ('s3', S3_RESULT, S3_SHA256, 'G11 check 2 reproduces its G0')):
+        path = out_dir / fname
+        if not path.is_file():
+            die(f'{path} is missing; {what}')
+        sha = _sha256(path)
+        if sha != pinned:
+            die(f'{path.name} has sha256 {sha}, not the {pinned} G11 is '
+                f'stated against; that is a different {name.upper()} run')
+        loaded[name] = json.loads(path.read_text())
+        sources[name] = {'file': path.name, 'sha256': sha,
+                         'head': loaded[name].get('head')}
+
+    import diagnose_karto as dk                             # noqa: PLC0415
+    import fit_world_transform as fwt                       # noqa: PLC0415
+    import robot_divergence as rd                           # noqa: PLC0415
+
+    spawn = fwt.resolve_spawn_poses(rd.SPAWN_REV)
+    by_kc = {}
+    for s in corpus_stems(variant):
+        k, c = gw._k_and_cut(s, 'S13 needs the robot and the cut')
+        by_kc[(k, c)] = load_side(s)
+
+    def g0_of(stem: str) -> dict:
+        k, c = gw._k_and_cut(stem, 'G0 needs the robot and the cut')
+        t = time.monotonic()
+        out = g0_cells(dk.gate(dk.rebuild(stem, k, c)))
+        print(f'  G0 {stem}: {time.monotonic() - t:.1f} s', flush=True)
+        return out
+
+    def inputs_of(kc: tuple) -> dict:
+        t = time.monotonic()
+        out = s13_b_map(by_kc[kc]['stem'], kc[0], kc[1], spawn)
+        print(f'  rays {by_kc[kc]["stem"]}: {time.monotonic() - t:.1f} s',
+              flush=True)
+        return out
+
+    meta = s13_meta(head, spec_rev, porcelain, variant, verbatim, constants,
+                    sources)
+    return s13_shadows(by_kc, spawn, loaded['s6'], loaded['s3'], meta, g0_of,
+                       inputs_of, out_dir, t0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--stage',
                     choices=('g2', 's5', 's6', 's7', 's8', 's9', 's10',
-                             's11', 's12'),
+                             's11', 's12', 's13'),
                     default=None,
                     help='run a corpus stage instead of one pair. g2 surveys '
                          'the segment guard on the 20 maps; s5 evaluates G3, '
@@ -6119,7 +7087,9 @@ def main() -> int:
                          'G9, and tests P15 and P16; s12 computes the '
                          'viewpoint weight on all 320 rows, gates it on S6 '
                          'and S5 with G10, and tests P17 on the mixed-cut '
-                         'mirror pairs')
+                         'mirror pairs; s13 computes the parked-robot '
+                         'shadows behind G11 and its decoy X7, and tests P18 '
+                         'and P19')
     ap.add_argument('--a', help='A\'s map stem')
     ap.add_argument('--b', help='B\'s map stem')
     ap.add_argument('--theta-g', type=float, default=THETA_G_DEG)
@@ -6158,6 +7128,9 @@ def main() -> int:
         return 0
     if args.stage == 's12':
         run_s12(args.out_dir)
+        return 0
+    if args.stage == 's13':
+        run_s13(args.out_dir)
         return 0
     if not (args.a and args.b):
         ap.error('--a and --b are required unless --stage is given')
