@@ -1,4 +1,4 @@
-# SPEC — B2 divergence on walls (v0.21, draft)
+# SPEC — B2 divergence on walls (v0.22, draft)
 
 Status: draft for review, 4 Oct 2026. v0.1 folds in the S1 answers. v0.2 changes
 T2's condition 3, after C0 failed; v0.3 adds condition 4, after the deep-tail
@@ -40,8 +40,9 @@ reading that the two rows of every mirror pair hold the same matched segment
 pairs. It closes O3 and O6 and registers no prediction. v0.21 registers P18 and
 P19 on parked-robot shadows (O4), and G11, the gate for stage S13, with its
 decoy X7, before any Δ was computed. It opens O10 and records that B's scan
-plane is pitched. No code is written until the stop-point questions in §11 are
-answered.
+plane is pitched. v0.22 records the S13 results — G11 holds, P18 and P19 hold 20
+of 20 — closes O4, and registers no prediction. No code is written until the
+stop-point questions in §11 are answered.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face, face element,
 `rho`, `eps`, `l_min` and decision D1 (a wall node is one observed face).
@@ -1605,6 +1606,61 @@ change the measure: a blocked beam is defined by where its return lands, not by 
 robot's shape, and every part of a parked robot that the plane can cut lies within
 about 0.108 m of its spawn, inside its disk.
 
+### Results of S13 (O4; P18, P19)
+
+S13 ran at `58b654b` on 14 Oct 2026, in about 8 min, and wrote
+`s13_shadows_20261014T095408Z.json` (sha256 `cd1ada60…`). The run log is
+`s13_run_20261014T094616Z.log` (sha256 `5178c8e0…`).
+
+**G11: HOLD,** all five checks.
+
+- Check 1: C and A's measured length equal S6's in 160 of 160 values, on the 80 rows
+  with A at cut1200.
+- Check 2: `disagreeing_cells` equals S3's G0 on 20 of 20 maps.
+- Check 3: 80 of 80 parked disks hold a blocked-beam return.
+- Check 4 (X7): the decoy disk holds no hit return in 20 of 20 maps.
+- Check 5: S6's synthetic output is byte-identical (`e3d8568b…`, 293,309 bytes).
+
+**P18: HOLD, 20 of 20,** with 18 required. With A at cut1200 and B at cut60, the
+largest Δ is 0.0023 (rounded).
+
+**P19: HOLD, 20 of 20,** with 18 required. With both maps at cut1200, Δ is 0 in all
+20 pairs.
+
+**Reported, not judged.**
+
+- The largest Δ over the 20 ordered pairs, at each pair of cuts (rounded to four
+  places; at every 0.0000 entry, Δ is exactly 0 in all 20 pairs):
+
+  | cut_A \ cut_B | 60 | 120 | 240 | 1200 |
+  |---|---|---|---|---|
+  | 60 | 0.0121 | 0.0040 | 0.0040 | 0.0040 |
+  | 120 | 0.0052 | 0.0000 | 0.0000 | 0.0000 |
+  | 240 | 0.0036 | 0.0000 | 0.0000 | 0.0000 |
+  | 1200 | 0.0023 | 0.0000 | 0.0000 | 0.0000 |
+
+- The largest Δ at any pair of cuts is 0.0121 (rounded), with both maps at cut60.
+- Readings at or below `range_min`: 18 in each of k0's four maps, all 18 in scans
+  within 0.3 m of a parked spawn; 374 in k3_cut1200 and 1 in k4_cut1200, none of them
+  in such a scan; none in any other map.
+- Post hoc, not registered: only 28 of the 320 rows have any shadowed element, and all
+  28 have one of the two maps at cut60.
+
+**What it means.**
+
+- For beams with a hit, parked-robot shadows are small at every pair of cuts. With A
+  at cut1200, they account for less than 0.25 points of the first point of P3's
+  series, against a typical first step of 22 points. With both maps at cut1200, they
+  account for none.
+- So neither P3's series nor P6's residual is a product of parked robots blocking B's
+  view, as far as beams with a hit can show.
+- A reading at or below `range_min` has no hit, so Δ cannot count a shadow behind it.
+  Such a reading can have met a parked robot only if its scan was taken near that
+  robot: 0.3 m exceeds `range_min` plus the about 0.108 m that a parked robot reaches
+  from its spawn, with room for about three times the sensor's 0.01 m noise. In this
+  corpus, the readings at or below `range_min` in scans within 0.3 m of a parked spawn
+  number 18, all in k0's run.
+
 ## 10. Open, not decided
 
 - **O1.** Viewpoint weighting. Corroboration cannot be weighted by the number of
@@ -1626,6 +1682,7 @@ about 0.108 m of its spawn, inside its disk.
   Note (v0.21): this wording says "unobserved", from the three-class measure. In the
   two-class measure it means not corroborated. The wording stays; see "Parked-robot
   shadows (O4; P18, P19)".
+  Closed in v0.22: S13 reports Δ beside the convergence series (see "Results of S13").
 - **O5.** The deep tail, unexplained. On A's own maps 4-10 % of crossings that meet
   conditions 1 and 2 run on well past the face, and the distribution is bimodal:
   under 0.2 m or over 1 m, with almost nothing between. Turning (yaw rate at the
@@ -1670,10 +1727,9 @@ about 0.108 m of its spawn, inside its disk.
   move its end. Proposed: yes, to be decided when the schema spec is written.
 - **O10. OPEN (v0.21; recorded, not part of O4).** The offline ray set turns `-inf`
   readings into 7.9 m of free space; the live relay leaves them for Karto to ignore.
-  This adds 313 rays to k3_cut1200, which is also G0's worst map (4 cells), and one
-  ray, from the close pass, to each of the four k0 maps. Whether this is linked to G0's
-  differences is untested. G11 check 2 reproduces G0 as it stands, so S13 inherits this
-  and changes nothing.
+  This adds 313 rays to k3_cut1200, which is also G0's worst map (4 cells), and one ray
+  to each of the four k0 maps. Whether this is linked to G0's differences is untested.
+  G11 check 2 reproduces G0 as it stands, so S13 inherits this and changes nothing.
 
 ## 11. Stop points for Claude Code
 
