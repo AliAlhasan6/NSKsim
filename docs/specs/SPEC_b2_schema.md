@@ -1,18 +1,26 @@
-# SPEC — B2 schema: axis ends, openings, corners and slabs (v0.1, draft)
+# SPEC — B2 schema: axis ends, openings, corners and slabs (v0.2, draft)
 
-Status: draft for review, 16 Oct 2026. v0.1 gives definitions only: it registers no
-prediction and computes nothing on real maps. It rests on three read-only audits by
-Claude Code on 16 Oct 2026 (segment ends, axis ends, the world SDF) and on two checks
-of its drafts with 160 synthetic grids, the second of which confirmed `tau_c`, `s_max`
-and `tau_e`. The audits, checks and scripts are in `experiments/logs/splice/`:
-`schema_audit_step0_segment_ends.md`, `schema_audit_step1_axis_ends.md`,
-`schema_audit_step2_world.md`, `schema_check_draft1.md`, `schema_check_draft2.md`,
-`schema_v0_1_synth.py`, `schema_v0_1_synth2.py` and `schema_v0_1_adversarial.py`.
+Status: registered, 17 Oct 2026. v0.2 adds how a schema element is matched to
+the world's truth (§9, settling S-O3) and registers eight predictions with a gate
+(§10, settling S-O4). §1–§7 are unchanged; §0 gains three decisions and §8 one
+paragraph. No schema element has been computed on a real map.
+
+v0.1 rests on three read-only audits by Claude Code on 16 Oct 2026 (segment ends,
+axis ends, the world SDF) and on two checks of its drafts with 160 synthetic grids,
+the second of which confirmed `tau_c`, `s_max` and `tau_e`. v0.2 adds two checks by
+Claude Code on 17 Oct 2026: §9 on 640 synthetic grids built in each robot's frame,
+and §2–§7 with §9 on 80 emulated partial maps. The audits, checks and scripts are in
+`experiments/logs/splice/`: `schema_audit_step0_segment_ends.md`,
+`schema_audit_step1_axis_ends.md`, `schema_audit_step2_world.md`,
+`schema_check_draft1.md`, `schema_check_draft2.md`, `schema_v0_1_synth.py`,
+`schema_v0_1_synth2.py`, `schema_v0_1_adversarial.py`, `schema_v0_2_match_d2.py`,
+`schema_v0_2_match_d2_out.txt`, `schema_v0_2_partial_d2.py` and
+`schema_v0_2_partial_d2_out.txt`.
 
 Depends on: `docs/specs/SPEC_b2_wall_predicate.md` (v2) for face element (Def 1),
 segment (Def 2), band (Def 3), gap state (Def 4), endpoint state (Def 5), `rho`,
-`eps` and `g`; `docs/specs/SPEC_b2_divergence_walls.md` (v0.22) for the common frame
-and the riser finding (O9).
+`eps`, `g`, and A8's and A9's tolerance (§6); `docs/specs/SPEC_b2_divergence_walls.md`
+(v0.22) for the common frame, the 20 maps (its §2) and the riser finding (O9).
 
 ---
 
@@ -44,6 +52,17 @@ and the riser finding (O9).
 - **D-S4, words.** "Segment" is the map object of Def 2. "World face" is a face of a
   box in the SDF. The wall-predicate spec's D1 reads "A wall node is one observed
   **face**, not a physical slab"; its "face" is a segment in this spec's words.
+- **D-S5, truth after the fact** (confirmed by Ali, 17 Oct 2026). §2–§7 read no
+  truth, and the per-map files of §8 hold none. §9 matches their records to truth
+  only inside the stage that judges §10, as the divergence spec uses truth only to
+  validate (its §1 and §8).
+- **D-S6, matched through faces** (confirmed by Ali, 17 Oct 2026). Every schema
+  element is matched to truth through the world faces its segments match (§9), with
+  one tolerance, `tau_m`, which is A8's and A9's. No element is matched by a radius
+  around a point.
+- **D-S7, rows** (confirmed by Ali, 17 Oct 2026). Found elements are judged only on
+  the five cut1200 maps; wrong and unmatched-part elements are judged on all 20, each
+  kind apart (§9, §10).
 
 ---
 
@@ -220,18 +239,285 @@ At each end of a pair (S, S′), take the axis end of S and of S′ on that side
   rewritten.
 - Every record carries the map's stem and sha256, the `graph_walls` commit, and the
   thresholds used (`rho`, `eps`, `g`, `tau_c`, `s_max`, `tau_e`).
+- §9 is computed only by the stage that judges §10 (D-S5), in memory, from the
+  per-map files and the SDF. Its results go into that stage's results file, never
+  into the per-map files.
 
 ---
 
-## 9. Open, before v0.2
+## 9. Matching to truth (Def S7, S-O3)
 
-- **S-O1.** Closed in v0.1: `tau_c`, `s_max` and `tau_e` were confirmed on the 160
-  synthetic grids before commit.
-- **S-O2.** Whether real maps bow enough to split one world face across two entries
-  of `lines[]`. Not to be computed before v0.2 registers its predictions.
-- **S-O3.** How a schema element is matched to the world's truth in each robot's frame
-  (§1), for counting found, missed and spurious elements. In the synthetic grids, axis
-  ends at found inside corners lay up to 0.389 m from the true corner, and outside
-  corners up to 0.216 m.
-- **S-O4.** Which predictions v0.2 registers, and on which rows, before any schema
-  element is computed on a real map.
+- **M0, frame.** A point p in robot K's map frame lies at p + s_K in the world, with
+  s_K from `DOT_POSES` at `08617b2`: translation only, yaw 0. This is how A8–A10 place
+  segments (`graph_walls._segment_arrays`) and how the divergence spec's §8 places
+  them.
+- **Truth (§1),** from `knowledge_world.sdf` through `graph_walls.sdf_wall_faces`,
+  which stops if the SDF's face totals change:
+  - the 12 long observable world faces, each with its outward normal, its line and
+    its exposed extent: for a boundary face, the 19.9 m between the two inside
+    corners on it; for a slab face, the whole face;
+  - the 4 inside corners, each with its two boundary faces;
+  - the 4 slabs, each with its two long faces and its two ends; an end is the
+    coordinate of an end cap along the slab's long axis;
+  - the 16 outside corners, two at each slab end.
+
+  Same-facing long faces are at least 6.0 m apart (`maze_h1` and `maze_h2`, +y faces
+  and −y faces alike).
+
+### M1, face match
+
+A segment S with axis ends matches world face W if:
+
+- W's outward normal is `a(S)`;
+- the midpoint `m(S)` of S's axis ends (§6) lies within `tau_m` of W's line;
+- S's interval `[t(q0), t(q1)]` and W's exposed extent, both projected on W's
+  direction, overlap.
+
+If more than one face qualifies, S matches the one whose line is nearest `m(S)`. In
+this world that cannot happen: two qualifying faces would face the same way and lie
+at most `2*tau_m` apart. A segment with axis ends that matches no face is
+**unmatched**, and counted.
+
+- **Tolerance.** `tau_m = 2*rho` (0.2 m), `graph_walls.TRUTH_TOL_CELLS`. On the 20
+  maps, A8 places every element of every segment within `tau_m` of a wall surface:
+  share 1.0 on 20 of 20 maps (`experiments/logs/graph_walls/
+  _validation_20261004T021555Z.json`, sha256 `555ef95f…`).
+- **Why the midpoint.** A fitted line tilts, so its axis ends can lie farther from W
+  than its midpoint. On the emulated partial maps, axis ends lay up to 0.208 m from
+  their face and midpoints up to 0.114 m.
+- **Margin.** On the 640 grids, the largest `m(S)` distance was
+  0.19098039120664012 m (thickE: the east boundary face one cell thicker on its free
+  side; jog2 reached 0.19097824360901683 m). `tau_m` minus it is **0.0090196 m**,
+  with `rho` = 0.1 as the grids use it and with the maps' `rho` =
+  0.10000000149011612 alike. With no blur the largest was 0.09098039120664403 m
+  (base). On the emulated partial maps the largest was 0.11383175706494342 m, a
+  margin of 0.0861682 m.
+- **When the bound fails.** A face two cells thicker on its free side puts its
+  elements 0.2–0.3 m from the surface, at or beyond A8's tolerance. On such grids
+  (blur2), the east boundary face matched nothing, so both inside corners on it were
+  missed and both were counted unmatched-part: 160 of each over 80 grids.
+
+### Spurious: wrong and unmatched-part
+
+A finding of M2–M4 that is not true is **spurious**, of one of two kinds:
+
+- **wrong:** every segment in it matches a face, but not the true faces of any
+  element of its kind; for a slab end only, also a slab end whose faces are right
+  but which lies beyond `tau_end` of the end (M4);
+- **unmatched-part:** one of its segments matches no face.
+
+A wrong finding is §5–§7 combining faces that the world does not combine. An
+unmatched-part finding rests on a segment that M1 could not place on any world face
+(S-O6). Both kinds are judged on all 20 maps, apart: wrong findings by P-S2 and
+P-S4, unmatched-part findings by P-S7 and P-S8 (§10).
+Openings are not split: every opening is spurious (D-S2, M5).
+
+### M2, inside corners
+
+- A found corner (§5) is **true** for inside corner K if its two segments match K's
+  two faces, one each. Otherwise it is spurious: **wrong** if both its segments match
+  faces, **unmatched-part** if one of them matches none.
+- K is **found** if some corner is true for it. A further corner true for K is a
+  **duplicate**, counted apart.
+- **Reported:** the distance from c to K. On the grids it reached 0.351 m (jog2)
+  while both faces still matched. A radius around K as wide as `tau_c` would have
+  missed those corners.
+
+### M3, slabs
+
+- A pair (§6) is **true** for slab B if its two segments match B's two long faces, one
+  each. Otherwise it is spurious: **wrong** if both its segments match faces,
+  **unmatched-part** if one of them matches none.
+- B is **found** if some pair is true for it. A further true pair is a duplicate.
+
+### M4, slab ends and outside corners
+
+Take a pair true for slab B. Assign each of its two ends to the end of B nearer to
+the mean, along B's long axis, of that end's two axis ends.
+
+- A slab end (§7) is **true** for its assigned end E if that mean lies within
+  `tau_end` of E. E is **found** if some slab end is true for it. A further one is a
+  duplicate.
+- Otherwise a slab end is spurious. It is **wrong** if its pair is true but the mean
+  lies beyond `tau_end` of E (both segments match the slab's faces, but the end is
+  not at E), or if its pair is wrong. It is **unmatched-part** if its pair is
+  unmatched-part.
+- **Tolerance.** `tau_end = tau_m + rho/2` (0.25 m). If an axis member beyond the
+  end cap lies within `tau_m` of the end cap's world face, as A8 found for every
+  element, the axis end lies within `tau_end` of E, because §2 extends an axis end
+  half a cell beyond its last axis member. On the grids the mean
+  lay at most 0.190 m from E with both end caps one cell thicker (endcap), and at
+  most 0.090 m otherwise.
+- **Outside corners** go with their slab end: a true slab end finds its two outside
+  corners. They are reported, as twice the slab ends, and not counted apart.
+  **Reported:** each outside corner's distance to its box corner (at most 0.237 m on
+  the grids, jogS).
+
+### M5, openings
+
+Every opening is spurious (D-S2). Each is reported with its width, its state, and the
+faces its two segments match.
+
+### M6, missed, and why
+
+A true element that is not found is **missed**. Reported, never judged, for each:
+
+- an inside corner or a slab: how many of its faces some segment matches; for an
+  inside corner with both faces matched, for each face, the distance from the
+  corner to the nearest axis end of any segment matching that face;
+- a slab end: whether its slab has a true pair, and if so that end's record from §7
+  (`misaligned`, `blocked`, `unobserved`, or `free` beyond `tau_end`).
+
+Also reported, per map: for each world face, how many segments match it and on how
+many `lines[]` entries they lie (S-O2).
+
+**"Both faces matched" does not mean "in view."** On the emulated partial maps, 4,
+10 and 24 inside corners at the first three cuts were missed although both their
+faces were matched; the corner region itself had not been seen. M6 explains a miss.
+It does not excuse one.
+
+### On the checks
+
+- **Synthetic grids** (640: the five v0.1 variants and three new ones, each at 5
+  spawns × 16 lattice phases, built in robot K's frame and matched through M0). The
+  new variants are blur2 (east boundary face two cells thicker), endcap (both end
+  caps of `maze_h1` one cell thicker) and jog2 (half the east boundary face two cells
+  thicker, a 0.2 m jog). On every grid outside blur2: every true inside corner, slab
+  and slab end found; nothing wrong, unmatched-part, unmatched or duplicated; no
+  opening. On blur2: 160 inside corners missed and 160 unmatched-part, none wrong;
+  every slab and slab end found.
+- **The same grids against a decoy truth,** the world shifted by (+0.5, +0.5) m: no
+  segment matched a face, so every corner the grids hold was unmatched-part (320 per
+  variant) and none was wrong.
+- **Emulated partial maps** (80: 5 spawns × 2 paths × 2 lattice phases × 4 cuts).
+  Karto's hit and pass counting along an exploration path (`min_pass_through` 2 and
+  `occupancy_threshold` 0.1, as `slam_robot*.yaml` sets them; the offline template
+  does not set them), with the burger's beam pattern and range noise, cut after 5, 12
+  and 22 m of travel and at the end of the path. Their A9-like recall was
+  0.24–0.37, 0.38–0.48, 0.54–0.64 and 0.998–0.999; the corpus's A9 is 0.19–0.32,
+  0.42–0.50, 0.63–0.74 and 0.992–0.993 at its four cuts. Results:
+  - no wrong, unmatched-part or unmatched element at any cut, and no duplicate;
+  - 6 openings on 6 maps (5 at the first cut, 1 at the third), each a free gap
+    between two segments matching the same slab face; none at the end of the path;
+  - one face on two `lines[]` entries, on 2 of the 80 maps.
+
+  The emulation is not the corpus. Its only noise is 0.01 m of range noise, and it
+  samples cells along each beam rather than tracing them as Karto does.
+
+---
+
+## 10. Predictions (S-O4)
+
+**Rows.** The 20 maps of the divergence spec's §2,
+`b2maps_k{K}_cut{C}_gated_extfix_robot{K}`, K from 0 to 4 and C in {60, 120, 240,
+1200}, with their graph JSONs. A map whose sha256 differs from its JSON's
+`map_sha256` stops the stage.
+
+**Why found elements are judged only at cut1200** (D-S7). At cut1200, A9 covers
+0.9970–0.9981 of the reachable inward face length on all five maps; at earlier cuts
+A9's recall is 0.19–0.74 (the stored file above). Early on, a true element can be
+missed because the robot never looked at it, and M6 cannot separate that case (§9).
+Wrong and unmatched-part elements need no such denominator.
+
+**Read before registration.** From real maps, only A8 and A9 per map (the stored
+file above) and the number of segments per map in the graph JSONs: 4–12 before
+cut1200 and 12–13 at cut1200, against 12 long observable world faces. Nothing of
+§2–§7 or §9 was computed on a real map.
+
+### Gate G-S1
+
+Three checks, in this order, before any count. A failed check runs nothing after it.
+
+1. **The synthetic grids.** The stage's §2–§7 give the counts of
+   `schema_check_draft2.md` on its 160 grids (640 of 640 inside corners, every slab
+   and slab end, no false finding). Its §2–§7 and §9 give the counts of
+   `schema_v0_2_match_d2_out.txt` on its 640 grids, blur2's included.
+2. **Frame and truth source.** A9's recall, recomputed from each map's segments with
+   M0's frame and `graph_walls.sdf_wall_faces`, equals the stored value within 1e-9
+   on 20 of 20 maps.
+3. **X-S1, a decoy truth.** Against the world shifted by (+0.5, +0.5) m, no segment
+   matches a face, on 20 of 20 maps. Like X7, it is built to find nothing.
+
+### The predictions
+
+The counts of P-S1 to P-S6 were confirmed by Ali on 17 Oct 2026; P-S7 and P-S8 were
+added by Ali the same day.
+
+- **P-S1, inside corners found.** On the five cut1200 maps, at least 18 of the 20
+  true inside corners are found.
+- **P-S2, no wrong inside corner.** On at least 19 of the 20 maps, no inside corner is
+  wrong.
+- **P-S3, slabs found.** On the five cut1200 maps, at least 18 of the 20 true slabs
+  are found.
+- **P-S4, no wrong slab.** On at least 19 of the 20 maps, no pair and no slab end is
+  wrong.
+- **P-S5, slab ends found.** On the five cut1200 maps, at least 36 of the 40 true
+  slab ends are found.
+- **P-S6, openings at full coverage.** On at least 4 of the 5 cut1200 maps, there is
+  no opening.
+- **P-S7, no unmatched-part inside corner.** On at least 19 of the 20 maps, no inside
+  corner is unmatched-part.
+- **P-S8, no unmatched-part slab.** On at least 19 of the 20 maps, no pair and no slab
+  end is unmatched-part.
+
+**Expectations behind them** (not facts about the corpus):
+
+- **P-S1, P-S3, P-S5.** Every true element was found on every synthetic grid within
+  A8's tolerance, and on every emulated full map. The bounds allow one miss in ten
+  for what no check modelled.
+- **P-S2, P-S4.** In this world, perpendicular faces end near their crossing only at
+  the 4 inside corners (§5's limit), and opposite-facing faces lie within `s_max` of
+  each other only across the 4 slabs (§6). A wrong element therefore needs a segment
+  that runs far past its face's end, or a pair across two boxes. A segment that
+  matches no face gives an unmatched-part element instead, which P-S7 and P-S8 judge.
+  No wrong element occurred on any of the 640 grids, blur2's included, or on any of
+  the 80 emulated maps, partial ones included.
+- **P-S6.** No complete grid and no emulated full map showed an opening. Earlier cuts
+  are not judged: on the emulated maps nearest cut60, 5 of 20 showed one.
+- **P-S7, P-S8.** An unmatched-part finding needs a segment that M1 cannot place on
+  any world face. A8 places every element of every segment within `tau_m` of a wall
+  surface, on 20 of 20 maps (§9 M1). On the grids, only blur2, whose east face lies
+  beyond `tau_m`, gave unmatched-part findings: 160 inside corners over its 80 grids,
+  and no pair or slab end. The 80 emulated maps gave none.
+- **The decoy makes every corner unmatched-part.** Against X-S1's shifted truth, all
+  320 inside corners of each grid variant were unmatched-part and none was wrong.
+  Since no segment matched, every pair and slab end is unmatched-part too (M3, M4).
+  So P-S7 and P-S8 are not empty: a frame or truth that placed no segment would fail
+  both.
+
+**Verdicts in integers.** P-S1 and P-S3 hold when found ≥ 18; P-S5 when found ≥ 36;
+P-S2 and P-S4 when at most 1 map has a wrong element of that kind; P-S6 when at most
+1 cut1200 map has an opening; P-S7 and P-S8 when at most 1 map has an unmatched-part
+element of that kind. Duplicates count neither for nor against.
+
+**Reported, not judged.** Every count at every cut, with M6's reasons; duplicates;
+unmatched segments; openings at every cut, with M5's faces; S-O2's per-face counts;
+every distance named in §9; the axis end states at found corners (§5); the record of
+every slab end (§7).
+
+**The stage** follows S13's pattern. Before loading anything it refuses an edited
+tree, requires the commit that registers v0.2 to be an ancestor of HEAD, and stores
+the registered text verbatim. It finds in that text every number it applies (`rho`,
+`eps`, `g`, `tau_c`, `s_max`, `tau_e`, `tau_m`, `tau_end`, the decoy's shift, 1e-9,
+18 of 20 for P-S1 and P-S3, 19 of 20 for P-S2, P-S4, P-S7 and P-S8, 36 of 40 for
+P-S5, 4 of 5 for P-S6) and refuses on a mismatch. It writes §8's per-map files and
+one results file.
+
+---
+
+## 11. Open, before the stage
+
+- **S-O1.** Closed in v0.1.
+- **S-O2.** Reported per map through M6, not judged (confirmed by Ali, 17 Oct 2026).
+  No synthetic grid put one face on two `lines[]` entries, not even with a 0.2 m jog
+  (jog2). The emulated partial maps did so on 2 of 80.
+- **S-O3.** Closed by §9.
+- **S-O4.** Closed by §10.
+- **S-O5, earlier cuts.** Judging found elements before cut1200 needs a rule for "in
+  view" that is not built from the schema itself. M6's face counts are not such a
+  rule (§9).
+- **S-O6, blur beyond A8's tolerance.** A real face blurred past `tau_m` would be
+  unmatched. Its corners would count as unmatched-part, against P-S7, and as missed,
+  against P-S1 (blur2). A blurred slab face would count against P-S8 and P-S3 the
+  same way. G-S1 cannot catch this; P-S7, P-S8, M6 and the reported distances would
+  show it.
