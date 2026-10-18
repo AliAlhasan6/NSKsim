@@ -27,7 +27,7 @@ largely correlated evidence.
 source /opt/ros/jazzy/setup.bash && source ~/Desktop/NSKsim/ros2_ws/install/setup.bash
 cd ~/Desktop/NSKsim
 git status --short                       # expect only .vscode/
-git log --oneline -1 origin/main         # expect this handoff's commit, or 10ae987
+git log --oneline -1 origin/main         # expect the commit that updated this handoff
 grep -m1 -o "v0\.10" docs/specs/SPEC_b2_divergence_walls.md     # expect v0.10
 ls experiments/logs/divergence/s5_viewpoint_20261006T212758Z.json  # expect the file
 ```
@@ -46,6 +46,7 @@ workspace builds into `ros2_ws/install/`; the block above is corrected.
 | `d5b03b8` | spec v0.9: registers G3, P7 and P8, including the definition of a segment's direction. Spec alone, committed before the code that tests it |
 | `2161665` | S5 stage: tests G3, P7 and P8; refuses on an edited tree |
 | `10ae987` | spec v0.10: records the S5 results, two cautions, O1 closed, O6 opened |
+| `82a04e0` | docs/handoffs: this handoff, first version (CI listed as unchecked) |
 
 Tests: 60 divergence; full listed suite 733 passed, 33 skipped (project venv).
 
@@ -119,9 +120,9 @@ it.
 
 ## 5. Housekeeping done
 
-- **CI.** All 17 runs from `0dee108` through `d3baa68` are green. The three
-  failures on 19–20 Sep predate that window, each followed by a green run. This
-  session's pushes are unchecked.
+- **CI.** All 17 runs from `0dee108` through `d3baa68` are green, and so are this
+  session's five pushes, `8ca8166` through `82a04e0` (checked 7 Oct). The three
+  failures on 19–20 Sep predate that window, each followed by a green run.
 - **`wall_affinity.py` and its test** (8 Aug; whether the Lévy-walk obstacle rule
   traps robots along walls) moved to `~/Desktop/NSKsim_attic/`, not deleted. No
   handoff quoted a result from them; their 36 tests passed before the move.
@@ -190,7 +191,6 @@ it.
 - **O5, the deep tail.** Unexplained.
 - **O6, distinct segment pairs.** S5's output should record the distinct (S_A, S_B)
   pairs per row, so caution 2 gets an exact count at the next rerun.
-- GitHub Actions for `8ca8166` through this handoff's commit: unchecked.
 - B3 not judged on k4_cut1200_gated_extfix (relay SIGKILLed); check the stopper's
   grace before the next batch.
 - Online explorer and mapper defects (half-cell reading, extent truncation): decide
@@ -204,6 +204,22 @@ it.
 O3, with O4 and O6 alongside it. Then the rest of the schema (openings, corners, and
 the back-to-back face pairing where opposite-side evidence enters), then B3, in the
 planned order of Article 3.
+
+**Where O3 starts.** These are open questions, not decisions:
+
+1. **What is summarised.** `C` for certain. The weight's mirror agreement (0.003°)
+   was measured only at cut1200 same-cut; whether it holds at mixed cuts is unknown.
+2. **The symmetric form.** The mean of the two directions, the smaller of the two,
+   or both reported with their difference. Each says something different when one
+   map is much smaller than the other.
+3. **The series over cuts.** The same-cut series dips at the middle cuts because A's
+   wall set grows under the measure (previous handoff §4.2). O3 has to present
+   convergence without that artefact; P3 avoided it by holding A fixed.
+4. **What can still be registered.** S4 computed and showed `C` for A at cut1200
+   against every B cut, and for every same-cut row. The mirror rows, A at an early
+   cut against B at cut1200, have not been computed. An O3 prediction can rest only
+   on rows like those; anything built from S4's rows is description, not a test.
+   Check the S4 result file for exactly which rows exist before writing one.
 
 ---
 
